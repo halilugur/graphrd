@@ -7,10 +7,21 @@ const MAX_MATCH: usize = 258;
 const MAX_CHAIN: usize = 48;
 const HASH_BITS: u32 = 15;
 
-const LENGTH_BASE: [u16; 29] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
-const LENGTH_EXTRA: [u8; 29] = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
-const DIST_BASE: [u16; 30] = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
-const DIST_EXTRA: [u8; 30] = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const LENGTH_BASE: [u16; 29] = [
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
+];
+const LENGTH_EXTRA: [u8; 29] = [
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
+];
+const DIST_BASE: [u16; 30] = [
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
+];
+const DIST_EXTRA: [u8; 30] = [
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
+];
 
 struct Bits {
     out: Vec<u8>,
@@ -54,12 +65,24 @@ fn literal(b: &mut Bits, sym: u32) {
 }
 
 fn copy(b: &mut Bits, len: usize, dist: usize) {
-    let li = LENGTH_BASE.iter().rposition(|&base| base as usize <= len).unwrap();
+    let li = LENGTH_BASE
+        .iter()
+        .rposition(|&base| base as usize <= len)
+        .unwrap();
     literal(b, 257 + li as u32);
-    b.put((len - LENGTH_BASE[li] as usize) as u32, LENGTH_EXTRA[li] as u32);
-    let di = DIST_BASE.iter().rposition(|&base| base as usize <= dist).unwrap();
+    b.put(
+        (len - LENGTH_BASE[li] as usize) as u32,
+        LENGTH_EXTRA[li] as u32,
+    );
+    let di = DIST_BASE
+        .iter()
+        .rposition(|&base| base as usize <= dist)
+        .unwrap();
     b.code(di as u32, 5);
-    b.put((dist - DIST_BASE[di] as usize) as u32, DIST_EXTRA[di] as u32);
+    b.put(
+        (dist - DIST_BASE[di] as usize) as u32,
+        DIST_EXTRA[di] as u32,
+    );
 }
 
 fn hash(d: &[u8], i: usize) -> usize {
@@ -69,7 +92,11 @@ fn hash(d: &[u8], i: usize) -> usize {
 
 /// Raw DEFLATE data (one block with the fixed Huffman codes).
 pub fn deflate(data: &[u8]) -> Vec<u8> {
-    let mut b = Bits { out: Vec::with_capacity(data.len() / 3 + 16), acc: 0, n: 0 };
+    let mut b = Bits {
+        out: Vec::with_capacity(data.len() / 3 + 16),
+        acc: 0,
+        n: 0,
+    };
     b.put(1, 1); // final block
     b.put(1, 2); // fixed Huffman codes
     let mut head = vec![usize::MAX; 1 << HASH_BITS];
@@ -129,13 +156,19 @@ pub fn crc32(data: &[u8]) -> u32 {
         for (n, slot) in t.iter_mut().enumerate() {
             let mut c = n as u32;
             for _ in 0..8 {
-                c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+                c = if c & 1 != 0 {
+                    0xEDB8_8320 ^ (c >> 1)
+                } else {
+                    c >> 1
+                };
             }
             *slot = c;
         }
         t
     });
-    !data.iter().fold(!0u32, |c, &b| table[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8))
+    !data.iter().fold(!0u32, |c, &b| {
+        table[((c ^ b as u32) & 0xff) as usize] ^ (c >> 8)
+    })
 }
 
 /// A gzip member holding `data`.
@@ -211,7 +244,11 @@ impl Huffman {
             code |= input.bits(1)? as i32;
             let count = self.counts[len] as i32;
             if code - count < first {
-                return self.symbols.get((index + code - first) as usize).copied().ok_or_else(|| "gzip: bad code".to_string());
+                return self
+                    .symbols
+                    .get((index + code - first) as usize)
+                    .copied()
+                    .ok_or_else(|| "gzip: bad code".to_string());
             }
             index += count;
             first = (first + count) << 1;
@@ -223,7 +260,11 @@ impl Huffman {
 
 /// Decompresses raw DEFLATE data.
 pub fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut input = In { d: data, pos: 0, bit: 0 };
+    let mut input = In {
+        d: data,
+        pos: 0,
+        bit: 0,
+    };
     let mut out: Vec<u8> = Vec::with_capacity(data.len() * 4);
     loop {
         let last = input.bits(1)? == 1;
@@ -231,43 +272,58 @@ pub fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
             0 => {
                 input.align();
                 let p = input.pos;
-                let len = u16::from_le_bytes([*data.get(p).ok_or("gzip: short")?, *data.get(p + 1).ok_or("gzip: short")?]) as usize;
+                let len = u16::from_le_bytes([
+                    *data.get(p).ok_or("gzip: short")?,
+                    *data.get(p + 1).ok_or("gzip: short")?,
+                ]) as usize;
                 let start = p + 4;
-                out.extend_from_slice(data.get(start..start + len).ok_or("gzip: stored block ends early")?);
+                out.extend_from_slice(
+                    data.get(start..start + len)
+                        .ok_or("gzip: stored block ends early")?,
+                );
                 input.pos = start + len;
             }
             t @ (1 | 2) => {
-                let (lit, dist) = if t == 1 {
-                    let mut l = [8u8; 288];
-                    l[144..256].fill(9);
-                    l[256..280].fill(7);
-                    (Huffman::new(&l), Huffman::new(&[5u8; 30]))
-                } else {
-                    let hlit = input.bits(5)? as usize + 257;
-                    let hdist = input.bits(5)? as usize + 1;
-                    let hclen = input.bits(4)? as usize + 4;
-                    const ORDER: [usize; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
-                    let mut cl = [0u8; 19];
-                    for &i in ORDER.iter().take(hclen) {
-                        cl[i] = input.bits(3)? as u8;
-                    }
-                    let clh = Huffman::new(&cl);
-                    let mut lengths = Vec::with_capacity(hlit + hdist);
-                    while lengths.len() < hlit + hdist {
-                        match clh.decode(&mut input)? {
-                            s @ 0..=15 => lengths.push(s as u8),
-                            16 => {
-                                let prev = *lengths.last().ok_or("gzip: repeat without a length")?;
-                                for _ in 0..3 + input.bits(2)? {
-                                    lengths.push(prev);
-                                }
-                            }
-                            17 => lengths.extend(std::iter::repeat_n(0, 3 + input.bits(3)? as usize)),
-                            _ => lengths.extend(std::iter::repeat_n(0, 11 + input.bits(7)? as usize)),
+                let (lit, dist) =
+                    if t == 1 {
+                        let mut l = [8u8; 288];
+                        l[144..256].fill(9);
+                        l[256..280].fill(7);
+                        (Huffman::new(&l), Huffman::new(&[5u8; 30]))
+                    } else {
+                        let hlit = input.bits(5)? as usize + 257;
+                        let hdist = input.bits(5)? as usize + 1;
+                        let hclen = input.bits(4)? as usize + 4;
+                        const ORDER: [usize; 19] = [
+                            16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+                        ];
+                        let mut cl = [0u8; 19];
+                        for &i in ORDER.iter().take(hclen) {
+                            cl[i] = input.bits(3)? as u8;
                         }
-                    }
-                    (Huffman::new(&lengths[..hlit]), Huffman::new(&lengths[hlit..hlit + hdist]))
-                };
+                        let clh = Huffman::new(&cl);
+                        let mut lengths = Vec::with_capacity(hlit + hdist);
+                        while lengths.len() < hlit + hdist {
+                            match clh.decode(&mut input)? {
+                                s @ 0..=15 => lengths.push(s as u8),
+                                16 => {
+                                    let prev =
+                                        *lengths.last().ok_or("gzip: repeat without a length")?;
+                                    for _ in 0..3 + input.bits(2)? {
+                                        lengths.push(prev);
+                                    }
+                                }
+                                17 => lengths
+                                    .extend(std::iter::repeat_n(0, 3 + input.bits(3)? as usize)),
+                                _ => lengths
+                                    .extend(std::iter::repeat_n(0, 11 + input.bits(7)? as usize)),
+                            }
+                        }
+                        (
+                            Huffman::new(&lengths[..hlit]),
+                            Huffman::new(&lengths[hlit..hlit + hdist]),
+                        )
+                    };
                 loop {
                     let sym = lit.decode(&mut input)? as usize;
                     if sym < 256 {
@@ -276,9 +332,11 @@ pub fn inflate(data: &[u8]) -> Result<Vec<u8>, String> {
                         break;
                     } else {
                         let i = sym - 257;
-                        let len = *LENGTH_BASE.get(i).ok_or("gzip: bad length")? as usize + input.bits(LENGTH_EXTRA[i] as u32)? as usize;
+                        let len = *LENGTH_BASE.get(i).ok_or("gzip: bad length")? as usize
+                            + input.bits(LENGTH_EXTRA[i] as u32)? as usize;
                         let di = dist.decode(&mut input)? as usize;
-                        let d = *DIST_BASE.get(di).ok_or("gzip: bad distance")? as usize + input.bits(DIST_EXTRA[di] as u32)? as usize;
+                        let d = *DIST_BASE.get(di).ok_or("gzip: bad distance")? as usize
+                            + input.bits(DIST_EXTRA[di] as u32)? as usize;
                         if d > out.len() {
                             return Err("gzip: distance too far back".into());
                         }
@@ -339,11 +397,18 @@ mod tests {
 
     #[test]
     fn round_trip_and_system_gzip() {
-        let text: Vec<u8> = (0..20_000).flat_map(|i| format!("line {} of {}\n", i % 97, i / 7).into_bytes()).collect();
+        let text: Vec<u8> = (0..20_000)
+            .flat_map(|i| format!("line {} of {}\n", i % 97, i / 7).into_bytes())
+            .collect();
         assert_eq!(gunzip(&gzip(&text)).unwrap(), text);
         assert_eq!(gunzip(&gzip(b"")).unwrap(), b"");
         // dynamic Huffman blocks, as made by gzip -9
-        let Ok(mut child) = std::process::Command::new("gzip").arg("-9c").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn() else {
+        let Ok(mut child) = std::process::Command::new("gzip")
+            .arg("-9c")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+        else {
             return;
         };
         use std::io::Write;
@@ -363,17 +428,35 @@ mod tests {
         for i in 0..3000 {
             text.push_str(&format!("{{\"@id\":\"https://1r.example.com/logistics-objects/{i}\",\"cargo:goodsDescription\":\"Books {}\"}},", i % 17));
         }
-        let mut samples: Vec<Vec<u8>> = vec![Vec::new(), b"a".to_vec(), b"abcabcabcabcabc".to_vec(), text.into_bytes()];
-        samples.push((0..70_000u32).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect());
+        let mut samples: Vec<Vec<u8>> = vec![
+            Vec::new(),
+            b"a".to_vec(),
+            b"abcabcabcabcabc".to_vec(),
+            text.into_bytes(),
+        ];
+        samples.push(
+            (0..70_000u32)
+                .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+                .collect(),
+        );
         for data in samples {
             let z = gzip(&data);
-            let Ok(mut child) = std::process::Command::new("gzip").arg("-dc").stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).spawn() else {
+            let Ok(mut child) = std::process::Command::new("gzip")
+                .arg("-dc")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+            else {
                 return;
             };
             use std::io::Write;
             child.stdin.take().unwrap().write_all(&z).unwrap();
             let out = child.wait_with_output().unwrap();
-            assert!(out.status.success(), "gzip -d failed for {} bytes", data.len());
+            assert!(
+                out.status.success(),
+                "gzip -d failed for {} bytes",
+                data.len()
+            );
             assert_eq!(out.stdout, data);
             if data.len() > 100_000 {
                 assert!(z.len() * 4 < data.len(), "{} -> {}", data.len(), z.len());

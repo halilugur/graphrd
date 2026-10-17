@@ -200,7 +200,7 @@ pub struct Aggregate {
 /// What a query returns.
 pub enum Form {
     /// A projection of expressions to variables, with DISTINCT/REDUCED flags.
-/// A projection; `None` projects every visible variable.
+    /// A projection; `None` projects every visible variable.
     Select {
         /// DISTINCT: duplicate solutions are removed.
         distinct: bool,

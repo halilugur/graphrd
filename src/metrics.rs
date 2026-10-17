@@ -3,12 +3,14 @@
 
 use std::collections::VecDeque;
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// Upper bounds (seconds) of the histogram buckets.
-const BOUNDS: [f64; 14] = [0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0];
+const BOUNDS: [f64; 14] = [
+    0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+];
 
 /// A latency histogram with fixed buckets; lock-free.
 pub struct Histogram {
@@ -18,12 +20,16 @@ pub struct Histogram {
 }
 
 impl Histogram {
-/// A histogram at zero.
+    /// A histogram at zero.
     pub const fn new() -> Histogram {
-        Histogram { buckets: [const { AtomicU64::new(0) }; BOUNDS.len()], count: AtomicU64::new(0), sum_micros: AtomicU64::new(0) }
+        Histogram {
+            buckets: [const { AtomicU64::new(0) }; BOUNDS.len()],
+            count: AtomicU64::new(0),
+            sum_micros: AtomicU64::new(0),
+        }
     }
 
-/// Record one observation.
+    /// Record one observation.
     pub fn observe(&self, d: Duration) {
         let secs = d.as_secs_f64();
         if let Some(i) = BOUNDS.iter().position(|b| secs <= *b) {
@@ -33,7 +39,7 @@ impl Histogram {
         self.sum_micros.fetch_add(d.as_micros() as u64, Relaxed);
     }
 
-/// How many were observed.
+    /// How many were observed.
     pub fn count(&self) -> u64 {
         self.count.load(Relaxed)
     }
@@ -47,7 +53,11 @@ impl Histogram {
         }
         let count = self.count();
         let _ = writeln!(out, "{name}_bucket{{le=\"+Inf\"}} {count}");
-        let _ = writeln!(out, "{name}_sum {}", self.sum_micros.load(Relaxed) as f64 / 1e6);
+        let _ = writeln!(
+            out,
+            "{name}_sum {}",
+            self.sum_micros.load(Relaxed) as f64 / 1e6
+        );
         let _ = writeln!(out, "{name}_count {count}");
     }
 }
@@ -91,15 +101,15 @@ const SLOW_KEEP: usize = 100;
 #[derive(Clone)]
 /// One entry of the slow query log.
 pub struct SlowEntry {
-/// When it ran, Unix milliseconds.
+    /// When it ran, Unix milliseconds.
     pub at_millis: i64,
-/// Which repository.
+    /// Which repository.
     pub repository: String,
-/// `query` or `update`.
+    /// `query` or `update`.
     pub kind: &'static str,
-/// How long it took.
+    /// How long it took.
     pub millis: u64,
-/// The query or update text.
+    /// The query or update text.
     pub text: String,
 }
 
@@ -124,7 +134,11 @@ pub fn response(status: u16) {
 /// Record a finished query or update; slow ones are logged to standard error and kept
 /// for `GET /rest/monitor/slow-queries`.
 pub fn finished(kind: &'static str, repository: &str, text: &str, took: Duration, ok: bool) {
-    let (hist, errors) = if kind == "update" { (&UPDATES, &UPDATE_ERRORS) } else { (&QUERIES, &QUERY_ERRORS) };
+    let (hist, errors) = if kind == "update" {
+        (&UPDATES, &UPDATE_ERRORS)
+    } else {
+        (&QUERIES, &QUERY_ERRORS)
+    };
     hist.observe(took);
     if !ok {
         errors.fetch_add(1, Relaxed);
@@ -139,7 +153,9 @@ pub fn finished(kind: &'static str, repository: &str, text: &str, took: Duration
     if short.len() < text.len() {
         short.push('…');
     }
-    let at_millis = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64);
+    let at_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64);
     let line = crate::json::Json::obj()
         .with("slow", kind)
         .with("repository", repository)
@@ -150,12 +166,24 @@ pub fn finished(kind: &'static str, repository: &str, text: &str, took: Duration
     if log.len() == SLOW_KEEP {
         log.pop_front();
     }
-    log.push_back(SlowEntry { at_millis, repository: repository.into(), kind, millis, text: short });
+    log.push_back(SlowEntry {
+        at_millis,
+        repository: repository.into(),
+        kind,
+        millis,
+        text: short,
+    });
 }
 
 /// The slow query log, newest first.
 pub fn slow_queries() -> Vec<SlowEntry> {
-    SLOW_LOG.lock().unwrap_or_else(|e| e.into_inner()).iter().rev().cloned().collect()
+    SLOW_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .rev()
+        .cloned()
+        .collect()
 }
 
 /// Resident set size of this process, where the platform makes it cheap to read.
@@ -166,35 +194,108 @@ fn resident_bytes() -> Option<u64> {
 }
 
 fn counter(out: &mut String, name: &str, help: &str, v: u64) {
-    let _ = writeln!(out, "# HELP {name} {help}\n# TYPE {name} counter\n{name} {v}");
+    let _ = writeln!(
+        out,
+        "# HELP {name} {help}\n# TYPE {name} counter\n{name} {v}"
+    );
 }
 
 /// A label value as a Prometheus quoted string.
 pub fn escape_label(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n")
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Everything except the per-repository gauges, which the server adds.
 pub fn render(out: &mut String) {
-    let up = STARTED.lock().unwrap_or_else(|e| e.into_inner()).map_or(0.0, |s| s.elapsed().as_secs_f64());
-    let _ = writeln!(out, "# HELP graphrd_info Build information.\n# TYPE graphrd_info gauge\ngraphrd_info{{version=\"{}\"}} 1", env!("CARGO_PKG_VERSION"));
-    let _ = writeln!(out, "# HELP graphrd_uptime_seconds Seconds since the server started.\n# TYPE graphrd_uptime_seconds gauge\ngraphrd_uptime_seconds {up}");
-    let _ = writeln!(out, "# HELP graphrd_http_responses_total HTTP responses by status class.\n# TYPE graphrd_http_responses_total counter");
+    let up = STARTED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map_or(0.0, |s| s.elapsed().as_secs_f64());
+    let _ = writeln!(
+        out,
+        "# HELP graphrd_info Build information.\n# TYPE graphrd_info gauge\ngraphrd_info{{version=\"{}\"}} 1",
+        env!("CARGO_PKG_VERSION")
+    );
+    let _ = writeln!(
+        out,
+        "# HELP graphrd_uptime_seconds Seconds since the server started.\n# TYPE graphrd_uptime_seconds gauge\ngraphrd_uptime_seconds {up}"
+    );
+    let _ = writeln!(
+        out,
+        "# HELP graphrd_http_responses_total HTTP responses by status class.\n# TYPE graphrd_http_responses_total counter"
+    );
     for (i, c) in RESPONSES.iter().enumerate() {
-        let _ = writeln!(out, "graphrd_http_responses_total{{code=\"{}xx\"}} {}", i + 1, c.load(Relaxed));
+        let _ = writeln!(
+            out,
+            "graphrd_http_responses_total{{code=\"{}xx\"}} {}",
+            i + 1,
+            c.load(Relaxed)
+        );
     }
-    QUERIES.write(out, "graphrd_query_duration_seconds", "Time to evaluate a SPARQL query.");
-    UPDATES.write(out, "graphrd_update_duration_seconds", "Time to run a SPARQL update.");
-    WAL_FSYNC.write(out, "graphrd_wal_fsync_duration_seconds", "Time of one write-ahead log fsync (one covers every commit waiting for it).");
-    counter(out, "graphrd_query_errors_total", "Queries that failed.", QUERY_ERRORS.load(Relaxed));
-    counter(out, "graphrd_update_errors_total", "Updates that failed.", UPDATE_ERRORS.load(Relaxed));
-    counter(out, "graphrd_slow_queries_total", "Queries and updates slower than --slow-query.", SLOW_QUERIES.load(Relaxed));
-    counter(out, "graphrd_block_cache_hits_total", "Index block reads served from the block cache.", CACHE_HITS.load(Relaxed));
-    counter(out, "graphrd_block_cache_misses_total", "Index block reads that went to disk.", CACHE_MISSES.load(Relaxed));
-    counter(out, "graphrd_statements_loaded_total", "Statements added through HTTP uploads and imports.", STATEMENTS_LOADED.load(Relaxed));
-    counter(out, "graphrd_request_log_lines_dropped_total", "Access log lines dropped because the queue was full.", crate::log::dropped());
+    QUERIES.write(
+        out,
+        "graphrd_query_duration_seconds",
+        "Time to evaluate a SPARQL query.",
+    );
+    UPDATES.write(
+        out,
+        "graphrd_update_duration_seconds",
+        "Time to run a SPARQL update.",
+    );
+    WAL_FSYNC.write(
+        out,
+        "graphrd_wal_fsync_duration_seconds",
+        "Time of one write-ahead log fsync (one covers every commit waiting for it).",
+    );
+    counter(
+        out,
+        "graphrd_query_errors_total",
+        "Queries that failed.",
+        QUERY_ERRORS.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_update_errors_total",
+        "Updates that failed.",
+        UPDATE_ERRORS.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_slow_queries_total",
+        "Queries and updates slower than --slow-query.",
+        SLOW_QUERIES.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_block_cache_hits_total",
+        "Index block reads served from the block cache.",
+        CACHE_HITS.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_block_cache_misses_total",
+        "Index block reads that went to disk.",
+        CACHE_MISSES.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_statements_loaded_total",
+        "Statements added through HTTP uploads and imports.",
+        STATEMENTS_LOADED.load(Relaxed),
+    );
+    counter(
+        out,
+        "graphrd_request_log_lines_dropped_total",
+        "Access log lines dropped because the queue was full.",
+        crate::log::dropped(),
+    );
     if let Some(rss) = resident_bytes() {
-        let _ = writeln!(out, "# HELP graphrd_resident_memory_bytes Resident memory of the process.\n# TYPE graphrd_resident_memory_bytes gauge\ngraphrd_resident_memory_bytes {rss}");
+        let _ = writeln!(
+            out,
+            "# HELP graphrd_resident_memory_bytes Resident memory of the process.\n# TYPE graphrd_resident_memory_bytes gauge\ngraphrd_resident_memory_bytes {rss}"
+        );
     }
 }
 

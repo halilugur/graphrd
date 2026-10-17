@@ -5,22 +5,22 @@ use std::fmt::{self, Write as _};
 #[derive(Debug, Clone, PartialEq)]
 /// A JSON value.
 pub enum Json {
-/// `null`.
+    /// `null`.
     Null,
-/// `true` or `false`.
+    /// `true` or `false`.
     Bool(bool),
-/// A number (integers and floats alike; f64 keeps both).
+    /// A number (integers and floats alike; f64 keeps both).
     Num(f64),
-/// A string.
+    /// A string.
     Str(String),
-/// An array.
+    /// An array.
     Arr(Vec<Json>),
     /// Insertion-ordered object.
     Obj(Vec<(String, Json)>),
 }
 
 impl Json {
-/// An empty object.
+    /// An empty object.
     pub fn obj() -> Json {
         Json::Obj(Vec::new())
     }
@@ -33,7 +33,7 @@ impl Json {
         self
     }
 
-/// Set a field, replacing an existing one of the same name.
+    /// Set a field, replacing an existing one of the same name.
     pub fn set(&mut self, key: &str, value: impl Into<Json>) {
         if let Json::Obj(fields) = self {
             let value = value.into();
@@ -44,7 +44,7 @@ impl Json {
         }
     }
 
-/// A field's value.
+    /// A field's value.
     pub fn get(&self, key: &str) -> Option<&Json> {
         match self {
             Json::Obj(fields) => fields.iter().find(|(k, _)| k == key).map(|(_, v)| v),
@@ -52,7 +52,7 @@ impl Json {
         }
     }
 
-/// The string, when this is one.
+    /// The string, when this is one.
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Json::Str(s) => Some(s),
@@ -60,7 +60,7 @@ impl Json {
         }
     }
 
-/// The number, when this is one.
+    /// The number, when this is one.
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             Json::Num(n) => Some(*n),
@@ -68,7 +68,7 @@ impl Json {
         }
     }
 
-/// The array, when this is one.
+    /// The array, when this is one.
     pub fn as_array(&self) -> Option<&[Json]> {
         match self {
             Json::Arr(a) => Some(a),
@@ -88,9 +88,12 @@ impl Json {
         cur.as_str().unwrap_or("")
     }
 
-/// Parse a JSON document (surplus input is an error).
+    /// Parse a JSON document (surplus input is an error).
     pub fn parse(text: &str) -> Result<Json, String> {
-        let mut p = Parser { s: text.as_bytes(), i: 0 };
+        let mut p = Parser {
+            s: text.as_bytes(),
+            i: 0,
+        };
         p.ws();
         let v = p.value(0)?;
         p.ws();
@@ -309,7 +312,10 @@ impl Parser<'_> {
                 let start = self.i;
                 self.i += 1;
                 while self.i < self.s.len()
-                    && matches!(self.s[self.i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-')
+                    && matches!(
+                        self.s[self.i],
+                        b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-'
+                    )
                 {
                     self.i += 1;
                 }
@@ -321,7 +327,10 @@ impl Parser<'_> {
     }
 
     fn hex4(&mut self) -> Result<u32, String> {
-        let h = self.s.get(self.i..self.i + 4).ok_or("JSON: short \\u escape")?;
+        let h = self
+            .s
+            .get(self.i..self.i + 4)
+            .ok_or("JSON: short \\u escape")?;
         let v = u32::from_str_radix(std::str::from_utf8(h).map_err(|e| e.to_string())?, 16)
             .map_err(|_| "JSON: bad \\u escape".to_string())?;
         self.i += 4;
@@ -360,7 +369,9 @@ impl Parser<'_> {
                             let mut cp = self.hex4()?;
                             if (0xD800..0xDC00).contains(&cp) && self.eat("\\u") {
                                 let lo = self.hex4()?;
-                                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo.wrapping_sub(0xDC00) & 0x3ff);
+                                cp = 0x10000
+                                    + ((cp - 0xD800) << 10)
+                                    + (lo.wrapping_sub(0xDC00) & 0x3ff);
                             }
                             out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
                         }

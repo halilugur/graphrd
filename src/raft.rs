@@ -21,11 +21,11 @@ use crate::json::Json;
 #[derive(Clone, Copy, PartialEq, Debug)]
 /// A member's role in the protocol.
 pub enum Role {
-/// Answers votes and appends, and may become a candidate.
+    /// Answers votes and appends, and may become a candidate.
     Follower,
-/// Asks for votes to become the leader.
+    /// Asks for votes to become the leader.
     Candidate,
-/// Serves writes and replicates them.
+    /// Serves writes and replicates them.
     Leader,
     /// A member that only follows (`--cluster-learners`).
     Learner,
@@ -34,17 +34,17 @@ pub enum Role {
 #[derive(Clone, Debug)]
 /// One entry of the Raft log.
 pub struct Entry {
-/// The term the entry was written in.
+    /// The term the entry was written in.
     pub term: u64,
-/// The operation, as the JSON the cluster protocol carries.
+    /// The operation, as the JSON the cluster protocol carries.
     pub op: Json,
 }
 
 /// Another member of the cluster.
 pub struct Peer {
-/// The member's id (`--node-id`).
+    /// The member's id (`--node-id`).
     pub id: String,
-/// Where to reach it, `host:port`.
+    /// Where to reach it, `host:port`.
     pub host: String, // host:port
     /// Learners receive the log but do not vote.
     pub voter: bool,
@@ -72,17 +72,17 @@ struct State {
 
 /// Making and installing snapshots of the server's data (a backup archive).
 pub struct Snapshots {
-/// Takes a snapshot of every repository (a backup archive).
+    /// Takes a snapshot of every repository (a backup archive).
     pub make: Arc<dyn Fn() -> Vec<u8> + Send + Sync>,
-/// Installs a snapshot into every repository.
+    /// Installs a snapshot into every repository.
     pub install: Arc<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>,
 }
 
 /// The Raft state machine of one cluster member.
 pub struct Raft {
-/// This member's id.
+    /// This member's id.
     pub id: String,
-/// The other members.
+    /// The other members.
     pub peers: Vec<Peer>,
     /// Whether this node votes (false for a learner).
     pub voter: bool,
@@ -102,12 +102,19 @@ pub type Apply = Arc<dyn Fn(&Json) + Send + Sync>;
 
 /// Applied entries kept before the log is compacted (`GRAPHRD_RAFT_COMPACT` changes it).
 fn compact_after() -> u64 {
-    std::env::var("GRAPHRD_RAFT_COMPACT").ok().and_then(|v| v.parse().ok()).unwrap_or(10_000)
+    std::env::var("GRAPHRD_RAFT_COMPACT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000)
 }
 
 fn rand_ms(lo: u64, hi: u64) -> Duration {
-    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(7, |d| d.subsec_nanos() as u64);
-    let x = nanos.wrapping_mul(6364136223846793005).wrapping_add(std::process::id() as u64 * 1442695040888963407);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(7, |d| d.subsec_nanos() as u64);
+    let x = nanos
+        .wrapping_mul(6364136223846793005)
+        .wrapping_add(std::process::id() as u64 * 1442695040888963407);
     Duration::from_millis(lo + (x >> 33) % (hi - lo))
 }
 
@@ -116,17 +123,30 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 }
 
 fn num(j: &Json, k: &str) -> u64 {
-    j.get(k).and_then(|v| if let Json::Num(n) = v { Some(*n as u64) } else { None }).unwrap_or(0)
+    j.get(k)
+        .and_then(|v| {
+            if let Json::Num(n) = v {
+                Some(*n as u64)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0)
 }
 
 fn entry_json(e: &Entry) -> Json {
-    Json::obj().with("t", e.term as usize).with("op", e.op.clone())
+    Json::obj()
+        .with("t", e.term as usize)
+        .with("op", e.op.clone())
 }
 
 /// An entry as stored in `raft.log`: with its index, so the file and the compaction base in
 /// `raft.meta` (written separately) can never be read out of step.
 fn stored_json(index: u64, e: &Entry) -> Json {
-    Json::obj().with("i", index as usize).with("t", e.term as usize).with("op", e.op.clone())
+    Json::obj()
+        .with("i", index as usize)
+        .with("t", e.term as usize)
+        .with("op", e.op.clone())
 }
 
 impl State {
@@ -152,11 +172,27 @@ impl State {
 
 impl Raft {
     /// Load persisted state from `dir` (term, vote, compaction base, log).
-    pub fn open(dir: &Path, id: &str, peers: Vec<Peer>, voter: bool, secret: &str) -> std::io::Result<Arc<Raft>> {
+    pub fn open(
+        dir: &Path,
+        id: &str,
+        peers: Vec<Peer>,
+        voter: bool,
+        secret: &str,
+    ) -> std::io::Result<Arc<Raft>> {
         fs::create_dir_all(dir)?;
-        let meta = fs::read_to_string(dir.join("raft.meta")).ok().and_then(|t| Json::parse(&t).ok()).unwrap_or(Json::obj());
-        let (term, base, base_term) = (num(&meta, "term"), num(&meta, "base"), num(&meta, "baseTerm"));
-        let voted_for = meta.get("votedFor").and_then(|v| v.as_str()).map(String::from);
+        let meta = fs::read_to_string(dir.join("raft.meta"))
+            .ok()
+            .and_then(|t| Json::parse(&t).ok())
+            .unwrap_or(Json::obj());
+        let (term, base, base_term) = (
+            num(&meta, "term"),
+            num(&meta, "base"),
+            num(&meta, "baseTerm"),
+        );
+        let voted_for = meta
+            .get("votedFor")
+            .and_then(|v| v.as_str())
+            .map(String::from);
         let mut log = Vec::new();
         if let Ok(f) = File::open(dir.join("raft.log")) {
             let mut expected = base + 1;
@@ -165,14 +201,21 @@ impl Raft {
                 // a torn last line from a crash is dropped
                 let Ok(j) = Json::parse(&line) else { break };
                 // entries at or below the base were compacted (the log may predate the base)
-                let i = if j.get("i").is_some() { num(&j, "i") } else { expected };
+                let i = if j.get("i").is_some() {
+                    num(&j, "i")
+                } else {
+                    expected
+                };
                 if i < expected {
                     continue;
                 }
                 if i > expected {
                     break; // a gap: what follows cannot be trusted
                 }
-                log.push(Entry { term: num(&j, "t"), op: j.get("op").cloned().unwrap_or(Json::Null) });
+                log.push(Entry {
+                    term: num(&j, "t"),
+                    op: j.get("op").cloned().unwrap_or(Json::Null),
+                });
                 expected += 1;
             }
         }
@@ -248,7 +291,10 @@ impl Raft {
             let _ = nf.sync_all();
             let _ = fs::rename(&tmp, self.dir.join("raft.log"));
         }
-        if let Ok(af) = OpenOptions::new().append(true).open(self.dir.join("raft.log")) {
+        if let Ok(af) = OpenOptions::new()
+            .append(true)
+            .open(self.dir.join("raft.log"))
+        {
             *f = af;
         }
     }
@@ -274,20 +320,24 @@ impl Raft {
         }
     }
 
-/// Provide the snapshot functions (they need every open repository).
+    /// Provide the snapshot functions (they need every open repository).
     pub fn set_snapshots(&self, s: Snapshots) {
         let _ = self.snapshots.set(s);
     }
 
-/// This member's state for the Cluster page: role, term, indexes, peers.
+    /// This member's state for the Cluster page: role, term, indexes, peers.
     pub fn status(&self) -> Json {
         let st = lock(&self.state);
         let peers = self.peers.iter().enumerate().map(|(i, p)| {
-            let mut j = Json::obj().with("id", p.id.as_str()).with("address", p.host.as_str()).with("voter", p.voter);
+            let mut j = Json::obj()
+                .with("id", p.id.as_str())
+                .with("address", p.host.as_str())
+                .with("voter", p.voter);
             if st.role == Role::Leader {
-                j = j
-                    .with("matchIndex", st.match_index[i] as usize)
-                    .with("lastContactMs", st.last_contact[i].map(|t| t.elapsed().as_millis() as usize));
+                j = j.with("matchIndex", st.match_index[i] as usize).with(
+                    "lastContactMs",
+                    st.last_contact[i].map(|t| t.elapsed().as_millis() as usize),
+                );
             }
             j
         });
@@ -305,7 +355,7 @@ impl Raft {
             .with("peers", Json::Arr(peers.collect()))
     }
 
-/// Whether this member currently leads the cluster.
+    /// Whether this member currently leads the cluster.
     pub fn is_leader(&self) -> bool {
         lock(&self.state).role == Role::Leader
     }
@@ -318,31 +368,49 @@ impl Raft {
 
     // ------------------------------------------------------------ RPC handlers
 
-/// One candidate's vote request; the answer follows the protocol's rules.
+    /// One candidate's vote request; the answer follows the protocol's rules.
     pub fn handle_vote(&self, req: &Json) -> Json {
-        let (term, cand, li, lt) = (num(req, "term"), req.str_at(&["candidate"]).to_string(), num(req, "lastIndex"), num(req, "lastTerm"));
+        let (term, cand, li, lt) = (
+            num(req, "term"),
+            req.str_at(&["candidate"]).to_string(),
+            num(req, "lastIndex"),
+            num(req, "lastTerm"),
+        );
         let mut st = lock(&self.state);
         if term > st.term {
             self.become_follower(&mut st, term);
         }
         let (my_i, my_t) = Self::last(&st);
         let up_to_date = lt > my_t || (lt == my_t && li >= my_i);
-        let granted = self.voter && term == st.term && up_to_date && st.voted_for.as_ref().is_none_or(|v| *v == cand);
+        let granted = self.voter
+            && term == st.term
+            && up_to_date
+            && st.voted_for.as_ref().is_none_or(|v| *v == cand);
         if granted {
             st.voted_for = Some(cand);
             st.last_heard = Instant::now();
             self.persist_meta(&st);
         }
-        Json::obj().with("term", st.term as usize).with("granted", granted)
+        Json::obj()
+            .with("term", st.term as usize)
+            .with("granted", granted)
     }
 
-/// The leader's append: entries, a heartbeat, or a compaction snapshot, by what
-/// the request carries.
+    /// The leader's append: entries, a heartbeat, or a compaction snapshot, by what
+    /// the request carries.
     pub fn handle_append(&self, req: &Json) -> Json {
-        let (term, prev_i, prev_t, leader_commit) = (num(req, "term"), num(req, "prevIndex"), num(req, "prevTerm"), num(req, "commit"));
+        let (term, prev_i, prev_t, leader_commit) = (
+            num(req, "term"),
+            num(req, "prevIndex"),
+            num(req, "prevTerm"),
+            num(req, "commit"),
+        );
         let mut st = lock(&self.state);
         if term < st.term {
-            return Json::obj().with("term", st.term as usize).with("success", false).with("match", 0usize);
+            return Json::obj()
+                .with("term", st.term as usize)
+                .with("success", false)
+                .with("match", 0usize);
         }
         self.become_follower(&mut st, term);
         st.leader = Some(req.str_at(&["leader"]).to_string());
@@ -350,12 +418,22 @@ impl Raft {
         if prev_i > st.last_index() || (prev_i > st.base && st.term_at(prev_i) != prev_t) {
             // tell the leader where our log ends so it can back up quickly
             let hint = st.last_index().min(prev_i.saturating_sub(1)).max(st.base);
-            return Json::obj().with("term", st.term as usize).with("success", false).with("match", hint as usize);
+            return Json::obj()
+                .with("term", st.term as usize)
+                .with("success", false)
+                .with("match", hint as usize);
         }
         let entries: Vec<Entry> = req
             .get("entries")
             .and_then(|e| e.as_array())
-            .map(|a| a.iter().map(|e| Entry { term: num(e, "t"), op: e.get("op").cloned().unwrap_or(Json::Null) }).collect())
+            .map(|a| {
+                a.iter()
+                    .map(|e| Entry {
+                        term: num(e, "t"),
+                        op: e.get("op").cloned().unwrap_or(Json::Null),
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         let mut idx = prev_i;
         let mut new = Vec::new();
@@ -382,32 +460,54 @@ impl Raft {
             st.commit = leader_commit.min(idx).max(st.commit);
             self.changed.notify_all();
         }
-        Json::obj().with("term", st.term as usize).with("success", true).with("match", idx as usize)
+        Json::obj()
+            .with("term", st.term as usize)
+            .with("success", true)
+            .with("match", idx as usize)
     }
 
     /// A snapshot from the leader: the data up to `index` replaces this node's data and log.
-    pub fn handle_snapshot(&self, term: u64, leader: &str, index: u64, index_term: u64, data: &[u8]) -> Json {
+    pub fn handle_snapshot(
+        &self,
+        term: u64,
+        leader: &str,
+        index: u64,
+        index_term: u64,
+        data: &[u8],
+    ) -> Json {
         {
             let mut st = lock(&self.state);
             if term < st.term {
-                return Json::obj().with("term", st.term as usize).with("success", false).with("match", 0usize);
+                return Json::obj()
+                    .with("term", st.term as usize)
+                    .with("success", false)
+                    .with("match", 0usize);
             }
             self.become_follower(&mut st, term);
             st.leader = Some(leader.to_string());
             st.last_heard = Instant::now();
             if index <= st.applied {
                 let m = st.last_index().max(index);
-                return Json::obj().with("term", st.term as usize).with("success", true).with("match", m as usize);
+                return Json::obj()
+                    .with("term", st.term as usize)
+                    .with("success", true)
+                    .with("match", m as usize);
             }
         }
         let Some(snapshots) = self.snapshots.get() else {
-            return Json::obj().with("term", 0usize).with("success", false).with("match", 0usize);
+            return Json::obj()
+                .with("term", 0usize)
+                .with("success", false)
+                .with("match", 0usize);
         };
         let _applying = lock(&self.apply_lock);
         if let Err(e) = (snapshots.install)(data) {
             eprintln!("raft: installing a snapshot failed: {e}");
             let st = lock(&self.state);
-            return Json::obj().with("term", st.term as usize).with("success", false).with("match", st.applied as usize);
+            return Json::obj()
+                .with("term", st.term as usize)
+                .with("success", false)
+                .with("match", st.applied as usize);
         }
         let mut st = lock(&self.state);
         // keep the entries after the snapshot when they agree with it
@@ -426,7 +526,10 @@ impl Raft {
         self.rewrite_log(&st);
         eprintln!("raft: {} installed a snapshot up to index {index}", self.id);
         self.changed.notify_all();
-        Json::obj().with("term", st.term as usize).with("success", true).with("match", st.last_index() as usize)
+        Json::obj()
+            .with("term", st.term as usize)
+            .with("success", true)
+            .with("match", st.last_index() as usize)
     }
 
     // ------------------------------------------------------------ client API
@@ -453,14 +556,21 @@ impl Raft {
             if Instant::now() > deadline || st.role != Role::Leader {
                 return Err(self.leader_host_locked(&st));
             }
-            st = self.changed.wait_timeout(st, Duration::from_millis(20)).unwrap_or_else(|e| e.into_inner()).0;
+            st = self
+                .changed
+                .wait_timeout(st, Duration::from_millis(20))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
         }
         Ok(index)
     }
 
     fn leader_host_locked(&self, st: &State) -> Option<String> {
         let l = st.leader.clone()?;
-        self.peers.iter().find(|p| p.id == l).map(|p| p.host.clone())
+        self.peers
+            .iter()
+            .find(|p| p.id == l)
+            .map(|p| p.host.clone())
     }
 
     /// Votes needed: a majority of the voting members (learners do not count).
@@ -475,7 +585,13 @@ impl Raft {
             if st.term_at(idx) != st.term {
                 continue;
             }
-            let votes = usize::from(self.voter) + self.peers.iter().zip(&st.match_index).filter(|(p, m)| p.voter && **m >= idx).count();
+            let votes = usize::from(self.voter)
+                + self
+                    .peers
+                    .iter()
+                    .zip(&st.match_index)
+                    .filter(|(p, m)| p.voter && **m >= idx)
+                    .count();
             if votes >= self.majority() {
                 st.commit = idx;
                 break;
@@ -486,8 +602,19 @@ impl Raft {
     // ------------------------------------------------------------ background loops
 
     fn rpc(&self, host: &str, path: &str, body: &Json) -> Option<Json> {
-        let headers = vec![("Content-Type".to_string(), "application/json".to_string()), ("X-GraphRD-Cluster".to_string(), self.secret.clone())];
-        let (status, _, resp) = http::call(host, "POST", path, &headers, body.to_string().as_bytes(), Duration::from_millis(500)).ok()?;
+        let headers = vec![
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("X-GraphRD-Cluster".to_string(), self.secret.clone()),
+        ];
+        let (status, _, resp) = http::call(
+            host,
+            "POST",
+            path,
+            &headers,
+            body.to_string().as_bytes(),
+            Duration::from_millis(500),
+        )
+        .ok()?;
         if status != 200 {
             return None;
         }
@@ -527,14 +654,19 @@ impl Raft {
                 let (li, lt) = Self::last(&st);
                 (st.term, li, lt)
             };
-            let req = Json::obj().with("term", term as usize).with("candidate", self.id.as_str()).with("lastIndex", li as usize).with("lastTerm", lt as usize);
+            let req = Json::obj()
+                .with("term", term as usize)
+                .with("candidate", self.id.as_str())
+                .with("lastIndex", li as usize)
+                .with("lastTerm", lt as usize);
             let votes = Arc::new(Mutex::new(1usize));
             let handles: Vec<_> = self
                 .peers
                 .iter()
                 .filter(|p| p.voter)
                 .map(|p| {
-                    let (me, host, req, votes) = (self.clone(), p.host.clone(), req.clone(), votes.clone());
+                    let (me, host, req, votes) =
+                        (self.clone(), p.host.clone(), req.clone(), votes.clone());
                     std::thread::spawn(move || {
                         if let Some(r) = me.rpc(&host, "/cluster/raft/vote", &req) {
                             let rt = num(&r, "term");
@@ -560,7 +692,10 @@ impl Raft {
                 st.match_index = vec![0; self.peers.len()];
                 st.last_contact = vec![None; self.peers.len()];
                 // a no-op entry in the new term lets earlier entries commit
-                let e = Entry { term: st.term, op: Json::obj().with("kind", "noop") };
+                let e = Entry {
+                    term: st.term,
+                    op: Json::obj().with("kind", "noop"),
+                };
                 st.log.push(e.clone());
                 self.append_log(st.last_index(), &[e]);
                 self.advance_commit(&mut st);
@@ -581,9 +716,23 @@ impl Raft {
             };
             (index, index_term, (snapshots.make)())
         };
-        let path = format!("/cluster/raft/snapshot?term={term}&leader={}&index={index}&indexTerm={index_term}", http::percent_encode(&self.id));
-        let headers = vec![("Content-Type".to_string(), "application/x-tar".to_string()), ("X-GraphRD-Cluster".to_string(), self.secret.clone())];
-        let (status, _, resp) = http::call(&self.peers[i].host, "POST", &path, &headers, &data, Duration::from_secs(600)).ok()?;
+        let path = format!(
+            "/cluster/raft/snapshot?term={term}&leader={}&index={index}&indexTerm={index_term}",
+            http::percent_encode(&self.id)
+        );
+        let headers = vec![
+            ("Content-Type".to_string(), "application/x-tar".to_string()),
+            ("X-GraphRD-Cluster".to_string(), self.secret.clone()),
+        ];
+        let (status, _, resp) = http::call(
+            &self.peers[i].host,
+            "POST",
+            &path,
+            &headers,
+            &data,
+            Duration::from_secs(600),
+        )
+        .ok()?;
         if status != 200 {
             return None;
         }
@@ -625,7 +774,11 @@ impl Raft {
                 }
                 let prev_i = next - 1;
                 let prev_t = st.term_at(prev_i);
-                let entries: Vec<Json> = st.log[((prev_i - st.base) as usize)..].iter().take(512).map(entry_json).collect();
+                let entries: Vec<Json> = st.log[((prev_i - st.base) as usize)..]
+                    .iter()
+                    .take(512)
+                    .map(entry_json)
+                    .collect();
                 Json::obj()
                     .with("term", st.term as usize)
                     .with("leader", self.id.as_str())
@@ -635,7 +788,10 @@ impl Raft {
                     .with("commit", st.commit as usize)
             };
             let sent_term = num(&req, "term");
-            let n_sent = req.get("entries").and_then(|e| e.as_array()).map_or(0, |a| a.len());
+            let n_sent = req
+                .get("entries")
+                .and_then(|e| e.as_array())
+                .map_or(0, |a| a.len());
             match self.rpc(&self.peers[i].host, "/cluster/raft/append", &req) {
                 Some(r) => {
                     let mut st = lock(&self.state);
@@ -656,7 +812,9 @@ impl Raft {
                             continue; // more to send right away
                         }
                     } else {
-                        st.next_index[i] = (num(&r, "match") + 1).min(st.next_index[i].saturating_sub(1)).max(1);
+                        st.next_index[i] = (num(&r, "match") + 1)
+                            .min(st.next_index[i].saturating_sub(1))
+                            .max(1);
                         continue;
                     }
                 }
@@ -697,7 +855,7 @@ impl Raft {
         }
     }
 
-/// Whether a request carries the cluster secret.
+    /// Whether a request carries the cluster secret.
     pub fn secret_ok(&self, s: Option<&str>) -> bool {
         s == Some(self.secret.as_str())
     }

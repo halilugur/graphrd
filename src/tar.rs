@@ -9,7 +9,9 @@ fn octal(out: &mut [u8], v: u64) {
 /// The entries as a tar archive (a ustar header each).
 pub fn write(entries: &[(String, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
-    let mtime = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let mtime = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
     for (name, data) in entries {
         let mut h = [0u8; 512];
         let (prefix, base) = if name.len() > 100 {
@@ -53,8 +55,14 @@ pub fn read(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         if h.iter().all(|&b| b == 0) {
             break;
         }
-        let field = |r: std::ops::Range<usize>| String::from_utf8_lossy(&h[r]).trim_end_matches('\0').trim().to_string();
-        let size = u64::from_str_radix(&field(124..136), 8).map_err(|_| "corrupt tar header")? as usize;
+        let field = |r: std::ops::Range<usize>| {
+            String::from_utf8_lossy(&h[r])
+                .trim_end_matches('\0')
+                .trim()
+                .to_string()
+        };
+        let size =
+            u64::from_str_radix(&field(124..136), 8).map_err(|_| "corrupt tar header")? as usize;
         let mut name = field(0..100);
         let prefix = field(345..500);
         if !prefix.is_empty() {
@@ -65,7 +73,12 @@ pub fn read(data: &[u8]) -> Result<Vec<(String, Vec<u8>)>, String> {
         if pos + size > data.len() {
             return Err("truncated tar archive".into());
         }
-        if (kind == b'0' || kind == 0) && !name.split('/').any(|c| c == ".." || c.is_empty() && !name.ends_with('/')) && !name.starts_with('/') {
+        if (kind == b'0' || kind == 0)
+            && !name
+                .split('/')
+                .any(|c| c == ".." || c.is_empty() && !name.ends_with('/'))
+            && !name.starts_with('/')
+        {
             out.push((name, data[pos..pos + size].to_vec()));
         }
         pos += size.div_ceil(512) * 512;
@@ -78,7 +91,11 @@ mod tests {
     #[test]
     fn roundtrip() {
         let long = format!("{}/data.nq", "d".repeat(120));
-        let entries = vec![("a/config.json".to_string(), b"{}".to_vec()), (long.clone(), vec![7u8; 1000]), ("../evil".to_string(), b"x".to_vec())];
+        let entries = vec![
+            ("a/config.json".to_string(), b"{}".to_vec()),
+            (long.clone(), vec![7u8; 1000]),
+            ("../evil".to_string(), b"x".to_vec()),
+        ];
         let back = super::read(&super::write(&entries)).unwrap();
         assert_eq!(back.len(), 2);
         assert_eq!(back[1].0, long);

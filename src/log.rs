@@ -5,9 +5,9 @@
 //! The audit log is a different thing entirely and stays synchronous.
 
 use std::io::Write;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, Receiver, SyncSender, TrySendError};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 
 /// Lines the queue holds; beyond that, lines are dropped and counted, never waited for.
 const QUEUE: usize = 4_096;
@@ -29,7 +29,10 @@ fn log() -> &'static AsyncLog {
             .stack_size(32 * 1024)
             .spawn(move || pump(rx, Stderr))
             .is_ok();
-        AsyncLog { tx: spawned.then_some(tx), dropped: AtomicU64::new(0) }
+        AsyncLog {
+            tx: spawned.then_some(tx),
+            dropped: AtomicU64::new(0),
+        }
     })
 }
 

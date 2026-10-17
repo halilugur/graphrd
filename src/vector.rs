@@ -25,7 +25,11 @@ pub const VECTOR: &str = "http://graphrd.org/fn#vector";
 pub fn parse(t: &Term) -> Option<Vec<f32>> {
     let l = t.as_literal()?;
     let text = l.value.trim().trim_start_matches('[').trim_end_matches(']');
-    let v: Option<Vec<f32>> = text.split([',', ' ', '\t', '\n']).filter(|s| !s.is_empty()).map(|s| s.parse::<f32>().ok().filter(|x| x.is_finite())).collect();
+    let v: Option<Vec<f32>> = text
+        .split([',', ' ', '\t', '\n'])
+        .filter(|s| !s.is_empty())
+        .map(|s| s.parse::<f32>().ok().filter(|x| x.is_finite()))
+        .collect();
     v.filter(|v| !v.is_empty())
 }
 
@@ -94,28 +98,37 @@ pub struct Hnsw {
     index_of: HashMap<Id, u32>,
     entry: Option<u32>,
     rng: u64,
-/// Set when the graph changed since it was written out.
+    /// Set when the graph changed since it was written out.
     pub dirty: bool,
 }
 
 impl Default for Hnsw {
     fn default() -> Self {
-        Hnsw { dim: 0, ids: Vec::new(), vecs: Vec::new(), links: Vec::new(), index_of: HashMap::new(), entry: None, rng: 0x9E37_79B9_7F4A_7C15, dirty: false }
+        Hnsw {
+            dim: 0,
+            ids: Vec::new(),
+            vecs: Vec::new(),
+            links: Vec::new(),
+            index_of: HashMap::new(),
+            entry: None,
+            rng: 0x9E37_79B9_7F4A_7C15,
+            dirty: false,
+        }
     }
 }
 
 impl Hnsw {
-/// The number of vectors.
+    /// The number of vectors.
     pub fn len(&self) -> usize {
         self.ids.len()
     }
 
-/// Whether there are none.
+    /// Whether there are none.
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
 
-/// The vectors' dimension.
+    /// The vectors' dimension.
     pub fn dim(&self) -> usize {
         self.dim
     }
@@ -171,7 +184,10 @@ impl Hnsw {
                 self.links[m as usize][l].push(n);
                 if self.links[m as usize][l].len() > max {
                     let base = self.vec(m).to_vec();
-                    let mut ls: Vec<Cand> = self.links[m as usize][l].iter().map(|&o| Cand(dot(&base, self.vec(o)), o)).collect();
+                    let mut ls: Vec<Cand> = self.links[m as usize][l]
+                        .iter()
+                        .map(|&o| Cand(dot(&base, self.vec(o)), o))
+                        .collect();
                     ls.sort_by(|a, b| b.cmp(a));
                     self.links[m as usize][l] = self.select(&ls, max);
                 }
@@ -233,7 +249,14 @@ impl Hnsw {
 
     /// Best-first search on one level; results most similar first. `accept` decides which
     /// nodes may be results (all are still walked through).
-    fn search_level(&self, q: &[f32], eps: &[u32], ef: usize, l: usize, accept: &dyn Fn(u32) -> bool) -> Vec<Cand> {
+    fn search_level(
+        &self,
+        q: &[f32],
+        eps: &[u32],
+        ef: usize,
+        l: usize,
+        accept: &dyn Fn(u32) -> bool,
+    ) -> Vec<Cand> {
         let mut visited: HashSet<u32> = eps.iter().copied().collect();
         let mut frontier: BinaryHeap<Cand> = BinaryHeap::new();
         let mut results: BinaryHeap<std::cmp::Reverse<Cand>> = BinaryHeap::new();
@@ -245,15 +268,18 @@ impl Hnsw {
             }
         }
         while let Some(c) = frontier.pop() {
-            if results.len() >= ef && results.peek().is_some_and(|w| c.0 < w.0 .0) {
+            if results.len() >= ef && results.peek().is_some_and(|w| c.0 < w.0.0) {
                 break;
             }
-            for &m in self.links[c.1 as usize].get(l).map_or(&[][..], |v| v.as_slice()) {
+            for &m in self.links[c.1 as usize]
+                .get(l)
+                .map_or(&[][..], |v| v.as_slice())
+            {
                 if !visited.insert(m) {
                     continue;
                 }
                 let s = dot(q, self.vec(m));
-                if results.len() < ef || results.peek().is_some_and(|w| s > w.0 .0) {
+                if results.len() < ef || results.peek().is_some_and(|w| s > w.0.0) {
                     frontier.push(Cand(s, m));
                     if accept(m) {
                         results.push(std::cmp::Reverse(Cand(s, m)));
@@ -271,7 +297,9 @@ impl Hnsw {
 
     /// The `k` literals most similar to `q` among those `accept`ed: (literal id, similarity).
     pub fn search(&self, q: &[f32], k: usize, accept: &dyn Fn(Id) -> bool) -> Vec<(Id, f32)> {
-        let Some(mut ep) = self.entry else { return Vec::new() };
+        let Some(mut ep) = self.entry else {
+            return Vec::new();
+        };
         if q.len() != self.dim || k == 0 {
             return Vec::new();
         }
@@ -282,7 +310,11 @@ impl Hnsw {
         }
         let ef = (k * 4).max(64);
         let found = self.search_level(&q, &[ep], ef, 0, &|n| accept(self.ids[n as usize]));
-        found.into_iter().take(k).map(|c| (self.ids[c.1 as usize], c.0)).collect()
+        found
+            .into_iter()
+            .take(k)
+            .map(|c| (self.ids[c.1 as usize], c.0))
+            .collect()
     }
 
     /// Exact search over every vector (for checking recall, and small indexes).
@@ -291,9 +323,15 @@ impl Hnsw {
             return Vec::new();
         }
         let q = normalize(q.to_vec());
-        let mut all: Vec<Cand> = (0..self.ids.len() as u32).filter(|&n| accept(self.ids[n as usize])).map(|n| Cand(dot(&q, self.vec(n)), n)).collect();
+        let mut all: Vec<Cand> = (0..self.ids.len() as u32)
+            .filter(|&n| accept(self.ids[n as usize]))
+            .map(|n| Cand(dot(&q, self.vec(n)), n))
+            .collect();
         all.sort_by(|a, b| b.cmp(a));
-        all.into_iter().take(k).map(|c| (self.ids[c.1 as usize], c.0)).collect()
+        all.into_iter()
+            .take(k)
+            .map(|c| (self.ids[c.1 as usize], c.0))
+            .collect()
     }
 
     // ------------------------------------------------------------ persistence
@@ -303,7 +341,12 @@ impl Hnsw {
         let tmp = path.with_extension("tmp");
         let mut w = io::BufWriter::with_capacity(1 << 20, fs::File::create(&tmp)?);
         w.write_all(b"GRDVEC01")?;
-        for x in [self.dim as u64, self.ids.len() as u64, self.entry.map_or(u64::MAX, |e| e as u64), self.rng] {
+        for x in [
+            self.dim as u64,
+            self.ids.len() as u64,
+            self.entry.map_or(u64::MAX, |e| e as u64),
+            self.rng,
+        ] {
             w.write_all(&x.to_le_bytes())?;
         }
         for (n, &id) in self.ids.iter().enumerate() {
@@ -327,10 +370,15 @@ impl Hnsw {
         Ok(())
     }
 
-/// Read the graph back from its file (as the optimized builder wrote it).
+    /// Read the graph back from its file (as the optimized builder wrote it).
     pub fn load(path: &Path) -> io::Result<Hnsw> {
         let b = fs::read(path)?;
-        let bad = || io::Error::new(io::ErrorKind::InvalidData, format!("corrupt {}", path.display()));
+        let bad = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("corrupt {}", path.display()),
+            )
+        };
         let mut at = 0usize;
         let mut take = |n: usize| -> io::Result<&[u8]> {
             let s = b.get(at..at + n).ok_or_else(bad)?;
@@ -345,12 +393,18 @@ impl Hnsw {
             *x = u64::from_le_bytes(take(8)?.try_into().unwrap());
         }
         let (dim, count, entry, rng) = (u64s[0] as usize, u64s[1] as usize, u64s[2], u64s[3]);
-        let mut h = Hnsw { dim, rng, entry: (entry != u64::MAX).then_some(entry as u32), ..Default::default() };
+        let mut h = Hnsw {
+            dim,
+            rng,
+            entry: (entry != u64::MAX).then_some(entry as u32),
+            ..Default::default()
+        };
         let u32_ = |s: &[u8]| u32::from_le_bytes(s.try_into().unwrap());
         for n in 0..count {
             let id = u32_(take(4)?);
             for _ in 0..dim {
-                h.vecs.push(f32::from_le_bytes(take(4)?.try_into().unwrap()));
+                h.vecs
+                    .push(f32::from_le_bytes(take(4)?.try_into().unwrap()));
             }
             let levels = u32_(take(4)?) as usize;
             let mut ls = Vec::with_capacity(levels);
@@ -384,7 +438,9 @@ mod tests {
             x ^= x << 17;
             (x >> 40) as f32 / (1u64 << 24) as f32 - 0.5
         };
-        let vecs: Vec<Vec<f32>> = (0..1200).map(|_| (0..16).map(|_| rnd()).collect()).collect();
+        let vecs: Vec<Vec<f32>> = (0..1200)
+            .map(|_| (0..16).map(|_| rnd()).collect())
+            .collect();
         for (i, v) in vecs.iter().enumerate() {
             assert!(h.insert(i as Id + 1, v.clone()));
         }
@@ -392,7 +448,11 @@ mod tests {
         assert!(!h.insert(99_999, vec![1.0; 3]), "another length is ignored");
         let mut hits = 0;
         for q in vecs.iter().take(30) {
-            let approx: HashSet<Id> = h.search(q, 10, &|_| true).into_iter().map(|r| r.0).collect();
+            let approx: HashSet<Id> = h
+                .search(q, 10, &|_| true)
+                .into_iter()
+                .map(|r| r.0)
+                .collect();
             let exact: Vec<Id> = h.exact(q, 10, &|_| true).into_iter().map(|r| r.0).collect();
             hits += exact.iter().filter(|e| approx.contains(e)).count();
         }
@@ -403,9 +463,15 @@ mod tests {
         let path = std::env::temp_dir().join(format!("graphrd-vec-{}", std::process::id()));
         h.save(&path).unwrap();
         let back = Hnsw::load(&path).unwrap();
-        assert_eq!(back.search(&vecs[3], 10, &|_| true), h.search(&vecs[3], 10, &|_| true));
+        assert_eq!(
+            back.search(&vecs[3], 10, &|_| true),
+            h.search(&vecs[3], 10, &|_| true)
+        );
         let _ = fs::remove_file(&path);
-        assert_eq!(parse(&Term::typed("[1, 2.5,-3]", VECTOR)), Some(vec![1.0, 2.5, -3.0]));
+        assert_eq!(
+            parse(&Term::typed("[1, 2.5,-3]", VECTOR)),
+            Some(vec![1.0, 2.5, -3.0])
+        );
         assert!(parse(&Term::typed("[1, x]", VECTOR)).is_none());
     }
 }

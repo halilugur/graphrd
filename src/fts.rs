@@ -87,9 +87,9 @@ pub fn gram_key(gram: &str) -> u32 {
 /// The language a literal's words are stemmed in, from its language tag.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Lang {
-/// The language a literal's stemmer runs in, from its tag.
+    /// The language a literal's stemmer runs in, from its tag.
     En,
-/// A Turkish-tagged literal.
+    /// A Turkish-tagged literal.
     Tr,
     /// No (or another) tag: both stemmers apply.
     Any,
@@ -97,7 +97,10 @@ pub enum Lang {
 
 /// The language of a language tag.
 pub fn lang_of(tag: Option<&str>) -> Lang {
-    match tag.map(|t| t.split('-').next().unwrap_or("").to_ascii_lowercase()).as_deref() {
+    match tag
+        .map(|t| t.split('-').next().unwrap_or("").to_ascii_lowercase())
+        .as_deref()
+    {
         Some("en") => Lang::En,
         Some("tr") => Lang::Tr,
         _ => Lang::Any,
@@ -110,12 +113,19 @@ fn stems_of(tok: &str, lang: Lang) -> [Option<String>; 2] {
 }
 
 fn stems(tok: &str, lang: Lang) -> [Option<String>; 2] {
-    [(lang != Lang::Tr).then(|| stem_en(tok)), (lang != Lang::En).then(|| stem_tr(tok))]
+    [
+        (lang != Lang::Tr).then(|| stem_en(tok)),
+        (lang != Lang::En).then(|| stem_tr(tok)),
+    ]
 }
 
 /// Character trigrams of a word padded with two `$` on each side.
 fn grams(word: &str) -> Vec<String> {
-    let chars: Vec<char> = "$$".chars().chain(word.chars()).chain("$$".chars()).collect();
+    let chars: Vec<char> = "$$"
+        .chars()
+        .chain(word.chars())
+        .chain("$$".chars())
+        .collect();
     let mut out: Vec<String> = chars.windows(3).map(|w| w.iter().collect()).collect();
     out.sort();
     out.dedup();
@@ -143,7 +153,11 @@ pub fn stem_keys(tok: &str) -> [u32; 2] {
 }
 
 /// Posting keys of a literal's tokens; `stems` gives a word's `stem_keys` (the store caches them).
-pub fn posting_keys_of(tokens: &[String], lang: Lang, stems: &mut dyn FnMut(&str) -> [u32; 2]) -> Vec<u32> {
+pub fn posting_keys_of(
+    tokens: &[String],
+    lang: Lang,
+    stems: &mut dyn FnMut(&str) -> [u32; 2],
+) -> Vec<u32> {
     let mut keys = Vec::new();
     for tok in tokens {
         keys.push(token_key(tok));
@@ -210,7 +224,11 @@ pub fn stem_en(word: &str) -> String {
     }
     // consonant-vowel-consonant ending, the last not w, x or y
     fn cvc(w: &[u8], n: usize) -> bool {
-        n >= 3 && cons(w, n - 1) && !cons(w, n - 2) && cons(w, n - 3) && !matches!(w[n - 1], b'w' | b'x' | b'y')
+        n >= 3
+            && cons(w, n - 1)
+            && !cons(w, n - 2)
+            && cons(w, n - 3)
+            && !matches!(w[n - 1], b'w' | b'x' | b'y')
     }
     fn ends(w: &[u8], s: &str) -> bool {
         w.ends_with(s.as_bytes())
@@ -265,23 +283,50 @@ pub fn stem_en(word: &str) -> String {
     }
     // step 2
     for (s, r) in [
-        ("ational", "ate"), ("tional", "tion"), ("enci", "ence"), ("anci", "ance"), ("izer", "ize"), ("abli", "able"),
-        ("alli", "al"), ("entli", "ent"), ("eli", "e"), ("ousli", "ous"), ("ization", "ize"), ("ation", "ate"),
-        ("ator", "ate"), ("alism", "al"), ("iveness", "ive"), ("fulness", "ful"), ("ousness", "ous"), ("aliti", "al"),
-        ("iviti", "ive"), ("biliti", "ble"),
+        ("ational", "ate"),
+        ("tional", "tion"),
+        ("enci", "ence"),
+        ("anci", "ance"),
+        ("izer", "ize"),
+        ("abli", "able"),
+        ("alli", "al"),
+        ("entli", "ent"),
+        ("eli", "e"),
+        ("ousli", "ous"),
+        ("ization", "ize"),
+        ("ation", "ate"),
+        ("ator", "ate"),
+        ("alism", "al"),
+        ("iveness", "ive"),
+        ("fulness", "ful"),
+        ("ousness", "ous"),
+        ("aliti", "al"),
+        ("iviti", "ive"),
+        ("biliti", "ble"),
     ] {
         if rep(&mut w, s, r, 0) {
             break;
         }
     }
     // step 3
-    for (s, r) in [("icate", "ic"), ("ative", ""), ("alize", "al"), ("iciti", "ic"), ("ical", "ic"), ("ful", ""), ("ness", "")] {
+    for (s, r) in [
+        ("icate", "ic"),
+        ("ative", ""),
+        ("alize", "al"),
+        ("iciti", "ic"),
+        ("ical", "ic"),
+        ("ful", ""),
+        ("ness", ""),
+    ] {
         if rep(&mut w, s, r, 0) {
             break;
         }
     }
     // step 4
-    for s in ["al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent", "ion", "ou", "ism", "ate", "iti", "ous", "ive", "ize"] {
+    for s in [
+        "al", "ance", "ence", "er", "ic", "able", "ible", "ant", "ement", "ment", "ent", "ion",
+        "ou", "ism", "ate", "iti", "ous", "ive", "ize",
+    ] {
         if ends(&w, s) {
             let stem = w.len() - s.len();
             let ok = s != "ion" || (stem > 0 && matches!(w[stem - 1], b's' | b't'));
@@ -311,9 +356,10 @@ pub fn stem_en(word: &str) -> String {
 /// ending in n plus a suffix (`veritaban-ı`, `zaman-ın`), and stripping the vowel suffix and
 /// then the possessive (`kitab-ı-n-ı` → `kitabın` → `kitab`) reaches the same stem.
 const TR_SUFFIXES: &[&str] = &[
-    "ımız", "imiz", "umuz", "ümüz", "ınız", "iniz", "unuz", "ünüz", "daki", "deki", "taki", "teki", "ları", "leri", "dan", "den",
-    "tan", "ten", "yla", "yle", "lar", "ler", "dır", "dir", "dur", "dür", "tır", "tir", "tur", "tür", "da", "de", "ta", "te", "ın",
-    "in", "un", "ün", "la", "le", "ya", "ye", "yı", "yi", "yu", "yü", "ca", "ce", "ça", "çe", "sı", "si", "su", "sü", "ım", "im",
+    "ımız", "imiz", "umuz", "ümüz", "ınız", "iniz", "unuz", "ünüz", "daki", "deki", "taki", "teki",
+    "ları", "leri", "dan", "den", "tan", "ten", "yla", "yle", "lar", "ler", "dır", "dir", "dur",
+    "dür", "tır", "tir", "tur", "tür", "da", "de", "ta", "te", "ın", "in", "un", "ün", "la", "le",
+    "ya", "ye", "yı", "yi", "yu", "yü", "ca", "ce", "ça", "çe", "sı", "si", "su", "sü", "ım", "im",
     "um", "üm", "ki", "a", "e", "ı", "i", "u", "ü",
 ];
 
@@ -332,7 +378,11 @@ pub fn stem_tr(word: &str) -> String {
             let n = s.chars().count();
             let rest = w.len().saturating_sub(n);
             // the stem keeps a vowel and 2 letters (3 when only a vowel is removed)
-            if w.len() > n && rest >= if n == 1 { 3 } else { 2 } && w[rest..].iter().copied().eq(s.chars()) && w[..rest].iter().any(|&c| is_vowel(c)) {
+            if w.len() > n
+                && rest >= if n == 1 { 3 } else { 2 }
+                && w[rest..].iter().copied().eq(s.chars())
+                && w[..rest].iter().any(|&c| is_vowel(c))
+            {
                 cut = Some(rest);
                 break;
             }
@@ -397,9 +447,9 @@ fn auto_distance(word: &str) -> usize {
 pub enum Clause {
     /// A word and its (English, Turkish) stems: matches any inflection.
     Word(String, [String; 2]),
-/// A prefix the word must start with.
+    /// A prefix the word must start with.
     Prefix(String),
-/// The words, one after another.
+    /// The words, one after another.
     Phrase(Vec<String>),
     /// A word within an edit distance.
     Fuzzy(String, usize),
@@ -424,7 +474,7 @@ fn word(w: &str) -> Clause {
 pub struct FtsQuery {
     /// Each group must match (AND); a group matches if any clause in it does (OR).
     pub groups: Vec<Vec<Clause>>,
-/// Clauses no result may match.
+    /// Clauses no result may match.
     pub excluded: Vec<Clause>,
 }
 
@@ -480,7 +530,10 @@ pub fn parse_query(q: &str) -> FtsQuery {
             let toks = tokenize(body.trim_end_matches('*'));
             match (toks.len(), prefix, fuzzy) {
                 (0, _, _) => continue,
-                (1, _, Some(d)) => Clause::Fuzzy(toks[0].clone(), d.unwrap_or_else(|| auto_distance(&toks[0]))),
+                (1, _, Some(d)) => Clause::Fuzzy(
+                    toks[0].clone(),
+                    d.unwrap_or_else(|| auto_distance(&toks[0])),
+                ),
                 (1, true, _) => Clause::Prefix(toks[0].clone()),
                 (1, false, _) => word(&toks[0]),
                 _ => Clause::Phrase(toks),
@@ -506,11 +559,15 @@ pub struct Doc {
 }
 
 impl Doc {
-/// A literal indexed for search, with its stems.
+    /// A literal indexed for search, with its stems.
     pub fn new(text: &str, lang: Lang) -> Doc {
         let tokens = tokenize(text);
         let stems = std::cell::RefCell::new(vec![None; tokens.len()]);
-        Doc { tokens, lang, stems }
+        Doc {
+            tokens,
+            lang,
+            stems,
+        }
     }
 
     /// Does token `i` have the stem `en` (English) or `tr` (Turkish)?
@@ -529,12 +586,12 @@ impl Doc {
         ten.as_deref() == Some(en) || ttr.as_deref() == Some(tr)
     }
 
-/// The number of tokens (the document's length for BM25).
+    /// The number of tokens (the document's length for BM25).
     pub fn len(&self) -> usize {
         self.tokens.len()
     }
 
-/// Whether there is nothing to match.
+    /// Whether there is nothing to match.
     pub fn is_empty(&self) -> bool {
         self.tokens.is_empty()
     }
@@ -577,8 +634,16 @@ impl Clause {
     /// Term frequency of this clause in `doc` (0 when it does not match).
     fn tf(&self, doc: &Doc) -> f64 {
         match self {
-            Clause::Phrase(ph) => (doc.tokens.windows(ph.len()).filter(|w| *w == ph.as_slice()).count() * ph.len()) as f64,
-            _ => (0..doc.tokens.len()).filter_map(|i| self.token_weight(doc, i)).sum(),
+            Clause::Phrase(ph) => {
+                (doc.tokens
+                    .windows(ph.len())
+                    .filter(|w| *w == ph.as_slice())
+                    .count()
+                    * ph.len()) as f64
+            }
+            _ => (0..doc.tokens.len())
+                .filter_map(|i| self.token_weight(doc, i))
+                .sum(),
         }
     }
 
@@ -606,14 +671,14 @@ impl Clause {
 /// Corpus statistics for BM25.
 #[derive(Debug, Clone, Copy)]
 pub struct Corpus {
-/// How many literals the index holds.
+    /// How many literals the index holds.
     pub docs: f64,
-/// The average literal length.
+    /// The average literal length.
     pub avg_len: f64,
 }
 
 impl FtsQuery {
-/// Whether the query matches nothing by construction.
+    /// Whether the query matches nothing by construction.
     pub fn is_empty(&self) -> bool {
         self.groups.is_empty()
     }
@@ -642,7 +707,10 @@ impl FtsQuery {
                     .collect()
             })
             .collect();
-        changed.then(|| FtsQuery { groups, excluded: self.excluded.clone() })
+        changed.then(|| FtsQuery {
+            groups,
+            excluded: self.excluded.clone(),
+        })
     }
 
     /// The query, then the forms tried when it matches nothing: one edit per word, then the
@@ -665,7 +733,10 @@ impl FtsQuery {
             return None;
         }
         let len = doc.len() as f64;
-        let corpus = corpus.unwrap_or(Corpus { docs: 1.0, avg_len: len });
+        let corpus = corpus.unwrap_or(Corpus {
+            docs: 1.0,
+            avg_len: len,
+        });
         let mut score = 0.0;
         let mut i = 0;
         for group in &self.groups {
@@ -677,7 +748,8 @@ impl FtsQuery {
                 if tf > 0.0 {
                     any = true;
                     let idf = (1.0 + (corpus.docs - df + 0.5) / (df + 0.5)).ln();
-                    score += idf * tf * (K1 + 1.0) / (tf + K1 * (1.0 - B + B * len / corpus.avg_len.max(1.0)));
+                    score += idf * tf * (K1 + 1.0)
+                        / (tf + K1 * (1.0 - B + B * len / corpus.avg_len.max(1.0)));
                 }
             }
             if !any {
@@ -715,29 +787,63 @@ mod tests {
     use super::*;
 
     fn matches(q: &str, text: &str) -> bool {
-        parse_query(q).score(&Doc::new(text, Lang::Any), None, &[]).is_some()
+        parse_query(q)
+            .score(&Doc::new(text, Lang::Any), None, &[])
+            .is_some()
     }
 
     #[test]
     fn tokenizer_and_queries() {
-        assert_eq!(tokenize("Hello, Wörld! 42x İstanbul"), vec!["hello", "wörld", "42x", "istanbul"]);
+        assert_eq!(
+            tokenize("Hello, Wörld! 42x İstanbul"),
+            vec!["hello", "wörld", "42x", "istanbul"]
+        );
         let q = parse_query(r#"graph "linked data" data* -sql"#);
         assert_eq!(q.groups.len(), 3);
         assert_eq!(q.excluded, vec![word("sql")]);
-        assert!(matches(r#"graph "linked data" data* -sql"#, "Graph databases store linked data and dataset metadata"));
-        assert!(!matches(r#"graph "linked data" data* -sql"#, "Graph databases store linked data, not SQL"));
-        assert!(!matches(r#"graph "linked data" data* -sql"#, "linked graph"));
-        assert!(matches("cat OR dog", "my dog") && matches("cat OR dog", "my cat") && !matches("cat OR dog", "my fish"));
+        assert!(matches(
+            r#"graph "linked data" data* -sql"#,
+            "Graph databases store linked data and dataset metadata"
+        ));
+        assert!(!matches(
+            r#"graph "linked data" data* -sql"#,
+            "Graph databases store linked data, not SQL"
+        ));
+        assert!(!matches(
+            r#"graph "linked data" data* -sql"#,
+            "linked graph"
+        ));
+        assert!(
+            matches("cat OR dog", "my dog")
+                && matches("cat OR dog", "my cat")
+                && !matches("cat OR dog", "my fish")
+        );
         assert!(posting_keys("database", Lang::Any).contains(&prefix_key("data")));
     }
 
     #[test]
     fn english_stems() {
         for (w, s) in [
-            ("caresses", "caress"), ("ponies", "poni"), ("cats", "cat"), ("feed", "feed"), ("agreed", "agre"), ("plastered", "plaster"),
-            ("motoring", "motor"), ("hopping", "hop"), ("filing", "file"), ("happy", "happi"), ("relational", "relat"),
-            ("conditional", "condit"), ("generalization", "gener"), ("hopefulness", "hope"), ("electrical", "electr"),
-            ("adjustment", "adjust"), ("adoption", "adopt"), ("controll", "control"), ("running", "run"), ("databases", "databas"),
+            ("caresses", "caress"),
+            ("ponies", "poni"),
+            ("cats", "cat"),
+            ("feed", "feed"),
+            ("agreed", "agre"),
+            ("plastered", "plaster"),
+            ("motoring", "motor"),
+            ("hopping", "hop"),
+            ("filing", "file"),
+            ("happy", "happi"),
+            ("relational", "relat"),
+            ("conditional", "condit"),
+            ("generalization", "gener"),
+            ("hopefulness", "hope"),
+            ("electrical", "electr"),
+            ("adjustment", "adjust"),
+            ("adoption", "adopt"),
+            ("controll", "control"),
+            ("running", "run"),
+            ("databases", "databas"),
         ] {
             assert_eq!(stem_en(w), s, "{w}");
         }
@@ -747,7 +853,15 @@ mod tests {
 
     #[test]
     fn turkish_stems() {
-        for w in ["kitap", "kitaplar", "kitapların", "kitaplarda", "kitaplarımızdan", "kitabı", "kitapta"] {
+        for w in [
+            "kitap",
+            "kitaplar",
+            "kitapların",
+            "kitaplarda",
+            "kitaplarımızdan",
+            "kitabı",
+            "kitapta",
+        ] {
             assert_eq!(stem_tr(w), "kitap", "{w}");
         }
         for w in ["ev", "evler", "evlerde", "evden", "evimiz"] {
@@ -756,7 +870,13 @@ mod tests {
         assert_eq!(stem_tr("ağaçlar"), "ağaç");
         assert_eq!(stem_tr("ağacı"), "ağaç");
         assert_eq!(stem_tr("çocuğu"), "çocuk");
-        for (a, b) in [("veritabanı", "veritabanları"), ("kitabını", "kitap"), ("evinde", "ev"), ("zamanın", "zaman"), ("kitaplarında", "kitap")] {
+        for (a, b) in [
+            ("veritabanı", "veritabanları"),
+            ("kitabını", "kitap"),
+            ("evinde", "ev"),
+            ("zamanın", "zaman"),
+            ("kitaplarında", "kitap"),
+        ] {
             assert_eq!(stem_tr(a), stem_tr(b), "{a} {b}");
         }
         assert!(matches("kitaplar", "Bu kitabı okudum"));
@@ -776,24 +896,59 @@ mod tests {
         assert!(!matches("databse", "graph database"));
         assert!(!matches("dtbs~1", "graph database"));
         let fuzzy = parse_query("grpah databse").fuzzy(2).unwrap();
-        assert!(fuzzy.score(&Doc::new("A graph database", Lang::Any), None, &[1.0, 1.0]).is_some());
+        assert!(
+            fuzzy
+                .score(&Doc::new("A graph database", Lang::Any), None, &[1.0, 1.0])
+                .is_some()
+        );
         // every typo-tolerant match shares enough trigrams with the word
         if let Plan::AtLeast(keys, need) = Clause::Fuzzy("hosue".into(), 1).plan() {
-            let vocab: std::collections::HashSet<u32> = vocab_entries("house").into_iter().map(|e| e[0]).collect();
+            let vocab: std::collections::HashSet<u32> =
+                vocab_entries("house").into_iter().map(|e| e[0]).collect();
             assert!(keys.iter().filter(|k| vocab.contains(k)).count() >= need);
         } else {
             panic!("a fuzzy word is planned by trigrams");
         }
         // BM25: a rare word outweighs a common one, a short literal a long one
         let q = parse_query("graph rare");
-        let c = Some(Corpus { docs: 1000.0, avg_len: 5.0 });
-        let a = q.score(&Doc::new("graph graph rare", Lang::Any), c, &[500.0, 2.0]).unwrap();
-        let b = q.score(&Doc::new("graph rare graph rare", Lang::Any), c, &[500.0, 2.0]).unwrap();
+        let c = Some(Corpus {
+            docs: 1000.0,
+            avg_len: 5.0,
+        });
+        let a = q
+            .score(&Doc::new("graph graph rare", Lang::Any), c, &[500.0, 2.0])
+            .unwrap();
+        let b = q
+            .score(
+                &Doc::new("graph rare graph rare", Lang::Any),
+                c,
+                &[500.0, 2.0],
+            )
+            .unwrap();
         assert!(b > a);
-        let short = parse_query("graph").score(&Doc::new("graph store", Lang::Any), c, &[10.0]).unwrap();
-        let long = parse_query("graph").score(&Doc::new("graph store with many more words in it", Lang::Any), c, &[10.0]).unwrap();
+        let short = parse_query("graph")
+            .score(&Doc::new("graph store", Lang::Any), c, &[10.0])
+            .unwrap();
+        let long = parse_query("graph")
+            .score(
+                &Doc::new("graph store with many more words in it", Lang::Any),
+                c,
+                &[10.0],
+            )
+            .unwrap();
         assert!(short > long);
-        assert_eq!(parse_query("database \"linked data\"").highlight("Linked data in a Database!", Lang::Any, "<b>", "</b>"), "<b>Linked</b> <b>data</b> in a <b>Database</b>!");
-        assert_eq!(parse_query("kitap").highlight("Kitapları okudu", Lang::Tr, "[", "]"), "[Kitapları] okudu");
+        assert_eq!(
+            parse_query("database \"linked data\"").highlight(
+                "Linked data in a Database!",
+                Lang::Any,
+                "<b>",
+                "</b>"
+            ),
+            "<b>Linked</b> <b>data</b> in a <b>Database</b>!"
+        );
+        assert_eq!(
+            parse_query("kitap").highlight("Kitapları okudu", Lang::Tr, "[", "]"),
+            "[Kitapları] okudu"
+        );
     }
 }

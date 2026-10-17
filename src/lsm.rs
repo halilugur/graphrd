@@ -101,23 +101,37 @@ struct CacheInner {
 }
 
 impl BlockCache {
-/// A block cache over `capacity_blocks` decoded blocks, sharded for concurrency.
+    /// A block cache over `capacity_blocks` decoded blocks, sharded for concurrency.
     pub fn new(capacity_blocks: usize) -> Arc<BlockCache> {
         let per = (capacity_blocks / CACHE_SHARDS).max(4);
         Arc::new(BlockCache {
-            shards: (0..CACHE_SHARDS).map(|_| RwLock::new(CacheInner { map: HashMap::new(), order: VecDeque::new(), capacity: per })).collect(),
+            shards: (0..CACHE_SHARDS)
+                .map(|_| {
+                    RwLock::new(CacheInner {
+                        map: HashMap::new(),
+                        order: VecDeque::new(),
+                        capacity: per,
+                    })
+                })
+                .collect(),
         })
     }
 
     fn shard(&self, key: (u64, u32)) -> &RwLock<CacheInner> {
-        let h = key.0.wrapping_mul(0x9E3779B97F4A7C15) ^ (key.1 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F);
+        let h = key.0.wrapping_mul(0x9E3779B97F4A7C15)
+            ^ (key.1 as u64).wrapping_mul(0xC2B2AE3D27D4EB4F);
         &self.shards[(h >> 59) as usize % CACHE_SHARDS]
     }
 
     fn get_or_load(&self, run: &RunFile, block: u32) -> io::Result<Block> {
         let key = (run.uid, block);
         let shard = self.shard(key);
-        if let Some(b) = shard.read().unwrap_or_else(|e| e.into_inner()).map.get(&key) {
+        if let Some(b) = shard
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .map
+            .get(&key)
+        {
             crate::metrics::CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(b.clone());
         }
@@ -154,10 +168,10 @@ static RUN_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new
 /// One sorted, immutable run file on disk.
 pub struct RunFile {
     uid: u64,
-/// Where the run lives (its name is what the manifest records).
+    /// Where the run lives (its name is what the manifest records).
     pub path: PathBuf,
     file: File,
-/// How many keys the run holds.
+    /// How many keys the run holds.
     pub count: u64,
     /// First key of every block.
     sparse: Vec<Key>,
@@ -201,7 +215,12 @@ impl RunFile {
     fn open(path: &Path) -> io::Result<RunFile> {
         let file = File::open(path)?;
         let len = file.metadata()?.len();
-        let bad = || io::Error::new(io::ErrorKind::InvalidData, format!("corrupt run file {}", path.display()));
+        let bad = || {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("corrupt run file {}", path.display()),
+            )
+        };
         if len < HEADER + 16 {
             return Err(bad());
         }
@@ -234,7 +253,13 @@ impl RunFile {
                 ]
             })
             .collect();
-        Ok(RunFile { uid: RUN_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed), path: path.to_path_buf(), file, count, sparse })
+        Ok(RunFile {
+            uid: RUN_UID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            path: path.to_path_buf(),
+            file,
+            count,
+            sparse,
+        })
     }
 
     fn blocks(&self) -> u32 {
@@ -271,7 +296,16 @@ struct RunIter<'a> {
 impl<'a> RunIter<'a> {
     fn new(run: &'a RunFile, cache: &'a BlockCache, lo: Key, hi: Key) -> Self {
         let block = run.first_block(&lo);
-        RunIter { run, cache, block, data: Arc::new(Vec::new()), pos: 0, lo, hi, done: run.count == 0 }
+        RunIter {
+            run,
+            cache,
+            block,
+            data: Arc::new(Vec::new()),
+            pos: 0,
+            lo,
+            hi,
+            done: run.count == 0,
+        }
     }
 }
 
@@ -345,22 +379,45 @@ fn level_range(v: &[(Key, bool)], lo: Key, hi: Key) -> &[(Key, bool)] {
 
 impl Index {
     #[cfg_attr(not(test), allow(dead_code))]
-/// An index that never reaches the disk (an in-memory repository).
+    /// An index that never reaches the disk (an in-memory repository).
     pub fn memory(name: &str, cache: Arc<BlockCache>) -> Index {
-        Index { dir: None, name: name.into(), mem: Mem::default(), runs: Vec::new(), cache, next_run: 1 }
+        Index {
+            dir: None,
+            name: name.into(),
+            mem: Mem::default(),
+            runs: Vec::new(),
+            cache,
+            next_run: 1,
+        }
     }
 
     /// Open with the run files listed in the manifest (oldest first).
-    pub fn open(dir: &Path, name: &str, runs: &[String], cache: Arc<BlockCache>) -> io::Result<Index> {
+    pub fn open(
+        dir: &Path,
+        name: &str,
+        runs: &[String],
+        cache: Arc<BlockCache>,
+    ) -> io::Result<Index> {
         let mut opened = Vec::new();
         let mut next_run = 1;
         for r in runs {
             opened.push(Arc::new(RunFile::open(&dir.join(r))?));
-            if let Some(n) = r.rsplit('-').next().and_then(|s| s.trim_end_matches(".run").parse::<u64>().ok()) {
+            if let Some(n) = r
+                .rsplit('-')
+                .next()
+                .and_then(|s| s.trim_end_matches(".run").parse::<u64>().ok())
+            {
                 next_run = next_run.max(n + 1);
             }
         }
-        Ok(Index { dir: Some(dir.to_path_buf()), name: name.into(), mem: Mem::default(), runs: opened, cache, next_run })
+        Ok(Index {
+            dir: Some(dir.to_path_buf()),
+            name: name.into(),
+            mem: Mem::default(),
+            runs: opened,
+            cache,
+            next_run,
+        })
     }
 
     /// A copy sharing this index's data that takes writes of its own in memory, leaving `self`
@@ -368,9 +425,22 @@ impl Index {
     pub fn fork(&self) -> Index {
         let mut levels = self.mem.levels.clone();
         if !self.mem.head.is_empty() {
-            levels.insert(0, Arc::new(self.mem.head.iter().map(|(k, v)| (*k, *v)).collect()));
+            levels.insert(
+                0,
+                Arc::new(self.mem.head.iter().map(|(k, v)| (*k, *v)).collect()),
+            );
         }
-        Index { dir: None, name: self.name.clone(), mem: Mem { head: BTreeMap::new(), levels }, runs: self.runs.clone(), cache: self.cache.clone(), next_run: self.next_run }
+        Index {
+            dir: None,
+            name: self.name.clone(),
+            mem: Mem {
+                head: BTreeMap::new(),
+                levels,
+            },
+            runs: self.runs.clone(),
+            cache: self.cache.clone(),
+            next_run: self.next_run,
+        }
     }
 
     /// A read-only view of the index as it is now, sharing all data: the head is frozen first.
@@ -380,7 +450,10 @@ impl Index {
         Index {
             dir: self.dir.clone(),
             name: self.name.clone(),
-            mem: Mem { head: BTreeMap::new(), levels: self.mem.levels.clone() },
+            mem: Mem {
+                head: BTreeMap::new(),
+                levels: self.mem.levels.clone(),
+            },
             runs: self.runs.clone(),
             cache: self.cache.clone(),
             next_run: self.next_run,
@@ -394,14 +467,18 @@ impl Index {
         }
         let head: Vec<(Key, bool)> = std::mem::take(&mut self.mem.head).into_iter().collect();
         self.mem.levels.insert(0, Arc::new(head));
-        while self.mem.levels.len() >= 2 && self.mem.levels[0].len().saturating_mul(4) >= self.mem.levels[1].len() {
+        while self.mem.levels.len() >= 2
+            && self.mem.levels[0].len().saturating_mul(4) >= self.mem.levels[1].len()
+        {
             let newer = self.mem.levels.remove(0);
             let older = self.mem.levels.remove(0);
             // tombstones shadow nothing below the last level when there are no runs
             let bottom = self.runs.is_empty() && self.mem.levels.is_empty();
             let a: Box<dyn Iterator<Item = (Key, bool)>> = Box::new(newer.iter().copied());
             let b: Box<dyn Iterator<Item = (Key, bool)>> = Box::new(older.iter().copied());
-            let merged: Vec<(Key, bool)> = MergeIter::new(vec![a, b]).filter(|(_, p)| !bottom || *p).collect();
+            let merged: Vec<(Key, bool)> = MergeIter::new(vec![a, b])
+                .filter(|(_, p)| !bottom || *p)
+                .collect();
             self.mem.levels.insert(0, Arc::new(merged));
         }
     }
@@ -429,22 +506,25 @@ impl Index {
         self.runs.iter().map(|r| r.path.clone()).collect()
     }
 
-/// The run files' names, oldest first.
+    /// The run files' names, oldest first.
     pub fn run_names(&self) -> Vec<String> {
-        self.runs.iter().map(|r| r.path.file_name().unwrap().to_string_lossy().into_owned()).collect()
+        self.runs
+            .iter()
+            .map(|r| r.path.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
     }
 
-/// How many keys the memtables hold.
+    /// How many keys the memtables hold.
     pub fn mem_len(&self) -> usize {
         self.mem.head.len() + self.mem.levels.iter().map(|l| l.len()).sum::<usize>()
     }
 
-/// Add a key.
+    /// Add a key.
     pub fn put(&mut self, k: Key) {
         self.mem.head.insert(k, true);
     }
 
-/// Remove a key, or mark it deleted when a run may hold it.
+    /// Remove a key, or mark it deleted when a run may hold it.
     pub fn delete(&mut self, k: Key) {
         if self.runs.is_empty() && self.mem.levels.is_empty() {
             self.mem.head.remove(&k);
@@ -453,16 +533,22 @@ impl Index {
         }
     }
 
-/// Whether the key is present (deletions included in the search).
+    /// Whether the key is present (deletions included in the search).
     pub fn contains(&self, k: &Key) -> bool {
         self.range(*k, *k).next().is_some()
     }
 
     /// All in-memory versions in [lo, hi], newest source first.
     fn mem_sources(&self, lo: Key, hi: Key) -> Vec<Box<dyn Iterator<Item = (Key, bool)> + '_>> {
-        let mut sources: Vec<Box<dyn Iterator<Item = (Key, bool)> + '_>> = Vec::with_capacity(1 + self.mem.levels.len() + self.runs.len());
+        let mut sources: Vec<Box<dyn Iterator<Item = (Key, bool)> + '_>> =
+            Vec::with_capacity(1 + self.mem.levels.len() + self.runs.len());
         if !self.mem.head.is_empty() {
-            sources.push(Box::new(self.mem.head.range((Bound::Included(lo), Bound::Included(hi))).map(|(k, p)| (*k, *p))));
+            sources.push(Box::new(
+                self.mem
+                    .head
+                    .range((Bound::Included(lo), Bound::Included(hi)))
+                    .map(|(k, p)| (*k, *p)),
+            ));
         }
         for l in &self.mem.levels {
             let part = level_range(l, lo, hi);
@@ -488,7 +574,9 @@ impl Index {
 
     /// Write the memtable as a new run and merge similar-sized runs.
     pub fn flush(&mut self) -> io::Result<()> {
-        let Some(dir) = self.dir.clone() else { return Ok(()) };
+        let Some(dir) = self.dir.clone() else {
+            return Ok(());
+        };
         if self.mem_len() == 0 {
             return Ok(());
         }
@@ -498,7 +586,10 @@ impl Index {
         // With no older runs, tombstones have nothing left to shadow.
         let run = {
             let sources = self.mem_sources([0; 4], [u32::MAX; 4]);
-            RunFile::write(&path, MergeIter::new(sources).filter(|(_, p)| !bottom || *p))?
+            RunFile::write(
+                &path,
+                MergeIter::new(sources).filter(|(_, p)| !bottom || *p),
+            )?
         };
         self.mem = Mem::default();
         self.runs.push(Arc::new(run));
@@ -547,9 +638,14 @@ impl Index {
         let merged = {
             let lo = [0; 4];
             let hi = [u32::MAX; 4];
-            let a: Box<dyn Iterator<Item = (Key, bool)>> = Box::new(RunIter::new(&newer, &self.cache, lo, hi));
-            let b: Box<dyn Iterator<Item = (Key, bool)>> = Box::new(RunIter::new(&older, &self.cache, lo, hi));
-            RunFile::write(&path, MergeIter::new(vec![a, b]).filter(|(_, p)| !bottom || *p))?
+            let a: Box<dyn Iterator<Item = (Key, bool)>> =
+                Box::new(RunIter::new(&newer, &self.cache, lo, hi));
+            let b: Box<dyn Iterator<Item = (Key, bool)>> =
+                Box::new(RunIter::new(&older, &self.cache, lo, hi));
+            RunFile::write(
+                &path,
+                MergeIter::new(vec![a, b]).filter(|(_, p)| !bottom || *p),
+            )?
         };
         self.runs.push(Arc::new(merged));
         // Snapshots may still read the old runs (their files stay open); the files are removed
@@ -563,7 +659,9 @@ impl Index {
     /// Merge every run into one (after a flush): reads touch a single file and tombstones
     /// are gone. The old run files are swept after the next manifest.
     pub fn compact(&mut self) -> io::Result<()> {
-        let Some(dir) = self.dir.clone() else { return Ok(()) };
+        let Some(dir) = self.dir.clone() else {
+            return Ok(());
+        };
         self.flush()?;
         while self.runs.len() >= 2 {
             self.merge_last_two(&dir)?;
@@ -586,7 +684,8 @@ impl Index {
         for e in fs::read_dir(dir)? {
             let e = e?;
             let name = e.file_name().to_string_lossy().into_owned();
-            let ours = name.starts_with(&format!("{}-", self.name)) && (name.ends_with(".run") || name.ends_with(".tmp"));
+            let ours = name.starts_with(&format!("{}-", self.name))
+                && (name.ends_with(".run") || name.ends_with(".tmp"));
             if ours && !live.contains(&name) {
                 let _ = fs::remove_file(e.path());
             }
@@ -603,7 +702,9 @@ struct MergeIter<'a> {
 
 impl<'a> MergeIter<'a> {
     fn new(sources: Vec<Box<dyn Iterator<Item = (Key, bool)> + 'a>>) -> Self {
-        MergeIter { sources: sources.into_iter().map(|s| s.peekable()).collect() }
+        MergeIter {
+            sources: sources.into_iter().map(|s| s.peekable()).collect(),
+        }
     }
 }
 
@@ -630,7 +731,6 @@ impl Iterator for MergeIter<'_> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -652,7 +752,11 @@ mod tests {
         idx.put([9, 9, 9, 9]);
         assert_eq!(idx.range([0; 4], [u32::MAX; 4]).count(), 501);
         idx.flush().unwrap();
-        assert_eq!(idx.range([3, 0, 0, 0], [3, u32::MAX, u32::MAX, u32::MAX]).count(), 1000 / 7 / 2 + 1);
+        assert_eq!(
+            idx.range([3, 0, 0, 0], [3, u32::MAX, u32::MAX, u32::MAX])
+                .count(),
+            1000 / 7 / 2 + 1
+        );
         assert!(idx.contains(&[9, 9, 9, 9]));
         assert!(!idx.contains(&[0, 0, 0, 0]));
         // reopen from the run list
@@ -681,6 +785,10 @@ mod tests {
         idx.freeze();
         assert_eq!(snap.range([0; 4], [u32::MAX; 4]).count(), 100);
         assert_eq!(idx.range([0; 4], [u32::MAX; 4]).count(), 51);
-        assert!(idx.mem.levels.len() <= 4, "levels stay few: {}", idx.mem.levels.len());
+        assert!(
+            idx.mem.levels.len() <= 4,
+            "levels stay few: {}",
+            idx.mem.levels.len()
+        );
     }
 }

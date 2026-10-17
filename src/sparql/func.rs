@@ -3,26 +3,40 @@
 use std::cmp::Ordering;
 
 use super::regex::Regex;
-use crate::rdf::{write::format_double, Literal, Term, RDF_LANGSTRING, XSD, XSD_BOOLEAN, XSD_DATETIME, XSD_DECIMAL, XSD_DOUBLE, XSD_STRING};
+use crate::rdf::{
+    Literal, RDF_LANGSTRING, Term, XSD, XSD_BOOLEAN, XSD_DATETIME, XSD_DECIMAL, XSD_DOUBLE,
+    XSD_STRING, write::format_double,
+};
 
 /// `xsd:float`.
 pub const XSD_FLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
 
 const INTEGER_TYPES: [&str; 13] = [
-    "integer", "int", "long", "short", "byte", "nonNegativeInteger", "positiveInteger", "nonPositiveInteger",
-    "negativeInteger", "unsignedLong", "unsignedInt", "unsignedShort", "unsignedByte",
+    "integer",
+    "int",
+    "long",
+    "short",
+    "byte",
+    "nonNegativeInteger",
+    "positiveInteger",
+    "nonPositiveInteger",
+    "negativeInteger",
+    "unsignedLong",
+    "unsignedInt",
+    "unsignedShort",
+    "unsignedByte",
 ];
 
 #[derive(Debug, Clone, Copy)]
 /// A numeric operand, in the widest of the SPARQL numeric types.
 pub enum Num {
-/// `xsd:integer`.
+    /// `xsd:integer`.
     Int(i64),
-/// `xsd:decimal`.
+    /// `xsd:decimal`.
     Dec(Dec),
-/// `xsd:float`.
+    /// `xsd:float`.
     Float(f64),
-/// `xsd:double`.
+    /// `xsd:double`.
     Double(f64),
 }
 
@@ -35,7 +49,7 @@ impl Num {
             Num::Double(_) => 3,
         }
     }
-/// The value as `f64` (exact for integers and decimals within range).
+    /// The value as `f64` (exact for integers and decimals within range).
     pub fn f(&self) -> f64 {
         match *self {
             Num::Int(i) => i as f64,
@@ -58,7 +72,7 @@ impl Num {
             _ => Num::Double(v),
         }
     }
-/// The value as a literal of its own type, in canonical form.
+    /// The value as a literal of its own type, in canonical form.
     pub fn to_term(self) -> Term {
         match self {
             Num::Int(i) => Term::integer(i),
@@ -80,12 +94,12 @@ pub struct Dec {
 const DEC_DIV_SCALE: u32 = 20;
 
 impl Dec {
-/// An integer as a decimal.
+    /// An integer as a decimal.
     pub fn from_i64(i: i64) -> Dec {
         Dec { m: i as i128, s: 0 }
     }
 
-/// Parse an `xsd:decimal` lexical form; `None` when it is not one.
+    /// Parse an `xsd:decimal` lexical form; `None` when it is not one.
     pub fn parse(v: &str) -> Option<Dec> {
         let v = v.trim();
         let (neg, body) = match v.as_bytes().first()? {
@@ -94,17 +108,30 @@ impl Dec {
             _ => (false, v),
         };
         let (int, frac) = body.split_once('.').unwrap_or((body, ""));
-        if (int.is_empty() && frac.is_empty()) || !int.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        if (int.is_empty() && frac.is_empty())
+            || !int.bytes().all(|b| b.is_ascii_digit())
+            || !frac.bytes().all(|b| b.is_ascii_digit())
+        {
             return None;
         }
         let frac = frac.trim_end_matches('0');
         let digits = format!("{int}{frac}");
-        let m: i128 = if digits.is_empty() { 0 } else { digits.parse().ok()? };
-        Some(Dec { m: if neg { -m } else { m }, s: frac.len() as u32 }.norm())
+        let m: i128 = if digits.is_empty() {
+            0
+        } else {
+            digits.parse().ok()?
+        };
+        Some(
+            Dec {
+                m: if neg { -m } else { m },
+                s: frac.len() as u32,
+            }
+            .norm(),
+        )
     }
 
-/// The nearest decimal to `f` (its shortest representation); `None` for NaN and
-/// infinities.
+    /// The nearest decimal to `f` (its shortest representation); `None` for NaN and
+    /// infinities.
     pub fn from_f64(f: f64) -> Option<Dec> {
         if !f.is_finite() {
             return None;
@@ -113,7 +140,7 @@ impl Dec {
         Dec::parse(&s).or_else(|| Dec::parse(format!("{f:.20}").trim_end_matches('0')))
     }
 
-/// The value as `f64`.
+    /// The value as `f64`.
     pub fn f(&self) -> f64 {
         self.m as f64 / 10f64.powi(self.s as i32)
     }
@@ -133,24 +160,46 @@ impl Dec {
     /// Both mantissas at the larger scale.
     fn align(a: Dec, b: Dec) -> Option<(i128, i128, u32)> {
         let s = a.s.max(b.s);
-        Some((a.m.checked_mul(Self::pow10(s - a.s)?)?, b.m.checked_mul(Self::pow10(s - b.s)?)?, s))
+        Some((
+            a.m.checked_mul(Self::pow10(s - a.s)?)?,
+            b.m.checked_mul(Self::pow10(s - b.s)?)?,
+            s,
+        ))
     }
 
-/// Sum, `None` on overflow.
+    /// Sum, `None` on overflow.
     pub fn add(a: Dec, b: Dec) -> Option<Dec> {
         let (x, y, s) = Self::align(a, b)?;
-        Some(Dec { m: x.checked_add(y)?, s }.norm())
+        Some(
+            Dec {
+                m: x.checked_add(y)?,
+                s,
+            }
+            .norm(),
+        )
     }
 
-/// Difference, `None` on overflow.
+    /// Difference, `None` on overflow.
     pub fn sub(a: Dec, b: Dec) -> Option<Dec> {
         let (x, y, s) = Self::align(a, b)?;
-        Some(Dec { m: x.checked_sub(y)?, s }.norm())
+        Some(
+            Dec {
+                m: x.checked_sub(y)?,
+                s,
+            }
+            .norm(),
+        )
     }
 
-/// Product, `None` on overflow.
+    /// Product, `None` on overflow.
     pub fn mul(a: Dec, b: Dec) -> Option<Dec> {
-        Some(Dec { m: a.m.checked_mul(b.m)?, s: a.s + b.s }.norm())
+        Some(
+            Dec {
+                m: a.m.checked_mul(b.m)?,
+                s: a.s + b.s,
+            }
+            .norm(),
+        )
     }
 
     /// Division to DEC_DIV_SCALE fractional digits (truncated), None when dividing by zero.
@@ -161,31 +210,44 @@ impl Dec {
         // a/b = (a.m * 10^(k + b.s - a.s)) / b.m / 10^k
         let k = DEC_DIV_SCALE;
         let shift = (k + b.s) as i64 - a.s as i64;
-        let (num, den) = if shift >= 0 { (a.m.checked_mul(Self::pow10(shift as u32)?)?, b.m) } else { (a.m, b.m.checked_mul(Self::pow10((-shift) as u32)?)?) };
+        let (num, den) = if shift >= 0 {
+            (a.m.checked_mul(Self::pow10(shift as u32)?)?, b.m)
+        } else {
+            (a.m, b.m.checked_mul(Self::pow10((-shift) as u32)?)?)
+        };
         Some(Dec { m: num / den, s: k }.norm())
     }
 
-/// Numeric order of the two decimals.
+    /// Numeric order of the two decimals.
     pub fn cmp(a: Dec, b: Dec) -> Option<Ordering> {
         let (x, y, _) = Self::align(a, b)?;
         Some(x.cmp(&y))
     }
 
-/// The absolute value.
+    /// The absolute value.
     pub fn abs(self) -> Dec {
-        Dec { m: self.m.abs(), s: self.s }
+        Dec {
+            m: self.m.abs(),
+            s: self.s,
+        }
     }
 
-/// Rounded towards negative infinity, at scale 0.
+    /// Rounded towards negative infinity, at scale 0.
     pub fn floor(self) -> Dec {
         let p = Self::pow10(self.s).unwrap_or(1);
-        Dec { m: self.m.div_euclid(p), s: 0 }
+        Dec {
+            m: self.m.div_euclid(p),
+            s: 0,
+        }
     }
 
-/// Rounded towards positive infinity, at scale 0.
+    /// Rounded towards positive infinity, at scale 0.
     pub fn ceil(self) -> Dec {
         let p = Self::pow10(self.s).unwrap_or(1);
-        Dec { m: -(-self.m).div_euclid(p), s: 0 }
+        Dec {
+            m: -(-self.m).div_euclid(p),
+            s: 0,
+        }
     }
 
     /// fn:round: halves round towards positive infinity.
@@ -203,8 +265,22 @@ impl std::fmt::Display for Dec {
         let neg = self.m < 0;
         let digits = self.m.unsigned_abs().to_string();
         let s = self.s as usize;
-        let (int, frac) = if digits.len() > s { (digits[..digits.len() - s].to_string(), digits[digits.len() - s..].to_string()) } else { ("0".to_string(), format!("{}{digits}", "0".repeat(s - digits.len()))) };
-        let frac = if frac.is_empty() { "0".to_string() } else { frac };
+        let (int, frac) = if digits.len() > s {
+            (
+                digits[..digits.len() - s].to_string(),
+                digits[digits.len() - s..].to_string(),
+            )
+        } else {
+            (
+                "0".to_string(),
+                format!("{}{digits}", "0".repeat(s - digits.len())),
+            )
+        };
+        let frac = if frac.is_empty() {
+            "0".to_string()
+        } else {
+            frac
+        };
         write!(f, "{}{int}.{frac}", if neg { "-" } else { "" })
     }
 }
@@ -225,7 +301,8 @@ pub fn format_decimal(x: f64) -> String {
 
 /// Whether the datatype is one of the derived XML Schema integer types.
 pub fn is_integer_type(dt: &str) -> bool {
-    dt.strip_prefix(XSD).is_some_and(|l| INTEGER_TYPES.contains(&l))
+    dt.strip_prefix(XSD)
+        .is_some_and(|l| INTEGER_TYPES.contains(&l))
 }
 
 /// The numeric value of a literal, when its datatype is numeric and its lexical
@@ -258,14 +335,14 @@ fn parse_float(v: &str) -> Option<f64> {
 pub fn arith(op: char, a: Num, b: Num) -> Option<Num> {
     let rank = a.rank().max(b.rank());
     if rank == 0 {
-        let (Num::Int(x), Num::Int(y)) = (a, b) else { return None };
+        let (Num::Int(x), Num::Int(y)) = (a, b) else {
+            return None;
+        };
         return match op {
             '+' => x.checked_add(y).map(Num::Int),
             '-' => x.checked_sub(y).map(Num::Int),
             '*' => x.checked_mul(y).map(Num::Int),
-            '/' => {
-                Dec::div(Dec::from_i64(x), Dec::from_i64(y)).map(Num::Dec)
-            }
+            '/' => Dec::div(Dec::from_i64(x), Dec::from_i64(y)).map(Num::Dec),
             _ => None,
         };
     }
@@ -300,7 +377,10 @@ pub fn arith(op: char, a: Num, b: Num) -> Option<Num> {
 /// String-like literal: (value, language).
 pub fn string_lit(t: &Term) -> Option<(&str, Option<&str>)> {
     let l = t.as_literal()?;
-    if l.datatype == XSD_STRING || l.datatype == RDF_LANGSTRING || l.datatype == crate::rdf::RDF_DIRLANGSTRING {
+    if l.datatype == XSD_STRING
+        || l.datatype == RDF_LANGSTRING
+        || l.datatype == crate::rdf::RDF_DIRLANGSTRING
+    {
         Some((&l.value, l.lang.as_deref()))
     } else {
         None
@@ -355,19 +435,19 @@ pub fn ebv(t: &Term) -> Option<bool> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// The parts of an `xsd:dateTime` lexical form.
 pub struct DateTime {
-/// The year (may be negative, and 0 as written by XML Schema).
+    /// The year (may be negative, and 0 as written by XML Schema).
     pub year: i64,
-/// The month, 1-12.
+    /// The month, 1-12.
     pub month: u32,
-/// The day, 1-31.
+    /// The day, 1-31.
     pub day: u32,
-/// The hour, 0-23.
+    /// The hour, 0-23.
     pub hour: u32,
-/// The minute, 0-59.
+    /// The minute, 0-59.
     pub minute: u32,
-/// The second, 0-60 inclusive (a leap second).
+    /// The second, 0-60 inclusive (a leap second).
     pub second: f64,
-/// The timezone offset in minutes east of UTC; `None` when the form has none.
+    /// The timezone offset in minutes east of UTC; `None` when the form has none.
     pub tz_minutes: Option<i32>,
 }
 
@@ -415,7 +495,15 @@ pub fn parse_datetime(s: &str) -> Option<DateTime> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
         return None;
     }
-    Some(DateTime { year: if neg { -year } else { year }, month, day, hour, minute, second, tz_minutes })
+    Some(DateTime {
+        year: if neg { -year } else { year },
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        tz_minutes,
+    })
 }
 
 fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
@@ -432,14 +520,19 @@ impl DateTime {
     /// Seconds since the epoch, treating a missing timezone as UTC.
     pub fn epoch_seconds(&self) -> f64 {
         let days = days_from_civil(self.year, self.month, self.day);
-        let secs = days as f64 * 86400.0 + self.hour as f64 * 3600.0 + self.minute as f64 * 60.0 + self.second;
+        let secs = days as f64 * 86400.0
+            + self.hour as f64 * 3600.0
+            + self.minute as f64 * 60.0
+            + self.second;
         secs - self.tz_minutes.unwrap_or(0) as f64 * 60.0
     }
 }
 
 /// The current moment as an `xsd:dateTime` literal, timezone `Z`.
 pub fn now_datetime() -> Term {
-    let d = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = d.as_secs() as i64;
     let days = secs.div_euclid(86400);
     let rem = secs.rem_euclid(86400);
@@ -483,7 +576,11 @@ fn temporal_cmp(x: &Literal, y: &Literal) -> Option<Ordering> {
         (has_a, _) => {
             // the zoneless side can be anywhere in [t - 14h, t + 14h]
             let w = 14.0 * 3600.0;
-            let (lo, hi, fixed, flip) = if has_a { (b - w, b + w, a, true) } else { (a - w, a + w, b, false) };
+            let (lo, hi, fixed, flip) = if has_a {
+                (b - w, b + w, a, true)
+            } else {
+                (a - w, a + w, b, false)
+            };
             let o = if hi < fixed {
                 Ordering::Less
             } else if lo > fixed {
@@ -535,7 +632,11 @@ pub fn equals(a: &Term, b: &Term) -> Option<bool> {
                 return Some(ebv(a) == ebv(b));
             }
             let known = |l: &Literal| {
-                l.datatype == XSD_STRING || l.datatype == XSD_BOOLEAN || l.datatype == XSD_DATETIME || l.datatype == XSD_DATE || num(&Term::Literal(l.clone())).is_some()
+                l.datatype == XSD_STRING
+                    || l.datatype == XSD_BOOLEAN
+                    || l.datatype == XSD_DATETIME
+                    || l.datatype == XSD_DATE
+                    || num(&Term::Literal(l.clone())).is_some()
             };
             if known(x) && known(y) {
                 Some(false)
@@ -559,7 +660,9 @@ pub fn compare(a: &Term, b: &Term) -> Option<Ordering> {
     if x.datatype == XSD_BOOLEAN && y.datatype == XSD_BOOLEAN {
         return Some(ebv(a)?.cmp(&ebv(b)?));
     }
-    if (x.datatype == XSD_STRING && y.datatype == XSD_STRING) || (x.lang.is_some() && x.lang == y.lang) {
+    if (x.datatype == XSD_STRING && y.datatype == XSD_STRING)
+        || (x.lang.is_some() && x.lang == y.lang)
+    {
         return Some(x.value.cmp(&y.value));
     }
     if x.datatype == y.datatype && x.lang.is_none() {
@@ -585,7 +688,12 @@ pub fn order_cmp(a: Option<&Term>, b: Option<&Term>) -> Ordering {
     }
     match (a, b) {
         // plain strings (the common case when sorting labels) compare by code point directly
-        (Some(Term::Literal(l)), Some(Term::Literal(m))) if l.lang.is_none() && m.lang.is_none() && l.datatype == XSD_STRING && m.datatype == XSD_STRING => {
+        (Some(Term::Literal(l)), Some(Term::Literal(m)))
+            if l.lang.is_none()
+                && m.lang.is_none()
+                && l.datatype == XSD_STRING
+                && m.datatype == XSD_STRING =>
+        {
             l.value.cmp(&m.value)
         }
         (Some(x), Some(y)) => {
@@ -596,7 +704,10 @@ pub fn order_cmp(a: Option<&Term>, b: Option<&Term>) -> Ordering {
             }
             match (x, y) {
                 // triple terms order by subject, then predicate, then object
-                (Term::Triple(p), Term::Triple(q)) => (0..3).map(|i| order_cmp(Some(&p[i]), Some(&q[i]))).find(|o| *o != Ordering::Equal).unwrap_or(Ordering::Equal),
+                (Term::Triple(p), Term::Triple(q)) => (0..3)
+                    .map(|i| order_cmp(Some(&p[i]), Some(&q[i])))
+                    .find(|o| *o != Ordering::Equal)
+                    .unwrap_or(Ordering::Equal),
                 (Term::Literal(l), Term::Literal(m)) => l
                     .value
                     .cmp(&m.value)
@@ -621,7 +732,11 @@ fn xpath_float_string(f: f64) -> String {
         return if f > 0.0 { "INF".into() } else { "-INF".into() };
     }
     if f == 0.0 {
-        return if f.is_sign_negative() { "-0".into() } else { "0".into() };
+        return if f.is_sign_negative() {
+            "-0".into()
+        } else {
+            "0".into()
+        };
     }
     if (1e-6..1e6).contains(&f.abs()) {
         let s = format!("{f}");
@@ -639,7 +754,10 @@ pub fn cast(dt: &str, v: &Term) -> Option<Term> {
         _ => return None,
     };
     let as_num = num(v);
-    let as_bool = v.as_literal().filter(|l| l.datatype == XSD_BOOLEAN).map(|l| l.value == "true" || l.value == "1");
+    let as_bool = v
+        .as_literal()
+        .filter(|l| l.datatype == XSD_BOOLEAN)
+        .map(|l| l.value == "true" || l.value == "1");
     Some(match dt {
         XSD_STRING => Term::string(match (as_num, as_bool) {
             // XPath casting: numbers and booleans become their canonical form
@@ -668,7 +786,11 @@ pub fn cast(dt: &str, v: &Term) -> Option<Term> {
                 (_, Some(b)) => b as i64 as f64,
                 _ => parse_float(&lex)?,
             };
-            if dt == XSD_DOUBLE { Num::Double(f).to_term() } else { Num::Float(f).to_term() }
+            if dt == XSD_DOUBLE {
+                Num::Double(f).to_term()
+            } else {
+                Num::Float(f).to_term()
+            }
         }
         XSD_DECIMAL => {
             let f = match (as_num, as_bool) {
@@ -874,7 +996,11 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
             match s.find(t) {
                 None => Term::string(""),
                 Some(i) => {
-                    let part = if name == "STRBEFORE" { &s[..i] } else { &s[i + t.len()..] };
+                    let part = if name == "STRBEFORE" {
+                        &s[..i]
+                    } else {
+                        &s[i + t.len()..]
+                    };
                     if part.is_empty() && t.is_empty() && name == "STRAFTER" {
                         same_kind_string(s.to_string(), l1)
                     } else {
@@ -907,7 +1033,13 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
             };
             let from = start.max(1);
             let to = (start + len).min(chars.len() as i64 + 1);
-            let out: String = if to > from { chars[(from - 1) as usize..(to - 1) as usize].iter().collect() } else { String::new() };
+            let out: String = if to > from {
+                chars[(from - 1) as usize..(to - 1) as usize]
+                    .iter()
+                    .collect()
+            } else {
+                String::new()
+            };
             same_kind_string(out, l)
         }
         "REGEX" => {
@@ -975,7 +1107,12 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
                 "TZ" => Term::string(match dt.tz_minutes {
                     None => String::new(),
                     Some(0) => "Z".into(),
-                    Some(m) => format!("{}{:02}:{:02}", if m < 0 { '-' } else { '+' }, m.abs() / 60, m.abs() % 60),
+                    Some(m) => format!(
+                        "{}{:02}:{:02}",
+                        if m < 0 { '-' } else { '+' },
+                        m.abs() / 60,
+                        m.abs() % 60
+                    ),
                 }),
                 _ => {
                     let m = dt.tz_minutes?;
@@ -987,7 +1124,10 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
                         (0, mm) => format!("T{mm}M"),
                         (h, mm) => format!("T{h}H{mm}M"),
                     };
-                    Term::typed(format!("{sign}P{body}"), "http://www.w3.org/2001/XMLSchema#dayTimeDuration")
+                    Term::typed(
+                        format!("{sign}P{body}"),
+                        "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    )
                 }
             }
         }
@@ -1007,12 +1147,31 @@ mod tests {
     fn numerics_and_strings() {
         let r = arith('/', Num::Int(7), Num::Int(2)).unwrap();
         assert_eq!(r.to_term(), Term::typed("3.5", XSD_DECIMAL));
-        assert_eq!(equals(&Term::integer(1), &Term::typed("1.0", XSD_DECIMAL)), Some(true));
-        let s = call("SUBSTR", &[Some(Term::string("foobar")), Some(Term::integer(4))], "").unwrap();
+        assert_eq!(
+            equals(&Term::integer(1), &Term::typed("1.0", XSD_DECIMAL)),
+            Some(true)
+        );
+        let s = call(
+            "SUBSTR",
+            &[Some(Term::string("foobar")), Some(Term::integer(4))],
+            "",
+        )
+        .unwrap();
         assert_eq!(s, Term::string("bar"));
         let dt = parse_datetime("2024-02-29T12:30:00Z").unwrap();
         assert_eq!(dt.year, 2024);
-        assert_eq!(call("YEAR", &[Some(Term::typed("2024-02-29T12:30:00Z", XSD_DATETIME))], "").unwrap(), Term::integer(2024));
-        assert_eq!(cast(crate::rdf::XSD_INTEGER, &Term::string("42")).unwrap(), Term::integer(42));
+        assert_eq!(
+            call(
+                "YEAR",
+                &[Some(Term::typed("2024-02-29T12:30:00Z", XSD_DATETIME))],
+                ""
+            )
+            .unwrap(),
+            Term::integer(2024)
+        );
+        assert_eq!(
+            cast(crate::rdf::XSD_INTEGER, &Term::string("42")).unwrap(),
+            Term::integer(42)
+        );
     }
 }

@@ -21,7 +21,7 @@ use crate::store::{Id, Store};
 
 /// The schema as `infer=at-query` walks it backwards.
 pub struct AtQuery {
-/// `rdf:type`.
+    /// `rdf:type`.
     pub ty: Id,
     /// C -> its direct subclasses (equivalences both ways); and the other direction.
     sub_class: HashMap<Id, Vec<Id>>,
@@ -75,11 +75,16 @@ impl AtQuery {
         };
         let pairs = |p: Option<Id>| -> Vec<(Id, Id)> {
             match p {
-                Some(p) => store.explicit_matching(None, Some(p), None, None).map(|t| (t[0], t[2])).collect(),
+                Some(p) => store
+                    .explicit_matching(None, Some(p), None, None)
+                    .map(|t| (t[0], t[2]))
+                    .collect(),
                 None => Vec::new(),
             }
         };
-        let edge = |down: &mut HashMap<Id, Vec<Id>>, sup: Id, sub: Id| down.entry(sup).or_default().push(sub);
+        let edge = |down: &mut HashMap<Id, Vec<Id>>, sup: Id, sub: Id| {
+            down.entry(sup).or_default().push(sub)
+        };
         let (mut down, mut up) = (HashMap::new(), HashMap::new());
         for (a, b) in pairs(id(format!("{RDFS}subClassOf"))) {
             edge(&mut down, b, a);
@@ -110,7 +115,10 @@ impl AtQuery {
         }
         let typed = |class: String| -> HashSet<Id> {
             match id(class) {
-                Some(c) => store.explicit_matching(None, Some(ty), Some(c), None).map(|t| t[0]).collect(),
+                Some(c) => store
+                    .explicit_matching(None, Some(ty), Some(c), None)
+                    .map(|t| t[0])
+                    .collect(),
                 None => HashSet::new(),
             }
         };
@@ -121,17 +129,29 @@ impl AtQuery {
 
     /// C and every class below it.
     pub fn subclasses(&self, c: Id) -> Vec<Id> {
-        self.closure_down.borrow_mut().entry(c).or_insert_with(|| reach(&self.sub_class, c)).clone()
+        self.closure_down
+            .borrow_mut()
+            .entry(c)
+            .or_insert_with(|| reach(&self.sub_class, c))
+            .clone()
     }
 
     /// C and every class above it.
     pub fn superclasses(&self, c: Id) -> Vec<Id> {
-        self.closure_up.borrow_mut().entry(c).or_insert_with(|| reach(&self.super_class, c)).clone()
+        self.closure_up
+            .borrow_mut()
+            .entry(c)
+            .or_insert_with(|| reach(&self.super_class, c))
+            .clone()
     }
 
     /// p and every property below it.
     pub fn subproperties(&self, p: Id) -> Vec<Id> {
-        self.props_down.borrow_mut().entry(p).or_insert_with(|| reach(&self.sub_prop, p)).clone()
+        self.props_down
+            .borrow_mut()
+            .entry(p)
+            .or_insert_with(|| reach(&self.sub_prop, p))
+            .clone()
     }
 
     /// Properties whose subjects (`domain`) or objects (`range`) are instances of C.
@@ -160,7 +180,7 @@ impl AtQuery {
         out
     }
 
-/// Whether the schema says anything about types at all.
+    /// Whether the schema says anything about types at all.
     pub fn has_typing(&self) -> bool {
         !self.domains.is_empty() || !self.ranges.is_empty()
     }
@@ -183,7 +203,15 @@ impl AtQuery {
         if alts.len() == 1 && !transitive {
             return None;
         }
-        let step = if alts.len() == 1 { alts.pop().unwrap() } else { Path::Alt(alts) };
-        Some(if transitive { Path::OneOrMore(Box::new(step)) } else { step })
+        let step = if alts.len() == 1 {
+            alts.pop().unwrap()
+        } else {
+            Path::Alt(alts)
+        };
+        Some(if transitive {
+            Path::OneOrMore(Box::new(step))
+        } else {
+            step
+        })
     }
 }
