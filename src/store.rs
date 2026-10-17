@@ -1623,7 +1623,7 @@ impl Store {
             // complete from now on: written before any transaction can reach it
             let tmp = path.with_extension("tmp");
             fs::write(&tmp, format!("s {}\n", now_millis()))?;
-            File::open(&tmp)?.sync_all()?;
+            OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
             fs::rename(&tmp, &path)?;
         }
         let file = OpenOptions::new().append(true).open(&path)?;
