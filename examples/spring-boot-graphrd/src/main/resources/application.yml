@@ -1,0 +1,11 @@
+# development: a local server, default ports
+graphrd:
+  base-url: ${GRAPHRD_URL:http://localhost:7200}
+  repository: ${GRAPHRD_REPOSITORY:personnel}
+  namespace: ${GRAPHRD_NAMESPACE:http://example.org/}
+  connect-timeout: 5s
+  request-timeout: 60s
+
+spring:
+  application:
+    name: personnel

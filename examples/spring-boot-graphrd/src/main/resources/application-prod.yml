@@ -1,0 +1,10 @@
+# production: the address comes from the environment, timeouts are stricter
+graphrd:
+  base-url: ${GRAPHRD_URL}
+  repository: ${GRAPHRD_REPOSITORY:personnel}
+  namespace: ${GRAPHRD_NAMESPACE:http://example.org/}
+  connect-timeout: 3s
+  request-timeout: 30s
+
+server:
+  port: ${PORT:8080}
