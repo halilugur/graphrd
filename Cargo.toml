@@ -1,0 +1,20 @@
+[package]
+name = "graphrd"
+version = "1.0.0"
+edition = "2024"
+
+[features]
+default = []
+# HTTPS for the server (--tls-cert/--tls-key) and for outbound fetches
+# (LOAD <https://...>, import from URL), and certificates from ACME (Let's Encrypt).
+# The default build has no dependencies.
+tls = ["dep:rustls", "dep:webpki-roots", "dep:ring"]
+
+[dependencies]
+rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = { version = "1", optional = true }
+# already part of rustls; used directly for ACME account keys and certificate requests
+ring = { version = "0.17", optional = true }
+
+[profile.release]
+debug = false

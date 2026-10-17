@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GraphRD</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22 role=%22img%22 aria-label=%22GraphRD%22%3E%3Crect x=%221%22 y=%221%22 width=%2262%22 height=%2262%22 rx=%2214%22 fill=%22%230f172a%22 stroke=%22%23334155%22 stroke-width=%222%22/%3E%3Cpath d=%22M18 19 L46 19 L32 46 Z%22 fill=%22none%22 stroke=%22%2394a3b8%22 stroke-width=%223%22 stroke-linejoin=%22round%22 opacity=%22.55%22/%3E%3Ccircle cx=%2218%22 cy=%2219%22 r=%228.5%22 fill=%22%233b82f6%22/%3E%3Ccircle cx=%2246%22 cy=%2219%22 r=%228.5%22 fill=%22%23f59e0b%22/%3E%3Ccircle cx=%2232%22 cy=%2246%22 r=%228.5%22 fill=%22%2314b8a6%22/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+<div class="shell">
+  <header class="topbar" aria-label="GraphRD">
+    <button id="menu-toggle" class="topbar-btn" type="button" aria-label="Open the menu" aria-controls="sidebar" aria-expanded="false">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3.5 6h13M3.5 10h13M3.5 14h13"/></svg>
+    </button>
+    <a class="topbar-mark" href="#/" aria-label="GraphRD overview">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 9L23 9L16 23Z" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45"/><circle cx="9" cy="9" r="4.5" class="s"/><circle cx="23" cy="9" r="4.5" class="p"/><circle cx="16" cy="23" r="4.5" class="o"/></svg>
+    </a>
+    <div class="topbar-title"><b id="topbar-page">Overview</b><span id="topbar-repo"></span></div>
+  </header>
+  <div class="scrim" id="scrim" hidden></div>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-head">
+    <a class="brand" href="#/" aria-label="GraphRD overview">
+      <svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M9 9L23 9L16 23Z" fill="none" stroke="currentColor" stroke-width="1.6" opacity=".45"/><circle cx="9" cy="9" r="4.5" class="s"/><circle cx="23" cy="9" r="4.5" class="p"/><circle cx="16" cy="23" r="4.5" class="o"/></svg>
+      <span>Graph<b>RD</b></span>
+    </a>
+    <button id="menu-close" class="topbar-btn" type="button" aria-label="Close the menu">
+      <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5L5 15"/></svg>
+    </button>
+    </div>
+
+    <section class="repo-card" aria-label="Active repository">
+      <label for="repo-select" class="eyebrow">Repository</label>
+      <select id="repo-select"></select>
+      <dl class="repo-stats" id="repo-stats"></dl>
+    </section>
+
+    <nav id="nav" aria-label="Main">
+      <a href="#/" data-route="home"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 9l7-6 7 6v8H3z"/></svg>Overview</a>
+      <a href="#/sparql" data-route="sparql"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 5L2 10l5 5M13 5l5 5-5 5"/></svg>SPARQL</a>
+      <a href="#/graphql" data-route="graphql"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.5l6.5 3.75v7.5L10 17.5l-6.5-3.75v-7.5z"/><path d="M10 2.5L3.5 13.75h13z"/></svg>GraphQL</a>
+      <a href="#/explore" data-route="explore"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M12.8 7.2l-1.6 4-4 1.6 1.6-4z"/></svg>Explore</a>
+      <a href="#/visual" data-route="visual"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="5" r="2.3"/><circle cx="15" cy="7" r="2.3"/><circle cx="8" cy="15.5" r="2.3"/><path d="M7.2 5.5l5.6 1.1M13.6 8.8l-4.2 5M6.3 7.1l1.2 6.1"/></svg>Visual Graph</a>
+      <a href="#/import" data-route="import"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M6 9l4 4 4-4M3 15v2h14v-2"/></svg>Import</a>
+      <a href="#/graphs" data-route="graphs"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3l7 3.5-7 3.5-7-3.5z"/><path d="M3 10l7 3.5 7-3.5M3 13.5l7 3.5 7-3.5"/></svg>Named Graphs</a>
+      <a href="#/namespaces" data-route="namespaces"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 11.5a3 3 0 0 0 4.2 0l2.6-2.6a3 3 0 0 0-4.2-4.2l-1 1"/><path d="M11.5 8.5a3 3 0 0 0-4.2 0l-2.6 2.6a3 3 0 0 0 4.2 4.2l1-1"/></svg>Namespaces</a>
+      <a href="#/monitoring" data-route="monitoring"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 11h3l2-5 3 9 2-6 1.5 2h3.5"/></svg>Monitoring</a>
+      <a href="#/cluster" data-route="cluster" id="nav-cluster" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="4.5" cy="10" r="2.5"/><circle cx="15" cy="4.5" r="2.5"/><circle cx="15" cy="15.5" r="2.5"/><path d="M6.5 8.9L13 5.6M6.5 11.1L13 14.4"/></svg>Cluster</a>
+      <a href="#/llm" data-route="llm" id="nav-llm" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8.5 3.5l1.4 3.6 3.6 1.4-3.6 1.4-1.4 3.6-1.4-3.6-3.6-1.4 3.6-1.4z"/><path d="M14.5 11.5l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z"/></svg>AI Assistant</a>
+      <a href="#/users" data-route="users" id="nav-users" hidden><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8" cy="7" r="3"/><path d="M2.5 17c.8-3 3-4.5 5.5-4.5s4.7 1.5 5.5 4.5M13.5 4.5a3 3 0 0 1 0 5.5M15.5 12.8c1.3.7 2.2 2 2.5 4.2"/></svg>Users</a>
+      <a href="#/repositories" data-route="repositories"><svg viewBox="0 0 20 20" aria-hidden="true"><ellipse cx="10" cy="5" rx="6" ry="2.5"/><path d="M4 5v10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5V5M4 10c0 1.4 2.7 2.5 6 2.5s6-1.1 6-2.5"/></svg>Repositories</a>
+    </nav>
+
+    <div class="sidebar-foot">
+      <button id="theme-toggle" class="ghost" type="button">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="M10 4a6 6 0 0 1 0 12z" class="fill"/></svg>
+        <span>Theme</span>
+      </button>
+      <button id="logout" class="ghost" type="button" hidden>Sign out</button>
+    </div>
+  </aside>
+
+  <main id="view" tabindex="-1"></main>
+</div>
+<div id="toasts" aria-live="polite"></div>
+<script src="/ui/app.js"></script>
+</body>
+</html>

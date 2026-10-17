@@ -1,0 +1,57 @@
+# --- Rust ---
+/target
+/examples/*/target/
+**/*.rs.bk
+*.pdb
+
+# --- runtime data a server may leave in the tree ---
+/graphrd-data/
+**/graphrd-data/
+*.log
+llm.json
+
+# --- development records, kept locally only (not part of the product) ---
+/notrack/
+
+# client libraries live in their own repositories:
+# https://github.com/halilugur/graphrd-client and .../graphrd-spring-data
+/clients/
+
+# --- benchmark artifacts, should any escape ---
+
+*.gz
+
+# --- backups and exports ---
+*.tar
+*.tar.gz
+graphrd-backup*/
+
+# --- Python (tests and benchmark scripts) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# --- macOS ---
+.DS_Store
+.AppleDouble/
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+# --- editors and IDEs ---
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+.fleet/
+.zed/
+
+# --- tool-local state ---
+.claude/
+.zcode/
+.cargo-home/

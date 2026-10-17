@@ -1,0 +1,16 @@
+{
+  "@context": {
+    "name": "http://example.org/name",
+    "knows": "http://example.org/knows",
+    "worksFor": "http://example.org/worksFor",
+    "Person": "http://example.org/Person",
+    "Company": "http://example.org/Company"
+  },
+  "@graph": [
+    { "@id": "http://example.org/alice", "@type": "Person", "name": "Alice",
+      "knows": { "@id": "http://example.org/bob" }, "worksFor": { "@id": "http://example.org/acme" } },
+    { "@id": "http://example.org/bob", "@type": "Person", "name": "Bob",
+      "worksFor": { "@id": "http://example.org/acme" } },
+    { "@id": "http://example.org/acme", "@type": "Company", "name": "Acme" }
+  ]
+}
