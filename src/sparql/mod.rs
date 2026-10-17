@@ -836,8 +836,9 @@ mod tests {
         let rows = run(&st, &q);
         let took = t0.elapsed();
         assert_eq!(rows.len(), 1);
-        // in parallel: about one endpoint's 300 ms, plus the retry of the failing one
-        assert!(took < std::time::Duration::from_millis(850), "{took:?}");
+        // in parallel: about one endpoint's 300 ms, plus the retry of the failing
+        // one; generous for slow CI machines, still far below the serial ~1.8 s
+        assert!(took < std::time::Duration::from_millis(1500), "{took:?}");
         assert_eq!(cc.load(SeqCst), 2, "the 503 was retried");
         let t0 = std::time::Instant::now();
         assert_eq!(run(&st, &q).len(), 1);

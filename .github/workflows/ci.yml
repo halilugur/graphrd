@@ -19,6 +19,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Keep Defender away from the WAL (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
@@ -68,6 +73,7 @@ jobs:
 
       - name: W3C suites (SPARQL, SHACL, RDF 1.2)
         run: |
+          pip install rdflib
           git clone --depth 1 https://github.com/w3c/rdf-tests.git ../rdf-tests
           python3 tests/w3c/run.py ../rdf-tests
 
