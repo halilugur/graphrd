@@ -312,12 +312,21 @@ ui/              the web UI (compiled into the binary with include_str!)
 
 ## Performance
 
-On an M2 Pro
-with inference and full-text search on: 3 million triples load at 81k triples/s; point lookups,
-joins, property paths and full-text phrase queries answer in 0.1–0.3 ms; a durable single write
-(fsynced before it is acknowledged) takes 1–3 ms, and concurrent writers share fsyncs through
-group commit (850 commits/s with 8 writers); three servers load 285k triples/s combined; a
-three-node Raft cluster serves 4,942 mixed QPS across its nodes.
+Measured on an M2 Pro, with inference and full-text search on:
+
+| Operation | Result |
+|---|---|
+| Load 3 million triples | 81k triples/s |
+| Point lookups, joins, property paths, full-text phrases | 0.1–0.3 ms |
+| Durable single write (fsynced before acknowledged) | 1–3 ms |
+| Group commit, 8 concurrent writers | 850 commits/s |
+| Write with `--sync off` | 0.3 ms |
+| Three servers loading combined | 285k triples/s |
+| Three-node Raft cluster, mixed workload | 4,942 QPS across nodes |
+
+The full 12-query suite on a second setup (Docker, 4 CPUs, 6 GB, 900k triples — from a 0.58 ms
+point lookup to a 35 ms join over 198k rows), bulk-load and concurrency numbers, tuning notes and
+the measuring tools are in [docs/performance.md](docs/performance.md).
 
 ## Durability
 
