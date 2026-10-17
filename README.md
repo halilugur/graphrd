@@ -2,6 +2,9 @@
 
 # GraphRD
 
+[![CI](https://github.com/halilugur/graphrd/actions/workflows/ci.yml/badge.svg)](https://github.com/halilugur/graphrd/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 GraphRD is an RDF database written in Rust with **zero third-party dependencies** in its default
 build (HTTPS is an optional `tls` feature backed by rustls): HTTP server, JSON,
 RDF parsers and serializers, storage, SPARQL engine and reasoner are all implemented on the
@@ -32,6 +35,8 @@ içinde gelir. Depo REST protokolünü ve SPARQL 1.1 Protocol'ü konuşur, mevcu
   ve zamana dönük geri yükleme.
 - **İşletim**: Raft kümesi (log sıkıştırma, okuma kopyaları), Prometheus metrikleri, kullanıcılar
   ve roller, API anahtarları, OpenID Connect, LDAP, denetim kaydı, isteğe bağlı HTTPS.
+- **Java istemciler**: `org.graphrd:graphrd-client` (saf Java, sıfır bağımlılık) ve
+  `org.graphrd:graphrd-spring-data` (Spring Data repository'leri + starter) Maven Central'da.
 
 Hızlı başlangıç: `cargo build --release`, sonra `target/release/graphrd serve` ve
 <http://127.0.0.1:7200>. Belgeler [docs/](docs/README.md) altında (İngilizce); katkı kuralları
@@ -39,130 +44,24 @@ katkı rehberinde.
 
 </details>
 
-## Features
+## Highlights
 
-- **SPARQL 1.1 Query and Update**: SELECT, ASK, CONSTRUCT, DESCRIBE; OPTIONAL, UNION, MINUS,
-  FILTER, BIND, VALUES, sub-queries, property paths (`/ | ^ * + ? !`), GROUP BY / HAVING with
-  COUNT, SUM, AVG, MIN, MAX, SAMPLE, GROUP_CONCAT, and the built-in function library (string,
-  numeric, date/time, hash, regex). All update operations, including DELETE/INSERT WHERE, WITH,
-  USING, CLEAR, DROP, ADD, MOVE and COPY. Federated queries: `SERVICE <endpoint> { … }` (and
-  `SERVICE ?var`, `SERVICE SILENT`) send the block to any SPARQL 1.1 endpoint and join its results.
-- **Inference** by forward chaining with the rulesets `rdf`, `rdfs`, `rdfsplus`, `owl-horst`, `owl2-rl`,
-  their `-optimized` variants, and `owl-max` / `owl2-*` aliases. Explicit and inferred statements are
-  kept apart: queries take `infer=false`, and the `graph:explicit` / `graph:implicit` pseudo-graphs
-  are supported. Deleting a fact retracts what was derived from it. `infer=at-query` infers at
-  query time by backward chaining instead, with nothing stored.
-- **Custom rulesets** in the `.pie` rule format (`Prefices`, `Axioms`, `Rules` with `Id:`
-  blocks and `[Constraint a != b]`): set the repository's ruleset to the path of a `.pie` file.
-- **RDF 1.2 and SPARQL 1.2**: triple terms `<<( s p o )>>`, reified triples `<< s p o ~ :id >>`
-  (a reifier with `rdf:reifies`), annotations `{| … |}` with any number of reifiers, literals with a
-  base direction (`"text"@ar--rtl`, `rdf:dirLangString`), `VERSION`, in every syntax (Turtle, TriG,
-  N-Triples, N-Quads, RDF/XML with `rdf:parseType="Triple"`, `rdf:annotation` and `its:dir`) and in
-  queries, templates and updates, with `TRIPLE`, `SUBJECT`, `PREDICATE`, `OBJECT`, `isTRIPLE`,
-  `LANGDIR`, `hasLANG`, `hasLANGDIR` and `STRLANGDIR`. As in RDF 1.2, `<< s p o >>` is a reified
-  triple (it denotes a reifier), not the triple itself as in the older RDF-star drafts; data
-  stored with RDF-star subjects stays readable.
-- **Full-text search**: set `enableFtsIndex` on a
-  repository and query with `?literal g:fts "query"` (the prefixes `g:` = `http://graphrd.org/fn#`,
-  `graph:` and `rank:` are predefined). The query language supports words (all
-  must match, any inflection: English Porter and Turkish stemming), `"exact phrases"`, `prefix*`,
-  `word~` (typo-tolerant, edit distance up to 2), `a OR b` and `-exclusions`; a query that finds
-  nothing is retried typo-tolerant. `g:ftsScore(?literal, "query")` gives the BM25 score,
-  `g:ftsHighlight(?literal, "query")` the text with the matching words marked, and
-  `GET /rest/repositories/{id}/search?query=…&facet=<predicate>` hits, highlights and facet counts.
-  Postings live in their own LSM index, are maintained on every write, and can be built over
-  existing data.
-- **Questions in plain language**: with an endpoint, key and model (`--llm-url`, `--llm-key`,
-  `--llm-model`), or just `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment, a language model
-  (Claude through the Anthropic Messages API, or any OpenAI-compatible server, local ones included)
-  writes the SPARQL for a question from a summary of the repository's classes and properties;
-  GraphRD accepts only read queries without `SERVICE`, retries once on a parse error, and can run
-  the query: `POST /rest/repositories/{id}/nl-query` ([docs/nl-query.md](docs/nl-query.md)).
-- **Search connectors**: entities of chosen classes kept in an OpenSearch or Elasticsearch index
-  as the data changes, and searched from SPARQL with `?e <http://graphrd.org/connector/NAME> "query"`.
-  See [docs/connectors.md](docs/connectors.md).
-- **Vector search**: embeddings stored as `g:vector` literals are indexed in an HNSW graph;
-  `?v g:knn ?q` finds the nearest (p95 1.5 ms over a million vectors), `g:similarity` scores them,
-  and both combine with full-text search for hybrid ranking. See [docs/vectors.md](docs/vectors.md).
-- **GeoSPARQL 1.1 functions** (`geof:` = `http://www.opengis.net/def/function/geosparql/`) over
-  `geo:wktLiteral` and `geo:geoJSONLiteral` values (CRS84, EPSG:4326/4258/4269, Web Mercator and
-  WGS 84 / UTM zones): the Simple Features (`sfEquals`,
-  `sfDisjoint`, `sfIntersects`, `sfTouches`, `sfCrosses`, `sfWithin`, `sfContains`, `sfOverlaps`),
-  Egenhofer (`eh*`) and RCC8 (`rcc8*`) relation families, `relate` with a DE-9IM pattern,
-  `intersection`, `union`, `difference`, `symDifference`, `envelope`, `convexHull`, `centroid`,
-  `boundary`, `dimension`, `coordinateDimension`, `spatialDimension`, `isEmpty`, `isSimple`,
-  `asWKT`, `asGeoJSON`, `getSRID`, `minX`/`minY`/`maxX`/`maxY`, `numGeometries`, and `distance`,
-  `area`, `length`, `perimeter` in metres (or another `uom:` unit) on the sphere. The geometry
-  engine is GraphRD's own and is checked against GEOS on random geometries (DE-9IM matrices and
-  set operations agree on 10,000 pairs). Topology is planar in coordinate space, as with most
-  GeoSPARQL implementations. A spatial index over every geometry literal answers relation and
-  `distance < r` filters against a geometry without trying every geometry (100,000 geometries:
-  0.4-3 ms instead of ~500 ms; see [docs/geosparql.md](docs/geosparql.md#spatial-index)).
-- **Formats**: Turtle(-star), TriG(-star), N-Triples(-star), N-Quads(-star), RDF/XML (including DTD
-  entities) and JSON-LD for import and export, and Notation3 (N3) for import, with formulas as
-  blank-node named graphs; SPARQL results as JSON, XML, CSV and TSV.
-- **Snapshot isolation (MVCC)**: every query runs on a consistent snapshot of the repository and
-  never waits for a writer; writers never wait for readers. A snapshot costs a few reference-count
-  increments: memtables are frozen into immutable sorted levels and run files are shared.
-- **Time travel**: with the `historyRetention` repository setting (e.g. `7d`), a query takes
-  `as-of=<dateTime>` and runs on the repository as it was then (`graphrd query --as-of` offline);
-  see [docs/sparql.md](docs/sparql.md#time-travel).
-- **Disk-based storage**: dictionary-encoded quads in four LSM indexes (SPOG, POSG, OSPG, GSPO).
-  Writes go to a write-ahead log and an in-memory memtable; checkpoints fold them into immutable,
-  block-indexed run files that are merged in a size-tiered way. Terms live in an on-disk dictionary
-  with a hash index. Memory use is bounded by the memtable and caches, not by the data size, and
-  inferred statements are persisted, so restarts are instant.
-- **Web UI** at `/`: repositories and rulesets, a SPARQL editor with highlighting and saved queries,
-  file/text/server-side import, a resource and class-hierarchy explorer, named graphs, namespaces,
-  light and dark themes, and a visual graph explorer of its own (canvas rendering, Barnes–Hut
-  force layout plus radial and hierarchy layouts, neighbourhood highlighting, search, minimap,
-  context menu and PNG export; thousands of nodes) for a resource, a named graph or the schema.
-- **SHACL validation** (`isShacl` repository setting): shapes are loaded into the
-  shapes graph (`urn:graphrd:shapes`). Every write is validated for the nodes it
-  touches (and nodes linking to them); a violating write is rolled back and answered with a 400 and
-  the validation report. All of SHACL Core (complex paths, `and`/`or`/`not`/`xone`, `node`,
-  qualified value shapes, property pairs, `closed`, `languageIn`, `uniqueLang`, severities) and
-  SHACL-SPARQL (`sh:sparql`, SPARQL-based constraint components); the W3C SHACL test suite passes
-  120/120. `graphrd validate --shapes S DATA...` validates files offline.
-  `GET /rest/repositories/{id}/shacl/validate` reports on the whole
-  repository (JSON, or Turtle `sh:ValidationReport`).
-- **Backup and restore**: `GET /rest/recovery/backup` returns a tar archive with every
-  repository's configuration, namespaces and statements; `POST /rest/recovery/restore` brings
-  them back (also from the Repositories page).
-- **RDF Rank**: `POST /rest/rank/compute` runs PageRank over the links between resources;
-  query scores with `?node rank:score ?score` (or `score3`/`score5` for rounded
-  values). The status turns OUTDATED when data changes.
-- **Autocomplete**: `/rest/autocomplete/query?q=` suggests IRIs by local-name prefix (used by the
-  Explore search box), from an index rebuilt only after data changes.
-- **GraphQL without writing a schema**: `POST /rest/repositories/{id}/graphql` with
-  `{"query": "...", "variables": {...}}`. The schema is derived from the data: every class is a
-  query field, every predicate a field named by its local name, links nest. Root fields take
-  `id`, `where`, `limit`, `offset`, `orderBy` and `desc`; `?sdl` returns the derived schema.
-  Mutations `createT` / `updateT` / `deleteT` write through the same schema, one transaction per
-  request (SHACL-checked); the web UI has a GraphQL page.
-- **SQL over the PostgreSQL protocol** (`--pg-port 5432`): connect with psql, psycopg, JDBC or BI
-  tools; the database name is the repository. Tables are classes, columns are `id` plus
-  predicates: `SELECT name, age FROM Person WHERE age > 30 ORDER BY age DESC LIMIT 10`,
-  `COUNT(*)`, `LIKE`, `IS NULL`, `SHOW TABLES`, `information_schema`, and
-  `SELECT * FROM sparql('…')` for any SPARQL query, `[LEFT] JOIN … ON a = b`, `CREATE VIEW`
-  (kept in the repository), and `INSERT` / `UPDATE` / `DELETE` (one transaction each,
-  SHACL-checked, replicated in a cluster). Simple and extended (prepared) protocol, text and
-  binary parameters; same users and permissions as HTTP.
-- **HTTPS** (build with `--features tls`, which adds rustls): serve HTTPS with
-  `--tls-cert cert.pem --tls-key key.pem`, and fetch `https://` sources (`SSL_CERT_FILE` adds
-  certificate authorities to trust, such as a company CA). The library also has an ACME client
-  (`graphrd::acme`: certificates from Let's Encrypt with HTTP-01 challenges) and an HTTPS server
-  that picks the certificate by server name. The default build stays free of third-party
-  crates and still fetches `http://` URLs.
-- **Loading from the web**: SPARQL `LOAD <url> [INTO GRAPH <g>]` and import-from-URL download RDF
-  (content type, then file extension decide the format; redirects are followed).
-- **Security** (optional, `--auth admin:password`): multiple users with roles
-  (`ROLE_ADMIN`, `ROLE_REPO_MANAGER`, `ROLE_USER`) and per-repository `READ_REPO_<id>` /
-  `WRITE_REPO_<id>` grants, managed through `/rest/security/users` or the Users page; HTTP Basic or
-  `Authorization: Bearer <token>` from `/rest/login`. Passwords are stored salted and iterated. Also API keys for
-  programs, OpenID Connect access tokens (`--oidc-issuer`, tested with Keycloak), LDAP sign-in
-  (`--ldap-url`, tested with OpenLDAP) and a JSONL audit log (`--audit-log`); see
-  [docs/security.md](docs/security.md).
+- **One binary**: the server, the web UI, the CLI and the offline tools — no runtime, no
+  services to babysit.
+- **Full SPARQL 1.1 Query and Update**, plus RDF 1.2 and SPARQL 1.2 (triple terms,
+  annotations, base direction); the official W3C suites pass (see the table below).
+- **Reasoning included**: RDFS to OWL 2 RL rulesets, incremental retraction, query-time
+  inference, custom `.pie` rules.
+- **Search beyond patterns**: BM25 full-text with typo tolerance and stemming (English,
+  Turkish), vector (HNSW) and geospatial search with a spatial index, OpenSearch/Elasticsearch
+  connectors, RDF Rank.
+- **Every way in**: repository REST protocol, SPARQL 1.1 Protocol, GraphQL with a schema
+  derived from the data, SQL over the PostgreSQL wire protocol, questions in plain language,
+  a web UI.
+- **Engineered for durability and concurrency**: LSM storage with a fsynced write-ahead log,
+  snapshot isolation (MVCC), time travel, Raft clustering.
+- **Java client libraries on Maven Central**: `org.graphrd:graphrd-client` (zero dependencies)
+  and `org.graphrd:graphrd-spring-data` (Spring Data repositories + Spring Boot starter).
 
 ## Quick start
 
@@ -193,7 +92,7 @@ docker build -t graphrd .
 docker run -d -p 7200:7200 -v graphrd-data:/data -e GRAPHRD_AUTH=admin:change-me graphrd
 ```
 
-### Using it from the command line
+### From the command line
 
 ```bash
 # create a repository with RDFS-Plus inference
@@ -215,8 +114,8 @@ curl -X POST localhost:7200/repositories/zoo/statements \
 
 Offline tools work on a data directory without a server (it is locked while they run). `load`
 adds statements in bulk: files are parsed on all cores and each index gets one sorted run, without
-the write-ahead log; the new manifest commits each batch at once, so a crash leaves the data as it
-was (about 1.5 million lines/s on 4 cores; repositories that validate SHACL load through the
+the write-ahead log; the new manifest commits each batch at once, so a crash leaves the data as
+it was (about 1.5 million lines/s on 4 cores; repositories that validate SHACL load through the
 checked path):
 
 ```bash
@@ -232,28 +131,167 @@ graphrd serve --data db --read-only --cors --timeout 30 # query-only public endp
 graphrd serve --memory                                  # nothing on disk; data ends with the process
 ```
 
-## HTTP API
+## Features
 
-**Repository protocol** (`/repositories`): repository list; query and update endpoint
-(`query`, `update`, `infer`, `timeout`, `default-graph-uri`, `named-graph-uri`, plus
-`limit`/`offset` paging); `/statements` GET/POST/PUT/DELETE with `subj`/`pred`/`obj`/`context` filters;
-`/size`, `/contexts`, `/namespaces`; SPARQL Graph Store protocol at `/rdf-graphs/service`;
-`PUT /repositories/{id}` to create a repository; `/protocol`. `POST /statements?lenient=true` skips
-statements that do not parse and answers `{"added", "skipped", "errors"}` (imports: `"lenient": true`).
+### Query and update
 
-**SPARQL 1.1 Protocol** at the standard names: `/sparql` (also `/query`, `/update`) answers the
-default repository (`serve --default-repo`, else the only repository, else `default`), and
-`/repositories/{id}/sparql` any repository; `using-graph-uri`/`using-named-graph-uri` for updates.
-A GET without a query returns the SPARQL 1.1 Service Description.
+- **SPARQL 1.1 Query and Update**: SELECT, ASK, CONSTRUCT, DESCRIBE; OPTIONAL, UNION, MINUS,
+  FILTER, BIND, VALUES, sub-queries, property paths (`/ | ^ * + ? !`), GROUP BY / HAVING with
+  COUNT, SUM, AVG, MIN, MAX, SAMPLE, GROUP_CONCAT, and the built-in function library (string,
+  numeric, date/time, hash, regex). All update operations, including DELETE/INSERT WHERE, WITH,
+  USING, CLEAR, DROP, ADD, MOVE and COPY. Federated queries: `SERVICE <endpoint> { … }` (and
+  `SERVICE ?var`, `SERVICE SILENT`) send the block to any SPARQL 1.1 endpoint and join its results.
+- **RDF 1.2 and SPARQL 1.2**: triple terms `<<( s p o )>>`, reified triples `<< s p o ~ :id >>`
+  (a reifier with `rdf:reifies`), annotations `{| … |}` with any number of reifiers, literals with a
+  base direction (`"text"@ar--rtl`, `rdf:dirLangString`), `VERSION`, in every syntax (Turtle, TriG,
+  N-Triples, N-Quads, RDF/XML with `rdf:parseType="Triple"`, `rdf:annotation` and `its:dir`) and in
+  queries, templates and updates, with `TRIPLE`, `SUBJECT`, `PREDICATE`, `OBJECT`, `isTRIPLE`,
+  `LANGDIR`, `hasLANG`, `hasLANGDIR` and `STRLANGDIR`. As in RDF 1.2, `<< s p o >>` is a reified
+  triple (it denotes a reifier), not the triple itself as in the older RDF-star drafts; data
+  stored with RDF-star subjects stays readable.
 
-**Monitoring**: `GET /metrics` in the Prometheus text format (query/update/WAL fsync latency
-histograms, responses, block cache hits, statements per repository, cluster state);
-`serve --slow-query <ms>` logs slow queries and updates (`/rest/monitor/slow-queries`, Monitoring page).
+### Reasoning
 
-**Management REST API** (`/rest`): repository management (`/rest/repositories`, `default-config`, `size`,
-`restart`), import (`import/upload/text|file|url`, `import/server`), saved queries
-(`/rest/sparql/saved-queries`), locations, security and login, version and monitoring
-endpoints.
+- **Inference** by forward chaining with the rulesets `rdf`, `rdfs`, `rdfsplus`, `owl-horst`, `owl2-rl`,
+  their `-optimized` variants, and `owl-max` / `owl2-*` aliases. Explicit and inferred statements are
+  kept apart: queries take `infer=false`, and the `graph:explicit` / `graph:implicit` pseudo-graphs
+  are supported. Deleting a fact retracts what was derived from it. `infer=at-query` infers at
+  query time by backward chaining instead, with nothing stored.
+- **Custom rulesets** in the `.pie` rule format (`Prefices`, `Axioms`, `Rules` with `Id:`
+  blocks and `[Constraint a != b]`): set the repository's ruleset to the path of a `.pie` file.
+
+### Search
+
+- **Full-text search**: set `enableFtsIndex` on a
+  repository and query with `?literal g:fts "query"` (the prefixes `g:` = `http://graphrd.org/fn#`,
+  `graph:` and `rank:` are predefined). The query language supports words (all
+  must match, any inflection: English Porter and Turkish stemming), `"exact phrases"`, `prefix*`,
+  `word~` (typo-tolerant, edit distance up to 2), `a OR b` and `-exclusions`; a query that finds
+  nothing is retried typo-tolerant. `g:ftsScore(?literal, "query")` gives the BM25 score,
+  `g:ftsHighlight(?literal, "query")` the text with the matching words marked, and
+  `GET /rest/repositories/{id}/search?query=…&facet=<predicate>` hits, highlights and facet counts.
+  Postings live in their own LSM index, are maintained on every write, and can be built over
+  existing data.
+- **Vector search**: embeddings stored as `g:vector` literals are indexed in an HNSW graph;
+  `?v g:knn ?q` finds the nearest (p95 1.5 ms over a million vectors), `g:similarity` scores them,
+  and both combine with full-text search for hybrid ranking. See [docs/vectors.md](docs/vectors.md).
+- **GeoSPARQL 1.1 functions** (`geof:` = `http://www.opengis.net/def/function/geosparql/`) over
+  `geo:wktLiteral` and `geo:geoJSONLiteral` values (CRS84, EPSG:4326/4258/4269, Web Mercator and
+  WGS 84 / UTM zones): the Simple Features (`sfEquals`,
+  `sfDisjoint`, `sfIntersects`, `sfTouches`, `sfCrosses`, `sfWithin`, `sfContains`, `sfOverlaps`),
+  Egenhofer (`eh*`) and RCC8 (`rcc8*`) relation families, `relate` with a DE-9IM pattern,
+  `intersection`, `union`, `difference`, `symDifference`, `envelope`, `convexHull`, `centroid`,
+  `boundary`, `dimension`, `coordinateDimension`, `spatialDimension`, `isEmpty`, `isSimple`,
+  `asWKT`, `asGeoJSON`, `getSRID`, `minX`/`minY`/`maxX`/`maxY`, `numGeometries`, and `distance`,
+  `area`, `length`, `perimeter` in metres (or another `uom:` unit) on the sphere. The geometry
+  engine is GraphRD's own and is checked against GEOS on random geometries (DE-9IM matrices and
+  set operations agree on 10,000 pairs). Topology is planar in coordinate space, as with most
+  GeoSPARQL implementations. A spatial index over every geometry literal answers relation and
+  `distance < r` filters against a geometry without trying every geometry (100,000 geometries:
+  0.4-3 ms instead of ~500 ms; see [docs/geosparql.md](docs/geosparql.md#spatial-index)).
+- **Search connectors**: entities of chosen classes kept in an OpenSearch or Elasticsearch index
+  as the data changes, and searched from SPARQL with `?e <http://graphrd.org/connector/NAME> "query"`.
+  See [docs/connectors.md](docs/connectors.md).
+- **RDF Rank**: `POST /rest/rank/compute` runs PageRank over the links between resources;
+  query scores with `?node rank:score ?score` (or `score3`/`score5` for rounded
+  values). The status turns OUTDATED when data changes.
+- **Autocomplete**: `/rest/autocomplete/query?q=` suggests IRIs by local-name prefix (used by
+  the Explore search box), from an index rebuilt only after data changes.
+
+### Questions in plain language
+
+With an endpoint, key and model (`--llm-url`, `--llm-key`, `--llm-model`), or just
+`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment, a language model (Claude through the
+Anthropic Messages API, or any OpenAI-compatible server, local ones included) writes the SPARQL
+for a question from a summary of the repository's classes and properties; GraphRD accepts only
+read queries without `SERVICE`, retries once on a parse error, and can run the query:
+`POST /rest/repositories/{id}/nl-query` ([docs/nl-query.md](docs/nl-query.md)).
+
+### Access protocols
+
+- **GraphQL without writing a schema**: `POST /rest/repositories/{id}/graphql` with
+  `{"query": "...", "variables": {...}}`. The schema is derived from the data: every class is a
+  query field, every predicate a field named by its local name, links nest. Root fields take
+  `id`, `where`, `limit`, `offset`, `orderBy` and `desc`; `?sdl` returns the derived schema.
+  Mutations `createT` / `updateT` / `deleteT` write through the same schema, one transaction per
+  request (SHACL-checked); the web UI has a GraphQL page.
+- **SQL over the PostgreSQL protocol** (`--pg-port 5432`): connect with psql, psycopg, JDBC or BI
+  tools; the database name is the repository. Tables are classes, columns are `id` plus
+  predicates: `SELECT name, age FROM Person WHERE age > 30 ORDER BY age DESC LIMIT 10`,
+  `COUNT(*)`, `LIKE`, `IS NULL`, `SHOW TABLES`, `information_schema`, and
+  `SELECT * FROM sparql('…')` for any SPARQL query, `[LEFT] JOIN … ON a = b`, `CREATE VIEW`
+  (kept in the repository), and `INSERT` / `UPDATE` / `DELETE` (one transaction each,
+  SHACL-checked, replicated in a cluster). Simple and extended (prepared) protocol, text and
+  binary parameters; same users and permissions as HTTP.
+- **HTTP API**: the repository protocol (`/repositories`) — query and update endpoint,
+  `/statements`, `/size`, `/contexts`, `/namespaces`, the SPARQL Graph Store protocol at
+  `/rdf-graphs/service` — the standard SPARQL 1.1 Protocol at `/sparql` and
+  `/repositories/{id}/sparql` (a GET without a query returns the Service Description), and a
+  management REST API under `/rest` (repositories, import, saved queries, locations, security
+  and login, version, monitoring). See [docs/http-api.md](docs/http-api.md).
+- **Loading from the web**: SPARQL `LOAD <url> [INTO GRAPH <g>]` and import-from-URL download RDF
+  (content type, then file extension decide the format; redirects are followed).
+
+### Data and validation
+
+- **Formats**: Turtle(-star), TriG(-star), N-Triples(-star), N-Quads(-star), RDF/XML (including DTD
+  entities) and JSON-LD for import and export, and Notation3 (N3) for import, with formulas as
+  blank-node named graphs; SPARQL results as JSON, XML, CSV and TSV.
+- **SHACL validation** (`isShacl` repository setting): shapes are loaded into the
+  shapes graph (`urn:graphrd:shapes`). Every write is validated for the nodes it
+  touches (and nodes linking to them); a violating write is rolled back and answered with a 400 and
+  the validation report. All of SHACL Core (complex paths, `and`/`or`/`not`/`xone`, `node`,
+  qualified value shapes, property pairs, `closed`, `languageIn`, `uniqueLang`, severities) and
+  SHACL-SPARQL (`sh:sparql`, SPARQL-based constraint components); the W3C SHACL test suite passes
+  120/120. `graphrd validate --shapes S DATA...` validates files offline.
+  `GET /rest/repositories/{id}/shacl/validate` reports on the whole
+  repository (JSON, or Turtle `sh:ValidationReport`).
+- **Backup and restore**: `GET /rest/recovery/backup` returns a tar archive with every
+  repository's configuration, namespaces and statements; `POST /rest/recovery/restore` brings
+  them back (also from the Repositories page).
+
+### Storage engine
+
+- **Disk-based storage**: dictionary-encoded quads in four LSM indexes (SPOG, POSG, OSPG, GSPO).
+  Writes go to a write-ahead log and an in-memory memtable; checkpoints fold them into immutable,
+  block-indexed run files that are merged in a size-tiered way. Terms live in an on-disk dictionary
+  with a hash index. Memory use is bounded by the memtable and caches, not by the data size, and
+  inferred statements are persisted, so restarts are instant.
+- **Snapshot isolation (MVCC)**: every query runs on a consistent snapshot of the repository and
+  never waits for a writer; writers never wait for readers. A snapshot costs a few reference-count
+  increments: memtables are frozen into immutable sorted levels and run files are shared.
+- **Time travel**: with the `historyRetention` repository setting (e.g. `7d`), a query takes
+  `as-of=<dateTime>` and runs on the repository as it was then (`graphrd query --as-of` offline);
+  see [docs/sparql.md](docs/sparql.md#time-travel).
+
+### Operations
+
+- **Web UI** at `/`: repositories and rulesets, a SPARQL editor with highlighting and saved queries,
+  file/text/server-side import, a resource and class-hierarchy explorer, named graphs, namespaces,
+  light and dark themes, and a visual graph explorer of its own (canvas rendering, Barnes–Hut
+  force layout plus radial and hierarchy layouts, neighbourhood highlighting, search, minimap,
+  context menu and PNG export; thousands of nodes) for a resource, a named graph or the schema.
+- **Security** (optional, `--auth admin:password`): multiple users with roles
+  (`ROLE_ADMIN`, `ROLE_REPO_MANAGER`, `ROLE_USER`) and per-repository `READ_REPO_<id>` /
+  `WRITE_REPO_<id>` grants, managed through `/rest/security/users` or the Users page; HTTP Basic or
+  `Authorization: Bearer <token>` from `/rest/login`. Passwords are stored salted and iterated. Also API keys for
+  programs, OpenID Connect access tokens (`--oidc-issuer`, tested with Keycloak), LDAP sign-in
+  (`--ldap-url`, tested with OpenLDAP) and a JSONL audit log (`--audit-log`); see
+  [docs/security.md](docs/security.md).
+- **HTTPS** (build with `--features tls`, which adds rustls): serve HTTPS with
+  `--tls-cert cert.pem --tls-key key.pem`, and fetch `https://` sources (`SSL_CERT_FILE` adds
+  certificate authorities to trust, such as a company CA). The library also has an ACME client
+  (`graphrd::acme`: certificates from Let's Encrypt with HTTP-01 challenges) and an HTTPS server
+  that picks the certificate by server name. The default build stays free of third-party
+  crates and still fetches `http://` URLs.
+- **Monitoring**: `GET /metrics` in the Prometheus text format (query/update/WAL fsync latency
+  histograms, responses, block cache hits, statements per repository, cluster state);
+  `serve --slow-query <ms>` logs slow queries and updates (`/rest/monitor/slow-queries`, Monitoring page).
+- **Clustering**: `--cluster`, `--node-id` and `--cluster-secret` make a Raft cluster: every
+  server holds all the data, followers forward writes to the leader, and a change counts once a
+  majority has it. Followers answer reads from their own copy, which may lag a moment behind; a
+  read with the header `X-GraphRD-Consistency: leader` is answered by the leader and sees every
+  acknowledged write.
 
 ## Architecture
 
@@ -281,23 +319,6 @@ joins, property paths and full-text phrase queries answer in 0.1–0.3 ms; a dur
 group commit (850 commits/s with 8 writers); three servers load 285k triples/s combined; a
 three-node Raft cluster serves 4,942 mixed QPS across its nodes.
 
-## Security
-
-- Users and roles with per-repository read and write grants; passwords salted and iterated.
-- A user is locked for 15 minutes after 10 wrong passwords; login tokens expire after 12 hours.
-- The HTTP server takes `set_limits` (largest request body, most connections at once) for
-  embedding in a service that faces the internet.
-- XML input: entity expansion is capped (no "billion laughs"), nesting depth too.
-- The UI never triggers the browser's own login prompt; it shows its sign-in form.
-
-## Cluster
-
-`--cluster`, `--node-id` and `--cluster-secret` make a Raft cluster: every server holds all the
-data, followers forward writes to the leader, and a change counts once a majority has it.
-Followers answer reads from their own copy, which may lag a moment behind; a read with the
-header `X-GraphRD-Consistency: leader` is answered by the leader and sees every acknowledged
-write.
-
 ## Durability
 
 Every transaction is appended to a write-ahead log with a commit marker and fsynced before the
@@ -309,6 +330,15 @@ A SPARQL update request is applied completely or not at all: if one of its opera
 the ones before it are undone. Embedded use can also commit without waiting for the disk
 (`StoreLock::write_relaxed`, for records such as logs) and wait for everything with
 `StoreLock::sync`.
+
+## Security
+
+- Users and roles with per-repository read and write grants; passwords salted and iterated.
+- A user is locked for 15 minutes after 10 wrong passwords; login tokens expire after 12 hours.
+- The HTTP server takes `set_limits` (largest request body, most connections at once) for
+  embedding in a service that faces the internet.
+- XML input: entity expansion is capped (no "billion laughs"), nesting depth too.
+- The UI never triggers the browser's own login prompt; it shows its sign-in form.
 
 ## Limitations
 
@@ -365,6 +395,8 @@ Run them by name: `entailment`, `service`. Not covered: OWL 2 Direct Semantics a
 (they need a description logic reasoner). RDF 1.2
 and SPARQL 1.2 are W3C drafts; the suites are those of the drafts at the time of testing.
 
+### Production suite
+
 The production suite (`tests/prod/run.sh`, about 2 minutes; `FULL=1` for long runs) drives real
 server processes:
 
@@ -379,6 +411,23 @@ server processes:
 
 ## Client libraries
 
-The Java client and its Spring Data module live in their own repositories:
-[graphrd-client](https://github.com/halilugur/graphrd-client) and
-[graphrd-spring-data](https://github.com/halilugur/graphrd-spring-data).
+**Java**, on Maven Central — source, documentation and tests in their own repositories:
+
+- [graphrd-client](https://github.com/halilugur/graphrd-client) — the pure-Java client,
+  zero dependencies: SPARQL, statements in any RDF format, repository management and a
+  JPA-shaped object mapper (`org.graphrd:graphrd-client`).
+- [graphrd-spring-data](https://github.com/halilugur/graphrd-spring-data) — Spring Data
+  repositories and the Spring Boot starter on top of the client
+  (`org.graphrd:graphrd-spring-data`; the client comes with it).
+
+```xml
+<dependency>
+  <groupId>org.graphrd</groupId>
+  <artifactId>graphrd-spring-data</artifactId>
+  <version>1.0.0</version>
+</dependency>
+```
+
+## License
+
+[Apache-2.0](LICENSE)
