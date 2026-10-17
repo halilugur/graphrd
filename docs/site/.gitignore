@@ -2,3 +2,5 @@
 index.html
 llms.txt
 llms-full.txt
+# ...but the custom-domain record is source, not output
+!CNAME
