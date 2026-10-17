@@ -13,7 +13,7 @@
 | [GeoSPARQL](geosparql.md) | geometry literals, function families, units, limits |
 | [SHACL](shacl.md) | `isShacl`, shapes graph, supported constraints, reports |
 | [GraphQL](graphql.md) | the schema derived from the data, arguments, `?sdl` |
-| [Questions in plain language](nl-query.md) | SPARQL written by a language model (Anthropic or OpenAI-compatible), checked and run |
+| [AI queries — questions in plain language](nl-query.md) | SPARQL written by a language model (Anthropic or OpenAI-compatible), checked and run |
 | [SQL](sql.md) | `--pg-port`, tables and columns, supported SQL, `sparql()` |
 | [Formats](formats.md) | RDF formats, RDF 1.2 syntaxes, canonical N-Quads, result formats, content negotiation |
 | [Administration](admin.md) | users and permissions, backup and restore, monitoring and metrics, upkeep |

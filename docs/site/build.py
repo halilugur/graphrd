@@ -19,7 +19,7 @@ PAGES = [
     ("sparql", "SPARQL", "code", "Interfaces"),
     ("graphql", "GraphQL", "tri", "Interfaces"),
     ("sql", "SQL", "db", "Interfaces"),
-    ("nl-query", "Questions in plain language", "spark", "Interfaces"),
+    ("nl-query", "AI queries", "spark", "Interfaces"),
     ("formats", "Formats", "layers", "Interfaces"),
     ("examples", "Examples", "box", "Interfaces"),
     ("inference", "Inference", "branch", "Knowledge"),

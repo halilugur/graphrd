@@ -56,8 +56,10 @@ katkı rehberinde.
   Turkish), vector (HNSW) and geospatial search with a spatial index, OpenSearch/Elasticsearch
   connectors, RDF Rank.
 - **Every way in**: repository REST protocol, SPARQL 1.1 Protocol, GraphQL with a schema
-  derived from the data, SQL over the PostgreSQL wire protocol, questions in plain language,
-  a web UI.
+  derived from the data, SQL over the PostgreSQL wire protocol, a web UI.
+- **AI queries**: ask in plain language — a language model (Claude or any OpenAI-compatible
+  server, local ones included) writes the SPARQL, GraphRD checks and runs it; read queries
+  only, so the model can never change the data.
 - **Engineered for durability and concurrency**: LSM storage with a fsynced write-ahead log,
   snapshot isolation (MVCC), time travel, Raft clustering.
 - **Java client libraries on Maven Central**: `org.graphrd:graphrd-client` (zero dependencies)
@@ -198,14 +200,17 @@ graphrd serve --memory                                  # nothing on disk; data 
 - **Autocomplete**: `/rest/autocomplete/query?q=` suggests IRIs by local-name prefix (used by
   the Explore search box), from an index rebuilt only after data changes.
 
-### Questions in plain language
+### AI queries — questions in plain language
 
 With an endpoint, key and model (`--llm-url`, `--llm-key`, `--llm-model`), or just
 `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` in the environment, a language model (Claude through the
 Anthropic Messages API, or any OpenAI-compatible server, local ones included) writes the SPARQL
 for a question from a summary of the repository's classes and properties; GraphRD accepts only
 read queries without `SERVICE`, retries once on a parse error, and can run the query:
-`POST /rest/repositories/{id}/nl-query` ([docs/nl-query.md](docs/nl-query.md)).
+`POST /rest/repositories/{id}/nl-query` ([docs/nl-query.md](docs/nl-query.md)). In the web UI
+this is the AI Assistant page: the query appears in the editor as the model writes it, and the
+answer arrives with the query's results. The boundary is deliberate: the model can read through
+GraphRD, never write — write paths (SPARQL updates, SQL, mutations) stay model-free.
 
 ### Access protocols
 

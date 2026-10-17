@@ -1,4 +1,4 @@
-# Questions in plain language
+# AI queries — questions in plain language
 
 GraphRD can answer a question written in plain language ("Which people over 30 work for ACME?")
 by having a language model write the SPARQL query, checking that query, and running it. It is off

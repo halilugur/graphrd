@@ -11,7 +11,7 @@ Docs:
 - [SPARQL](https://graphrd.org/sparql.md): GraphRD implements SPARQL 1.1 Query and Update completely, SPARQL 1.2 (the W3C draft), and a few
 - [GraphQL](https://graphrd.org/graphql.md): Every repository answers GraphQL queries with a schema derived from its data: no schema to write
 - [SQL over the PostgreSQL protocol](https://graphrd.org/sql.md): With --pg-port, GraphRD also speaks the PostgreSQL wire protocol (version 3), so psql, psycopg,
-- [Questions in plain language](https://graphrd.org/nl-query.md): GraphRD can answer a question written in plain language ("Which people over 30 work for ACME?")
+- [AI queries — questions in plain language](https://graphrd.org/nl-query.md): GraphRD can answer a question written in plain language ("Which people over 30 work for ACME?")
 - [Formats](https://graphrd.org/formats.md)
 - [Examples](https://graphrd.org/examples.md): Runnable programs that talk to a running GraphRD server — in the repository's
 - [Inference](https://graphrd.org/inference.md): Each repository has a ruleset. When statements are added, GraphRD derives what follows from them
