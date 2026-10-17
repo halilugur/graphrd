@@ -323,6 +323,7 @@ fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
     #[cfg(windows)]
     {
         // seek + write, then restore the position the caller relies on
+        use std::io::Seek;
         let pos = f.stream_position()?;
         f.seek(std::io::SeekFrom::Start(at))?;
         let zeros = vec![0u8; 1 << 20];
