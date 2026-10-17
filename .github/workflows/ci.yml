@@ -38,6 +38,29 @@ jobs:
       - name: Unit and integration tests
         run: cargo test --lib --release
 
+
+  suites:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Build
+        run: cargo build --release --locked
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -46,7 +69,7 @@ jobs:
       - name: W3C suites (SPARQL, SHACL, RDF 1.2)
         run: |
           git clone --depth 1 https://github.com/w3c/rdf-tests.git ../rdf-tests
-          python3 tests/w3c/run.py ../rdf-tests --verbose | tail -5
+          python3 tests/w3c/run.py ../rdf-tests
 
       - name: Docs examples check
         run: python3 tests/docs/check_examples.py target/release/graphrd

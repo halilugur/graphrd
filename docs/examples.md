@@ -88,16 +88,18 @@ GraphRD, built on the client library below.
 
 What asking it looks like:
 
-```bash
-curl "localhost:8080/employees?minAge=30&company=http%3A%2F%2Fexample.org%2Fcompany%2Facme"
-# → {"items":[{"name":"Alice", "companyName":"Acme", …}], "total":1, "page":0, "size":20}
+These are the answers of the showcase's own API (`mvn spring-boot:run`, port
+8080), not of the GraphRD server (7200) — shown here as documentation:
 
-curl -X POST "localhost:8080/employees/raise?id=http%3A%2F%2F…%2Falice" \
-     -H 'Content-Type: application/json' -d '{"amount":9000,"reason":"promotion"}'
-# → Alice at 91000 — and a SalaryReview on record
+```
+GET /employees?minAge=30&company=http%3A%2F%2Fexample.org%2Fcompany%2Facme
+→ {"content":[{"name":"Alice", "companyName":"Acme", …}], "page":{"totalElements":1, …}}
 
-curl localhost:8080/reports/payroll
-# → Acme: 2 people, 143000 total, 71500 average — a GROUP BY the server ran
+POST /employees/raise?id=…%2Falice  {"amount":9000,"reason":"promotion"}
+→ Alice at 91000 — and a SalaryReview on record
+
+GET /reports/payroll
+→ Acme: 2 people, 143000 total, 71500 average — a GROUP BY the server ran
 ```
 
 ## The same employee also comes out as RDF — content negotiation picks the
