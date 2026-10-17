@@ -320,7 +320,21 @@ fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
             off += n as u64;
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        // seek + write, then restore the position the caller relies on
+        let pos = f.stream_position()?;
+        f.seek(std::io::SeekFrom::Start(at))?;
+        let zeros = vec![0u8; 1 << 20];
+        let mut left = len;
+        while left > 0 {
+            let n = (left as usize).min(zeros.len());
+            f.write_all(&zeros[..n])?;
+            left -= n as u64;
+        }
+        f.seek(std::io::SeekFrom::Start(pos))?;
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = (f, at, len);
     Ok(())
 }
@@ -2761,12 +2775,15 @@ mod tests {
             .unwrap();
             std::mem::forget(st); // a crash: no checkpoint on the way out
         }
-        // simulate a crash in the middle of writing a third transaction
+        // simulate a crash in the middle of writing a third transaction; the
+        // WAL's zero-filled ahead region is at least as large as a commit, but
+        // never assume its capacity — replace the tail explicitly
         let path = dir.join("wal.log");
-        let mut bytes = fs::read(&path).unwrap();
+        let bytes = fs::read(&path).unwrap();
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         let torn = b"- <c> <p> <d> .\n+ <x> <p> <y> .\n+ <z> <p";
-        bytes[end..end + torn.len()].copy_from_slice(torn);
+        let mut bytes = bytes[..end].to_vec();
+        bytes.extend_from_slice(torn);
         fs::write(&path, bytes).unwrap();
         let st = Store::open(&dir).unwrap();
         let has = |s: &str| {
