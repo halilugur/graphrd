@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build GraphRD's documentation as one HTML file in the app's own UI style.
 
-Reads the repo's docs/*.md and writes /tmp/grd-docs/index.html — the same
+Reads the repo's docs/*.md and writes index.html next to itself — the same
 shell, sidebar, panels, tables and code editor look as ui/style.css.
 """
 import html
