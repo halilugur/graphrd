@@ -308,7 +308,7 @@ impl Manifest {
 }
 
 /// Zero-fill `len` bytes of `f` from `at`, without moving its write position.
-fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
+fn preallocate(file: &File, at: u64, len: u64) -> io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::FileExt;
@@ -316,7 +316,7 @@ fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
         let mut off = 0;
         while off < len {
             let n = (len - off).min(zeros.len() as u64) as usize;
-            f.write_all_at(&zeros[..n], at + off)?;
+            file.write_all_at(&zeros[..n], at + off)?;
             off += n as u64;
         }
     }
@@ -324,6 +324,7 @@ fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
     {
         // seek + write, then restore the position the caller relies on
         use std::io::Seek;
+        let mut f = file;
         let pos = f.stream_position()?;
         f.seek(std::io::SeekFrom::Start(at))?;
         let zeros = vec![0u8; 1 << 20];
@@ -336,7 +337,7 @@ fn preallocate(f: &File, at: u64, len: u64) -> io::Result<()> {
         f.seek(std::io::SeekFrom::Start(pos))?;
     }
     #[cfg(not(any(unix, windows)))]
-    let _ = (f, at, len);
+    let _ = (file, at, len);
     Ok(())
 }
 
