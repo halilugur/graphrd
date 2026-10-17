@@ -8,9 +8,9 @@ RDF parsers and serializers, storage, SPARQL engine and reasoner are all impleme
 standard library. It speaks the **repository REST protocol** and has its own **management REST API**, so
 existing repository clients work against it, and it ships its own web UI inside the binary.
 
-**Documentation:** [docs/](docs/README.md) — [getting started](docs/getting-started.md),
+**Documentation:** <https://graphrd.org> — [getting started](docs/getting-started.md),
 [command line](docs/cli.md), [HTTP API](docs/http-api.md), [SPARQL](docs/sparql.md),
-[inference](docs/inference.md), [administration](docs/admin.md) and more.
+[inference](docs/inference.md), [administration](docs/admin.md) and more, under [docs/](docs/README.md).
 
 <details>
 <summary><b>Türkçe özet</b></summary>

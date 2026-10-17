@@ -5,25 +5,25 @@
 
 Docs:
 
-- [Getting started](https://graphrd.example/getting-started.md): GraphRD is a single binary: the server, the web UI and the offline tools. This page takes you from
-- [Command line](https://graphrd.example/cli.md)
-- [HTTP API](https://graphrd.example/http-api.md): GraphRD answers four families of requests on one port (default 7200):
-- [SPARQL](https://graphrd.example/sparql.md): GraphRD implements SPARQL 1.1 Query and Update completely, SPARQL 1.2 (the W3C draft), and a few
-- [GraphQL](https://graphrd.example/graphql.md): Every repository answers GraphQL queries with a schema derived from its data: no schema to write
-- [SQL over the PostgreSQL protocol](https://graphrd.example/sql.md): With --pg-port, GraphRD also speaks the PostgreSQL wire protocol (version 3), so psql, psycopg,
-- [Questions in plain language](https://graphrd.example/nl-query.md): GraphRD can answer a question written in plain language ("Which people over 30 work for ACME?")
-- [Formats](https://graphrd.example/formats.md)
-- [Examples](https://graphrd.example/examples.md): Runnable programs that talk to a running GraphRD server — in the repository's
-- [Inference](https://graphrd.example/inference.md): Each repository has a ruleset. When statements are added, GraphRD derives what follows from them
-- [Full-text search](https://graphrd.example/fts.md): GraphRD can index the words of every literal and find literals by a text query, inside SPARQL.
-- [Search connectors](https://graphrd.example/connectors.md): A connector keeps a repository's entities of chosen classes in an OpenSearch (or Elasticsearch)
-- [Vector search](https://graphrd.example/vectors.md): GraphRD indexes embedding vectors stored as literals and finds the nearest ones from SPARQL, so
-- [GeoSPARQL](https://graphrd.example/geosparql.md): GraphRD implements the GeoSPARQL 1.1 functions over geometry literals with a geometry engine of
-- [SHACL validation](https://graphrd.example/shacl.md): A repository with isShacl on validates every write against SHACL shapes and refuses writes that
-- [Administration](https://graphrd.example/admin.md)
-- [Cluster](https://graphrd.example/cluster.md): Several GraphRD servers form a cluster with the Raft consensus protocol. Every node holds all the
-- [Storage](https://graphrd.example/storage.md): This page describes how a repository keeps its data: the files, the indexes, the dictionary,
-- [Performance](https://graphrd.example/performance.md)
-- [Security](https://graphrd.example/security.md)
+- [Getting started](https://graphrd.org/getting-started.md): GraphRD is a single binary: the server, the web UI and the offline tools. This page takes you from
+- [Command line](https://graphrd.org/cli.md)
+- [HTTP API](https://graphrd.org/http-api.md): GraphRD answers four families of requests on one port (default 7200):
+- [SPARQL](https://graphrd.org/sparql.md): GraphRD implements SPARQL 1.1 Query and Update completely, SPARQL 1.2 (the W3C draft), and a few
+- [GraphQL](https://graphrd.org/graphql.md): Every repository answers GraphQL queries with a schema derived from its data: no schema to write
+- [SQL over the PostgreSQL protocol](https://graphrd.org/sql.md): With --pg-port, GraphRD also speaks the PostgreSQL wire protocol (version 3), so psql, psycopg,
+- [Questions in plain language](https://graphrd.org/nl-query.md): GraphRD can answer a question written in plain language ("Which people over 30 work for ACME?")
+- [Formats](https://graphrd.org/formats.md)
+- [Examples](https://graphrd.org/examples.md): Runnable programs that talk to a running GraphRD server — in the repository's
+- [Inference](https://graphrd.org/inference.md): Each repository has a ruleset. When statements are added, GraphRD derives what follows from them
+- [Full-text search](https://graphrd.org/fts.md): GraphRD can index the words of every literal and find literals by a text query, inside SPARQL.
+- [Search connectors](https://graphrd.org/connectors.md): A connector keeps a repository's entities of chosen classes in an OpenSearch (or Elasticsearch)
+- [Vector search](https://graphrd.org/vectors.md): GraphRD indexes embedding vectors stored as literals and finds the nearest ones from SPARQL, so
+- [GeoSPARQL](https://graphrd.org/geosparql.md): GraphRD implements the GeoSPARQL 1.1 functions over geometry literals with a geometry engine of
+- [SHACL validation](https://graphrd.org/shacl.md): A repository with isShacl on validates every write against SHACL shapes and refuses writes that
+- [Administration](https://graphrd.org/admin.md)
+- [Cluster](https://graphrd.org/cluster.md): Several GraphRD servers form a cluster with the Raft consensus protocol. Every node holds all the
+- [Storage](https://graphrd.org/storage.md): This page describes how a repository keeps its data: the files, the indexes, the dictionary,
+- [Performance](https://graphrd.org/performance.md)
+- [Security](https://graphrd.org/security.md)
 
-- [Full documentation](https://graphrd.example/llms-full.txt): every page in one file
+- [Full documentation](https://graphrd.org/llms-full.txt): every page in one file
