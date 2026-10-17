@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use super::{Literal, Quad, Term, RDF_LANGSTRING, XSD_STRING};
+use super::{Literal, Quad, RDF_LANGSTRING, Term, XSD_STRING};
 
 /// Parse N-Triples (`quads` off) or N-Quads; blank node labels kept or renewed.
 pub fn parse(text: &str, quads: bool, keep_labels: bool) -> Result<Vec<Quad>, String> {
@@ -24,14 +24,31 @@ pub fn parse_lenient(text: &str, quads: bool, skipped: &mut Vec<String>) -> Vec<
 /// One part of a larger document (parallel bulk loading): blank node labels are kept as
 /// written, so the caller can map them consistently across parts. With `skipped`, lines
 /// that do not parse are skipped and their errors recorded.
-pub fn parse_part(text: &str, quads: bool, skipped: Option<&mut Vec<String>>) -> Result<Vec<Quad>, String> {
+pub fn parse_part(
+    text: &str,
+    quads: bool,
+    skipped: Option<&mut Vec<String>>,
+) -> Result<Vec<Quad>, String> {
     let mut out = Vec::new();
     parse_into(text, quads, true, skipped, &mut out)?;
     Ok(out)
 }
 
-fn parse_into(text: &str, quads: bool, keep_labels: bool, mut skipped: Option<&mut Vec<String>>, out: &mut Vec<Quad>) -> Result<(), String> {
-    let mut p = Parser { s: text.as_bytes(), i: 0, line: 1, quads, keep_labels, bnodes: HashMap::new() };
+fn parse_into(
+    text: &str,
+    quads: bool,
+    keep_labels: bool,
+    mut skipped: Option<&mut Vec<String>>,
+    out: &mut Vec<Quad>,
+) -> Result<(), String> {
+    let mut p = Parser {
+        s: text.as_bytes(),
+        i: 0,
+        line: 1,
+        quads,
+        keep_labels,
+        bnodes: HashMap::new(),
+    };
     loop {
         match p.statement(out) {
             Ok(true) => {}
@@ -89,7 +106,11 @@ impl Parser<'_> {
         let o = p.object()?;
         p.ws();
         let g = if p.quads && matches!(p.peek(), Some(b'<' | b'_')) {
-            let g = if p.peek() == Some(b'<') { p.iri()? } else { p.blank()? };
+            let g = if p.peek() == Some(b'<') {
+                p.iri()?
+            } else {
+                p.blank()?
+            };
             p.ws();
             Some(g)
         } else {
@@ -153,8 +174,12 @@ impl Parser<'_> {
     fn subject(&mut self) -> Result<Term, String> {
         match self.peek() {
             // the store's own log may hold RDF-star triples as subjects
-            Some(b'<') if self.s.get(self.i + 1) == Some(&b'<') && self.keep_labels => self.quoted(),
-            Some(b'<') if self.s.get(self.i + 1) == Some(&b'<') => self.err("a triple term cannot be a subject"),
+            Some(b'<') if self.s.get(self.i + 1) == Some(&b'<') && self.keep_labels => {
+                self.quoted()
+            }
+            Some(b'<') if self.s.get(self.i + 1) == Some(&b'<') => {
+                self.err("a triple term cannot be a subject")
+            }
             Some(b'<') => self.iri(),
             Some(b'_') => self.blank(),
             _ => self.err("expected an IRI or blank node as subject"),
@@ -178,7 +203,8 @@ impl Parser<'_> {
         if paren {
             self.i += 1;
         } else if !self.keep_labels {
-            return self.err("reified triples << >> are not part of N-Triples; use a triple term <<( )>>");
+            return self
+                .err("reified triples << >> are not part of N-Triples; use a triple term <<( )>>");
         }
         self.ws();
         let s = self.subject()?;
@@ -198,9 +224,14 @@ impl Parser<'_> {
     fn uchar(&mut self) -> Result<char, String> {
         // at the 'u' or 'U' after a backslash
         let n = if self.peek() == Some(b'u') { 4 } else { 8 };
-        let hex = self.s.get(self.i + 1..self.i + 1 + n).ok_or_else(|| format!("line {}: bad \\u escape", self.line))?;
-        let hex = std::str::from_utf8(hex).map_err(|_| format!("line {}: bad \\u escape", self.line))?;
-        let v = u32::from_str_radix(hex, 16).map_err(|_| format!("line {}: bad \\u escape", self.line))?;
+        let hex = self
+            .s
+            .get(self.i + 1..self.i + 1 + n)
+            .ok_or_else(|| format!("line {}: bad \\u escape", self.line))?;
+        let hex =
+            std::str::from_utf8(hex).map_err(|_| format!("line {}: bad \\u escape", self.line))?;
+        let v = u32::from_str_radix(hex, 16)
+            .map_err(|_| format!("line {}: bad \\u escape", self.line))?;
         self.i += 1 + n;
         char::from_u32(v).ok_or_else(|| format!("line {}: invalid code point", self.line))
     }
@@ -213,7 +244,9 @@ impl Parser<'_> {
         let mut out = String::new();
         let start = self.i;
         loop {
-            let Some(c) = self.peek() else { return self.err("unterminated IRI") };
+            let Some(c) = self.peek() else {
+                return self.err("unterminated IRI");
+            };
             match c {
                 b'>' => {
                     self.i += 1;
@@ -232,18 +265,24 @@ impl Parser<'_> {
                     out.push(ch);
                     return self.iri_rest(out);
                 }
-                0..=0x20 | b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' => return self.err("character not allowed in an IRI"),
+                0..=0x20 | b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' => {
+                    return self.err("character not allowed in an IRI");
+                }
                 _ => self.i += 1,
             }
         }
-        let iri = std::str::from_utf8(&self.s[start..self.i - 1]).map_err(|_| format!("line {}: invalid UTF-8", self.line))?.to_string();
+        let iri = std::str::from_utf8(&self.s[start..self.i - 1])
+            .map_err(|_| format!("line {}: invalid UTF-8", self.line))?
+            .to_string();
         self.absolute(iri)
     }
 
     /// The rest of an IRI after its first escape.
     fn iri_rest(&mut self, mut out: String) -> Result<Term, String> {
         loop {
-            let Some(c) = self.peek() else { return self.err("unterminated IRI") };
+            let Some(c) = self.peek() else {
+                return self.err("unterminated IRI");
+            };
             match c {
                 b'>' => {
                     self.i += 1;
@@ -260,10 +299,15 @@ impl Parser<'_> {
                     }
                     out.push(ch);
                 }
-                0..=0x20 | b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' => return self.err("character not allowed in an IRI"),
+                0..=0x20 | b'<' | b'"' | b'{' | b'}' | b'|' | b'^' | b'`' => {
+                    return self.err("character not allowed in an IRI");
+                }
                 _ => {
                     let len = utf8_len(c);
-                    out.push_str(std::str::from_utf8(&self.s[self.i..self.i + len]).map_err(|_| format!("line {}: invalid UTF-8", self.line))?);
+                    out.push_str(
+                        std::str::from_utf8(&self.s[self.i..self.i + len])
+                            .map_err(|_| format!("line {}: invalid UTF-8", self.line))?,
+                    );
                     self.i += len;
                 }
             }
@@ -277,9 +321,17 @@ impl Parser<'_> {
             return Ok(Term::Iri(iri));
         }
         // scheme ":" ... ; N-Triples has no base IRI to resolve against
-        let scheme_ok = iri.find(':').is_some_and(|i| i > 0 && iri.as_bytes()[0].is_ascii_alphabetic() && iri[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b)));
+        let scheme_ok = iri.find(':').is_some_and(|i| {
+            i > 0
+                && iri.as_bytes()[0].is_ascii_alphabetic()
+                && iri[..i]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+        });
         if !scheme_ok {
-            return Err(format!("line {line}: relative IRI <{iri}> (N-Triples needs absolute IRIs)"));
+            return Err(format!(
+                "line {line}: relative IRI <{iri}> (N-Triples needs absolute IRIs)"
+            ));
         }
         Ok(Term::Iri(iri))
     }
@@ -293,7 +345,11 @@ impl Parser<'_> {
         // decode only the candidate label (up to the first byte that cannot be part of one),
         // not the rest of the input: that made parsing quadratic in blank-node-heavy files
         let mut limit = start;
-        while self.s.get(limit).is_some_and(|&b| b >= 0x80 || b.is_ascii_alphanumeric() || b"_-.:".contains(&b)) {
+        while self
+            .s
+            .get(limit)
+            .is_some_and(|&b| b >= 0x80 || b.is_ascii_alphanumeric() || b"_-.:".contains(&b))
+        {
             limit += 1;
         }
         let text = std::str::from_utf8(&self.s[start..limit]).unwrap_or("");
@@ -315,7 +371,10 @@ impl Parser<'_> {
         Ok(Term::Blank(if self.keep_labels {
             label.to_string()
         } else {
-            self.bnodes.entry(label.to_string()).or_insert_with(super::fresh_blank_id).clone()
+            self.bnodes
+                .entry(label.to_string())
+                .or_insert_with(super::fresh_blank_id)
+                .clone()
         }))
     }
 
@@ -323,7 +382,9 @@ impl Parser<'_> {
         self.i += 1;
         let mut v = String::new();
         loop {
-            let Some(c) = self.peek() else { return self.err("unterminated string") };
+            let Some(c) = self.peek() else {
+                return self.err("unterminated string");
+            };
             match c {
                 b'"' => {
                     self.i += 1;
@@ -352,7 +413,10 @@ impl Parser<'_> {
                 }
                 _ => {
                     let len = utf8_len(c);
-                    v.push_str(std::str::from_utf8(&self.s[self.i..(self.i + len).min(self.s.len())]).map_err(|_| format!("line {}: invalid UTF-8", self.line))?);
+                    v.push_str(
+                        std::str::from_utf8(&self.s[self.i..(self.i + len).min(self.s.len())])
+                            .map_err(|_| format!("line {}: invalid UTF-8", self.line))?,
+                    );
                     self.i += len;
                 }
             }
@@ -373,13 +437,20 @@ impl Parser<'_> {
                 if self.i == start {
                     return self.err("bad language tag");
                 }
-                while self.peek() == Some(b'-') && self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_alphanumeric()) {
+                while self.peek() == Some(b'-')
+                    && self
+                        .s
+                        .get(self.i + 1)
+                        .is_some_and(|c| c.is_ascii_alphanumeric())
+                {
                     self.i += 1;
                     while self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
                         self.i += 1;
                     }
                 }
-                let tag = std::str::from_utf8(&self.s[start..self.i]).unwrap_or("").to_ascii_lowercase();
+                let tag = std::str::from_utf8(&self.s[start..self.i])
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
                 if !super::valid_lang(&tag) {
                     return self.err("bad language tag");
                 }
@@ -396,7 +467,11 @@ impl Parser<'_> {
                     }
                     return Ok(Term::dir_lang(v, &tag, dir));
                 }
-                Ok(Term::Literal(Literal { value: v, datatype: RDF_LANGSTRING.into(), lang: Some(tag) }))
+                Ok(Term::Literal(Literal {
+                    value: v,
+                    datatype: RDF_LANGSTRING.into(),
+                    lang: Some(tag),
+                }))
             }
             Some(b'^') => {
                 if self.s.get(self.i + 1) != Some(&b'^') {
@@ -404,13 +479,25 @@ impl Parser<'_> {
                 }
                 self.i += 2;
                 self.ws();
-                let Term::Iri(dt) = self.iri()? else { unreachable!() };
+                let Term::Iri(dt) = self.iri()? else {
+                    unreachable!()
+                };
                 if dt == RDF_LANGSTRING || dt == super::RDF_DIRLANGSTRING {
-                    return self.err("rdf:langString and rdf:dirLangString need a language tag, not a datatype");
+                    return self.err(
+                        "rdf:langString and rdf:dirLangString need a language tag, not a datatype",
+                    );
                 }
-                Ok(Term::Literal(Literal { value: v, datatype: dt, lang: None }))
+                Ok(Term::Literal(Literal {
+                    value: v,
+                    datatype: dt,
+                    lang: None,
+                }))
             }
-            _ => Ok(Term::Literal(Literal { value: v, datatype: XSD_STRING.into(), lang: None })),
+            _ => Ok(Term::Literal(Literal {
+                value: v,
+                datatype: XSD_STRING.into(),
+                lang: None,
+            })),
         }
     }
 }
@@ -434,7 +521,10 @@ fn pn_chars_u(c: char) -> bool {
 }
 
 fn pn_chars(c: char) -> bool {
-    pn_chars_u(c) || c == '-' || c.is_ascii_digit() || matches!(c as u32, 0xB7 | 0x300..=0x36F | 0x203F..=0x2040)
+    pn_chars_u(c)
+        || c == '-'
+        || c.is_ascii_digit()
+        || matches!(c as u32, 0xB7 | 0x300..=0x36F | 0x203F..=0x2040)
 }
 
 #[cfg(test)]
@@ -446,11 +536,17 @@ mod tests {
     fn many_blank_nodes_parse_in_linear_time() {
         // a blank node label once decoded the whole rest of the input: 60k of them took
         // minutes; linear parsing takes milliseconds
-        let text: String = (0..60_000).map(|i| format!("_:b{i} <http://ex/p> _:c{i} .\n")).collect();
+        let text: String = (0..60_000)
+            .map(|i| format!("_:b{i} <http://ex/p> _:c{i} .\n"))
+            .collect();
         let t = std::time::Instant::now();
         let quads = parse(&text, false, false).unwrap();
         assert_eq!(quads.len(), 60_000);
-        assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+        assert!(
+            t.elapsed() < std::time::Duration::from_secs(5),
+            "{:?}",
+            t.elapsed()
+        );
         // labels with non-ASCII characters and inner dots still parse whole
         let q = parse("_:é.x <http://ex/p> _:a.b.\n", false, true).unwrap();
         assert_eq!(q[0].s, Term::Blank("é.x".into()));
@@ -463,12 +559,34 @@ mod tests {
         let q = parse(ok, false, false).unwrap();
         assert_eq!(q.len(), 2);
         assert_eq!(q[0].o.value(), "xé\n");
-        for bad in ["@prefix ex: <http://e/> .", "<a> <http://b> <http://c> .", "<http://a> <http://b> 1 .", "<http://a> <http://b> 'x' .",
-            "<http://a> <http://b> <http://c> ; <http://d> <http://e> .", "<http://a> <http://b> \"x\"@1 .", "<http://a\\u0020b> <http://b> <http://c> .",
-            "<http://a> <http://b> <http://c>", "<http://a> <http://b> <http://c> . <http://a> <http://b> <http://c> ."] {
+        for bad in [
+            "@prefix ex: <http://e/> .",
+            "<a> <http://b> <http://c> .",
+            "<http://a> <http://b> 1 .",
+            "<http://a> <http://b> 'x' .",
+            "<http://a> <http://b> <http://c> ; <http://d> <http://e> .",
+            "<http://a> <http://b> \"x\"@1 .",
+            "<http://a\\u0020b> <http://b> <http://c> .",
+            "<http://a> <http://b> <http://c>",
+            "<http://a> <http://b> <http://c> . <http://a> <http://b> <http://c> .",
+        ] {
             assert!(parse(bad, false, false).is_err(), "accepted {bad}");
         }
-        assert!(parse("<http://a> <http://b> <http://c> <http://g> .", false, false).is_err());
-        assert_eq!(parse("<http://a> <http://b> <http://c> <http://g> .", true, false).unwrap()[0].g.as_ref().unwrap().value(), "http://g");
+        assert!(
+            parse(
+                "<http://a> <http://b> <http://c> <http://g> .",
+                false,
+                false
+            )
+            .is_err()
+        );
+        assert_eq!(
+            parse("<http://a> <http://b> <http://c> <http://g> .", true, false).unwrap()[0]
+                .g
+                .as_ref()
+                .unwrap()
+                .value(),
+            "http://g"
+        );
     }
 }

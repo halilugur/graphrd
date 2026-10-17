@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::ast::*;
-use crate::rdf::{self, resolve_iri, Term};
+use crate::rdf::{self, Term, resolve_iri};
 
 #[derive(Debug, Clone, PartialEq)]
 enum Tok {
@@ -23,8 +23,8 @@ enum Tok {
 }
 
 const PUNCTS: [&str; 33] = [
-    "<<(", ")>>", "<<", ">>", "~", "{|", "|}", "^^", "&&", "||", "!=", "<=", ">=", "{", "}", "(", ")", "[", "]", ".", ";", ",", "*", "/", "|", "^", "?", "+", "-",
-    "!", "=", "<", ">",
+    "<<(", ")>>", "<<", ">>", "~", "{|", "|}", "^^", "&&", "||", "!=", "<=", ">=", "{", "}", "(",
+    ")", "[", "]", ".", ";", ",", "*", "/", "|", "^", "?", "+", "-", "!", "=", "<", ">",
 ];
 
 /// Tokens with their (start, end) positions in the source, in chars.
@@ -67,7 +67,9 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
                 j += 1;
             }
             if ok {
-                out.push(Tok::Iri(unescape_iri(&c[i + 1..j].iter().collect::<String>())?));
+                out.push(Tok::Iri(unescape_iri(
+                    &c[i + 1..j].iter().collect::<String>(),
+                )?));
                 i = j + 1;
                 continue;
             }
@@ -86,7 +88,9 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
             i += if long { 3 } else { 1 };
             let mut s = String::new();
             loop {
-                let Some(&d) = c.get(i) else { return Err("unterminated string".into()) };
+                let Some(&d) = c.get(i) else {
+                    return Err("unterminated string".into());
+                };
                 if d == '\\' {
                     let e = *c.get(i + 1).ok_or("bad escape")?;
                     i += 2;
@@ -101,7 +105,8 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
                         '\\' => s.push('\\'),
                         'u' | 'U' => {
                             let n = if e == 'u' { 4 } else { 8 };
-                            let hex: String = c.get(i..i + n).ok_or("short escape")?.iter().collect();
+                            let hex: String =
+                                c.get(i..i + n).ok_or("short escape")?.iter().collect();
                             let v = u32::from_str_radix(&hex, 16).map_err(|_| "bad \\u escape")?;
                             s.push(char::from_u32(v).ok_or("bad code point")?);
                             i += n;
@@ -140,7 +145,9 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
             while i < c.len() && (c[i].is_ascii_alphanumeric() || c[i] == '-') {
                 i += 1;
             }
-            out.push(Tok::Lang(c[s..i].iter().collect::<String>().to_ascii_lowercase()));
+            out.push(Tok::Lang(
+                c[s..i].iter().collect::<String>().to_ascii_lowercase(),
+            ));
             continue;
         }
         if ch.is_ascii_digit() || (ch == '.' && c.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
@@ -184,7 +191,9 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
         if ch == '_' && c.get(i + 1) == Some(&':') {
             let s = i + 2;
             i += 2;
-            while i < c.len() && (is_name(c[i]) || (c[i] == '.' && c.get(i + 1).is_some_and(|&n| is_name(n)))) {
+            while i < c.len()
+                && (is_name(c[i]) || (c[i] == '.' && c.get(i + 1).is_some_and(|&n| is_name(n))))
+            {
                 i += 1;
             }
             out.push(Tok::Blank(c[s..i].iter().collect()));
@@ -192,7 +201,9 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
         }
         if ch.is_alphabetic() || ch == '_' || ch as u32 >= 0x80 || ch == ':' {
             let s = i;
-            while i < c.len() && (is_name(c[i]) || (c[i] == '.' && c.get(i + 1).is_some_and(|&n| is_name(n)))) {
+            while i < c.len()
+                && (is_name(c[i]) || (c[i] == '.' && c.get(i + 1).is_some_and(|&n| is_name(n))))
+            {
                 i += 1;
             }
             let word: String = c[s..i].iter().collect();
@@ -208,7 +219,13 @@ fn lex(src: &str) -> Result<(Vec<Tok>, Vec<(usize, usize)>), String> {
                         }
                         local.push(c[i + 1]);
                         i += 2;
-                    } else if is_name(d) || d == ':' || d == '%' || (d == '.' && c.get(i + 1).is_some_and(|&n| is_name(n) || n == ':' || n == '%')) {
+                    } else if is_name(d)
+                        || d == ':'
+                        || d == '%'
+                        || (d == '.'
+                            && c.get(i + 1)
+                                .is_some_and(|&n| is_name(n) || n == ':' || n == '%'))
+                    {
                         local.push(d);
                         i += 1;
                     } else {
@@ -248,8 +265,15 @@ fn unescape_iri(s: &str) -> Result<String, String> {
     while i < c.len() {
         if c[i] == '\\' && matches!(c.get(i + 1), Some('u' | 'U')) {
             let n = if c[i + 1] == 'u' { 4 } else { 8 };
-            let hex: String = c.get(i + 2..i + 2 + n).ok_or("bad IRI escape")?.iter().collect();
-            out.push(char::from_u32(u32::from_str_radix(&hex, 16).map_err(|_| "bad IRI escape")?).ok_or("bad code point")?);
+            let hex: String = c
+                .get(i + 2..i + 2 + n)
+                .ok_or("bad IRI escape")?
+                .iter()
+                .collect();
+            out.push(
+                char::from_u32(u32::from_str_radix(&hex, 16).map_err(|_| "bad IRI escape")?)
+                    .ok_or("bad code point")?,
+            );
             i += 2 + n;
         } else {
             out.push(c[i]);
@@ -319,16 +343,27 @@ fn balanced<T>(mut items: Vec<T>, f: &dyn Fn(T, T) -> T) -> T {
 }
 
 /// Parse a query (known prefixes fill in undeclared ones).
-pub fn parse_query(src: &str, base: &str, known: &HashMap<String, String>) -> Result<ParsedQuery, String> {
+pub fn parse_query(
+    src: &str,
+    base: &str,
+    known: &HashMap<String, String>,
+) -> Result<ParsedQuery, String> {
     let mut p = Parser::new(src, base, known)?;
     p.prologue()?;
     let mut query = p.query_body()?;
     if p.word("VALUES") {
         let values = p.data_block()?;
-        if let Form::Select { projection: Some(proj), .. } = &query.form {
+        if let Form::Select {
+            projection: Some(proj),
+            ..
+        } = &query.form
+        {
             let bound = crate::sparql::eval::visible_vars(&values, &p.vars);
             if let Some((_, v)) = proj.iter().find(|(e, v)| e.is_some() && bound.contains(v)) {
-                return p.err(&format!("?{} is bound by VALUES and by a SELECT expression", p.vars.names[*v]));
+                return p.err(&format!(
+                    "?{} is bound by VALUES and by a SELECT expression",
+                    p.vars.names[*v]
+                ));
             }
         }
         p.check_grouping(Some(&values))?;
@@ -339,11 +374,19 @@ pub fn parse_query(src: &str, base: &str, known: &HashMap<String, String>) -> Re
     if p.peek() != &Tok::Eof {
         return p.err("unexpected trailing input");
     }
-    Ok(ParsedQuery { query, vars: p.vars, base: p.base })
+    Ok(ParsedQuery {
+        query,
+        vars: p.vars,
+        base: p.base,
+    })
 }
 
 /// Parse an update request.
-pub fn parse_update(src: &str, base: &str, known: &HashMap<String, String>) -> Result<ParsedUpdate, String> {
+pub fn parse_update(
+    src: &str,
+    base: &str,
+    known: &HashMap<String, String>,
+) -> Result<ParsedUpdate, String> {
     let mut p = Parser::new(src, base, known)?;
     let mut ops = Vec::new();
     loop {
@@ -362,7 +405,11 @@ pub fn parse_update(src: &str, base: &str, known: &HashMap<String, String>) -> R
     if p.peek() != &Tok::Eof {
         return p.err("unexpected trailing input");
     }
-    Ok(ParsedUpdate { ops, vars: p.vars, base: p.base })
+    Ok(ParsedUpdate {
+        ops,
+        vars: p.vars,
+        base: p.base,
+    })
 }
 
 impl<'a> Parser<'a> {
@@ -400,7 +447,12 @@ impl<'a> Parser<'a> {
         if !self.base.is_empty() {
             out.push_str(&format!("BASE <{}>\n", self.base));
         }
-        for (p, iri) in self.fallback_prefixes.iter().filter(|(p, _)| !self.prefixes.contains_key(*p)).chain(&self.prefixes) {
+        for (p, iri) in self
+            .fallback_prefixes
+            .iter()
+            .filter(|(p, _)| !self.prefixes.contains_key(*p))
+            .chain(&self.prefixes)
+        {
             if body.contains(&format!("{p}:")) {
                 out.push_str(&format!("PREFIX {p}: <{iri}>\n"));
             }
@@ -410,10 +462,15 @@ impl<'a> Parser<'a> {
 
     /// Fail if a projected variable is neither grouped, aggregated, nor bound by `values`.
     fn check_grouping(&mut self, values: Option<&Pattern>) -> Result<(), String> {
-        let bound = values.map(|v| crate::sparql::eval::visible_vars(v, &self.vars)).unwrap_or_default();
+        let bound = values
+            .map(|v| crate::sparql::eval::visible_vars(v, &self.vars))
+            .unwrap_or_default();
         let pending = std::mem::take(&mut self.ungrouped);
         match pending.into_iter().find(|v| !bound.contains(v)) {
-            Some(v) => self.err(&format!("?{} is neither grouped nor aggregated", self.vars.names[v])),
+            Some(v) => self.err(&format!(
+                "?{} is neither grouped nor aggregated",
+                self.vars.names[v]
+            )),
             None => Ok(()),
         }
     }
@@ -437,7 +494,10 @@ impl<'a> Parser<'a> {
     }
 
     fn err<T>(&self, msg: &str) -> Result<T, String> {
-        Err(format!("SPARQL syntax error: {msg} (at token {:?})", self.t.get(self.i).unwrap_or(&Tok::Eof)))
+        Err(format!(
+            "SPARQL syntax error: {msg} (at token {:?})",
+            self.t.get(self.i).unwrap_or(&Tok::Eof)
+        ))
     }
 
     fn peek(&self) -> &Tok {
@@ -465,7 +525,11 @@ impl<'a> Parser<'a> {
         }
     }
     fn expect_word(&mut self, w: &str) -> Result<(), String> {
-        if self.word(w) { Ok(()) } else { self.err(&format!("expected {w}")) }
+        if self.word(w) {
+            Ok(())
+        } else {
+            self.err(&format!("expected {w}"))
+        }
     }
     fn is_punct(&self, p: &str) -> bool {
         matches!(self.peek(), Tok::Punct(x) if *x == p)
@@ -479,7 +543,11 @@ impl<'a> Parser<'a> {
         }
     }
     fn expect(&mut self, p: &str) -> Result<(), String> {
-        if self.punct(p) { Ok(()) } else { self.err(&format!("expected '{p}'")) }
+        if self.punct(p) {
+            Ok(())
+        } else {
+            self.err(&format!("expected '{p}'"))
+        }
     }
 
     fn prologue(&mut self) -> Result<(), String> {
@@ -488,7 +556,9 @@ impl<'a> Parser<'a> {
                 // SPARQL 1.2 version declaration: a short string, accepted and not interpreted
                 // a short string: not """...""" or '''...'''
                 let start = self.spans[self.i].0;
-                let long = self.src.get(start..start + 3).is_some_and(|c| c.iter().all(|&ch| ch == '"') || c.iter().all(|&ch| ch == '\''));
+                let long = self.src.get(start..start + 3).is_some_and(|c| {
+                    c.iter().all(|&ch| ch == '"') || c.iter().all(|&ch| ch == '\'')
+                });
                 match self.next() {
                     Tok::Str(_) if !long => {}
                     _ => return self.err("expected a short version string after VERSION"),
@@ -615,7 +685,10 @@ impl<'a> Parser<'a> {
             };
             if targets.is_empty() {
                 // DESCRIBE * : every variable in the pattern
-                targets = (0..self.vars.len()).filter(|&v| !self.vars.is_hidden(v)).map(VarOrTerm::Var).collect();
+                targets = (0..self.vars.len())
+                    .filter(|&v| !self.vars.is_hidden(v))
+                    .map(VarOrTerm::Var)
+                    .collect();
             }
             self.finish_query(Form::Describe(targets), dataset, pattern)
         } else {
@@ -627,7 +700,11 @@ impl<'a> Parser<'a> {
         let distinct = self.word("DISTINCT");
         let reduced = !distinct && self.word("REDUCED");
         if self.punct("*") {
-            return Ok(Form::Select { distinct, reduced, projection: None });
+            return Ok(Form::Select {
+                distinct,
+                reduced,
+                projection: None,
+            });
         }
         let mut proj = Vec::new();
         self.allow_aggs = true;
@@ -656,7 +733,11 @@ impl<'a> Parser<'a> {
         if proj.is_empty() {
             return self.err("empty SELECT clause");
         }
-        Ok(Form::Select { distinct, reduced, projection: Some(proj) })
+        Ok(Form::Select {
+            distinct,
+            reduced,
+            projection: Some(proj),
+        })
     }
 
     fn dataset_clause(&mut self) -> Result<Option<Dataset>, String> {
@@ -673,7 +754,12 @@ impl<'a> Parser<'a> {
         Ok(any.then_some(ds))
     }
 
-    fn finish_query(&mut self, form: Form, dataset: Option<Dataset>, pattern: Pattern) -> Result<Query, String> {
+    fn finish_query(
+        &mut self,
+        form: Form,
+        dataset: Option<Dataset>,
+        pattern: Pattern,
+    ) -> Result<Query, String> {
         let mut group_by = Vec::new();
         let mut having = Vec::new();
         let mut order_by = Vec::new();
@@ -749,16 +835,21 @@ impl<'a> Parser<'a> {
         if let Form::Select { projection, .. } = &form {
             let grouped = !group_by.is_empty() || !self.aggs.is_empty();
             match projection {
-                None if grouped => return self.err("SELECT * is not allowed with GROUP BY or aggregates"),
+                None if grouped => {
+                    return self.err("SELECT * is not allowed with GROUP BY or aggregates");
+                }
                 None => {}
                 Some(proj) => {
                     // with grouping only the group keys are in scope for SELECT expressions
                     let in_scope = if grouped {
-                        group_by.iter().flat_map(|(e, alias)| match (e, alias) {
-                            (_, Some(a)) => vec![*a],
-                            (Expr::Var(v), None) => vec![*v],
-                            _ => vec![],
-                        }).collect()
+                        group_by
+                            .iter()
+                            .flat_map(|(e, alias)| match (e, alias) {
+                                (_, Some(a)) => vec![*a],
+                                (Expr::Var(v), None) => vec![*v],
+                                _ => vec![],
+                            })
+                            .collect()
                     } else {
                         crate::sparql::eval::visible_vars(&pattern, &self.vars)
                     };
@@ -775,12 +866,22 @@ impl<'a> Parser<'a> {
                         match e {
                             Some(e) => {
                                 if in_scope.contains(v) || projected.contains(v) {
-                                    return self.err(&format!("?{} is already in scope", self.vars.names[*v]));
+                                    return self.err(&format!(
+                                        "?{} is already in scope",
+                                        self.vars.names[*v]
+                                    ));
                                 }
                                 if grouped {
                                     let mut used = Vec::new();
                                     expr_vars(e, &mut used);
-                                    let bad: Vec<Var> = used.into_iter().filter(|u| !keys.contains(u) && !self.agg_vars.contains(u) && !projected.contains(u)).collect();
+                                    let bad: Vec<Var> = used
+                                        .into_iter()
+                                        .filter(|u| {
+                                            !keys.contains(u)
+                                                && !self.agg_vars.contains(u)
+                                                && !projected.contains(u)
+                                        })
+                                        .collect();
                                     self.ungrouped.extend(bad);
                                 }
                             }
@@ -812,7 +913,9 @@ impl<'a> Parser<'a> {
         match self.peek() {
             Tok::Word(w) => {
                 self.peek_at(1) == &Tok::Punct("(")
-                    && !["HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "GROUP"].iter().any(|k| w.eq_ignore_ascii_case(k))
+                    && !["HAVING", "ORDER", "LIMIT", "OFFSET", "VALUES", "GROUP"]
+                        .iter()
+                        .any(|k| w.eq_ignore_ascii_case(k))
             }
             _ => false,
         }
@@ -930,7 +1033,10 @@ impl<'a> Parser<'a> {
                 };
                 self.expect(")")?;
                 if crate::sparql::eval::visible_vars(&g, &self.vars).contains(&v) {
-                    return self.err(&format!("BIND: ?{} is already in scope", self.vars.names[v]));
+                    return self.err(&format!(
+                        "BIND: ?{} is already in scope",
+                        self.vars.names[v]
+                    ));
                 }
                 g = Pattern::Extend(Box::new(g), v, e);
             } else if self.word("VALUES") {
@@ -945,7 +1051,9 @@ impl<'a> Parser<'a> {
                 // keep a nested group's FILTER inside it: `OPTIONAL { { … FILTER } }` must not
                 // turn the filter into the OPTIONAL's condition, which sees outer variables
                 g = match (&g, &p) {
-                    (Pattern::Bgp(x), Pattern::Filter(..)) if x.is_empty() => Pattern::Join(Box::new(g), Box::new(p)),
+                    (Pattern::Bgp(x), Pattern::Filter(..)) if x.is_empty() => {
+                        Pattern::Join(Box::new(g), Box::new(p))
+                    }
                     _ => Self::join(g, p),
                 };
                 self.bgp += 1;
@@ -954,19 +1062,30 @@ impl<'a> Parser<'a> {
                 self.triples_same_subject_path(&mut triples)?;
                 g = Self::join(g, Pattern::Bgp(triples));
                 dot_ok = false;
-                if !self.punct(".") && !self.is_punct("}") && !self.is_punct("{") && !self.starts_pattern_keyword() {
+                if !self.punct(".")
+                    && !self.is_punct("}")
+                    && !self.is_punct("{")
+                    && !self.starts_pattern_keyword()
+                {
                     return self.err("expected '.' or '}'");
                 }
             }
         }
         Ok(match filters.len() {
             0 => g,
-            _ => Pattern::Filter(balanced(filters, &|a, b| Expr::And(Box::new(a), Box::new(b))), Box::new(g)),
+            _ => Pattern::Filter(
+                balanced(filters, &|a, b| Expr::And(Box::new(a), Box::new(b))),
+                Box::new(g),
+            ),
         })
     }
 
     fn starts_pattern_keyword(&self) -> bool {
-        ["FILTER", "OPTIONAL", "MINUS", "GRAPH", "SERVICE", "BIND", "VALUES"].iter().any(|w| self.is_word(w))
+        [
+            "FILTER", "OPTIONAL", "MINUS", "GRAPH", "SERVICE", "BIND", "VALUES",
+        ]
+        .iter()
+        .any(|w| self.is_word(w))
             || self.is_punct("{")
     }
 
@@ -1093,7 +1212,9 @@ impl<'a> Parser<'a> {
             if let Some(l) = label {
                 if self.data_block {
                     if self.data_labels.contains(l) {
-                        return self.err(&format!("blank node _:{l} is already used by an earlier INSERT DATA"));
+                        return self.err(&format!(
+                            "blank node _:{l} is already used by an earlier INSERT DATA"
+                        ));
                     }
                     self.op_labels.insert(l.to_string());
                 }
@@ -1107,7 +1228,9 @@ impl<'a> Parser<'a> {
             Some(l) => {
                 if let Some(&b) = self.bnode_bgp.get(l) {
                     if b != self.bgp {
-                        return self.err(&format!("blank node _:{l} is used in two different graph patterns"));
+                        return self.err(&format!(
+                            "blank node _:{l} is used in two different graph patterns"
+                        ));
                     }
                 }
                 self.bnode_bgp.insert(l.to_string(), self.bgp);
@@ -1138,7 +1261,9 @@ impl<'a> Parser<'a> {
 
     fn tt(s: VarOrTerm, p: VarOrTerm, o: VarOrTerm) -> VarOrTerm {
         match (s, p, o) {
-            (VarOrTerm::Term(s), VarOrTerm::Term(p), VarOrTerm::Term(o)) => VarOrTerm::Term(Term::triple(s, p, o)),
+            (VarOrTerm::Term(s), VarOrTerm::Term(p), VarOrTerm::Term(o)) => {
+                VarOrTerm::Term(Term::triple(s, p, o))
+            }
             (s, p, o) => VarOrTerm::Triple(Box::new([s, p, o])),
         }
     }
@@ -1153,7 +1278,8 @@ impl<'a> Parser<'a> {
                 Some(Tok::Punct("<<(")) => {
                     // a nested triple term right after an opening `<<(` is in subject position
                     if depth > 0 && matches!(self.t.get(j - 1), Some(Tok::Punct("<<("))) {
-                        return self.err("a triple term cannot be the subject of a triple term here");
+                        return self
+                            .err("a triple term cannot be the subject of a triple term here");
                     }
                     depth += 1;
                 }
@@ -1163,7 +1289,9 @@ impl<'a> Parser<'a> {
                         return Ok(());
                     }
                 }
-                Some(Tok::Blank(_)) | Some(Tok::Punct("[")) => return self.err("blank nodes are not allowed in a triple term here"),
+                Some(Tok::Blank(_)) | Some(Tok::Punct("[")) => {
+                    return self.err("blank nodes are not allowed in a triple term here");
+                }
                 Some(Tok::Eof) | None => return Ok(()),
                 _ => {}
             }
@@ -1199,19 +1327,33 @@ impl<'a> Parser<'a> {
     fn quoted_pattern(&mut self, out: &mut Vec<TriplePattern>) -> Result<VarOrTerm, String> {
         self.expect("<<")?;
         let s = match self.peek() {
-            Tok::Punct("(") | Tok::Str(_) | Tok::Int(_) | Tok::Dec(_) | Tok::Dbl(_) => return self.err("bad subject in a reified triple"),
-            Tok::Punct("[") if !matches!(self.peek_at(1), Tok::Punct("]")) => return self.err("bad subject in a reified triple"),
+            Tok::Punct("(") | Tok::Str(_) | Tok::Int(_) | Tok::Dec(_) | Tok::Dbl(_) => {
+                return self.err("bad subject in a reified triple");
+            }
+            Tok::Punct("[") if !matches!(self.peek_at(1), Tok::Punct("]")) => {
+                return self.err("bad subject in a reified triple");
+            }
             _ => self.node_inner(out)?,
         };
         let p = self.tt_predicate()?;
         let o = match self.peek() {
             Tok::Punct("(") => return self.err("a list cannot be part of a reified triple"),
-            Tok::Punct("[") if !matches!(self.peek_at(1), Tok::Punct("]")) => return self.err("a blank node property list cannot be part of a reified triple"),
+            Tok::Punct("[") if !matches!(self.peek_at(1), Tok::Punct("]")) => {
+                return self.err("a blank node property list cannot be part of a reified triple");
+            }
             _ => self.node_inner(out)?,
         };
-        let reifier = if self.punct("~") { self.reifier_id()? } else { self.blank_var(None)? };
+        let reifier = if self.punct("~") {
+            self.reifier_id()?
+        } else {
+            self.blank_var(None)?
+        };
         self.expect(">>")?;
-        out.push(TriplePattern { s: reifier.clone(), p: Predicate::Path(Path::Iri(rdf::RDF_REIFIES.into())), o: Self::tt(s, p, o) });
+        out.push(TriplePattern {
+            s: reifier.clone(),
+            p: Predicate::Path(Path::Iri(rdf::RDF_REIFIES.into())),
+            o: Self::tt(s, p, o),
+        });
         Ok(reifier)
     }
 
@@ -1277,9 +1419,21 @@ impl<'a> Parser<'a> {
                 let mut cur = head.clone();
                 let n = items.len();
                 for (k, item) in items.into_iter().enumerate() {
-                    out.push(TriplePattern { s: cur.clone(), p: Predicate::Path(Path::Iri(rdf::RDF_FIRST.into())), o: item });
-                    let next = if k + 1 == n { VarOrTerm::Term(Term::iri(rdf::RDF_NIL)) } else { self.blank_var(None)? };
-                    out.push(TriplePattern { s: cur.clone(), p: Predicate::Path(Path::Iri(rdf::RDF_REST.into())), o: next.clone() });
+                    out.push(TriplePattern {
+                        s: cur.clone(),
+                        p: Predicate::Path(Path::Iri(rdf::RDF_FIRST.into())),
+                        o: item,
+                    });
+                    let next = if k + 1 == n {
+                        VarOrTerm::Term(Term::iri(rdf::RDF_NIL))
+                    } else {
+                        self.blank_var(None)?
+                    };
+                    out.push(TriplePattern {
+                        s: cur.clone(),
+                        p: Predicate::Path(Path::Iri(rdf::RDF_REST.into())),
+                        o: next.clone(),
+                    });
                     cur = next;
                 }
                 Ok(head)
@@ -1293,13 +1447,19 @@ impl<'a> Parser<'a> {
         let is_collection = self.is_punct("(") && self.peek_at(1) != &Tok::Punct(")");
         let is_reified = self.is_punct("<<");
         let subj = self.node(out)?;
-        if (is_bnode_list || is_collection || is_reified) && (self.is_punct(".") || self.is_punct("}") || self.is_punct("|}")) {
+        if (is_bnode_list || is_collection || is_reified)
+            && (self.is_punct(".") || self.is_punct("}") || self.is_punct("|}"))
+        {
             return Ok(());
         }
         self.property_list_path(&subj, out)
     }
 
-    fn property_list_path(&mut self, subj: &VarOrTerm, out: &mut Vec<TriplePattern>) -> Result<(), String> {
+    fn property_list_path(
+        &mut self,
+        subj: &VarOrTerm,
+        out: &mut Vec<TriplePattern>,
+    ) -> Result<(), String> {
         loop {
             let pred = if let Tok::Var(v) = self.peek().clone() {
                 self.i += 1;
@@ -1309,14 +1469,20 @@ impl<'a> Parser<'a> {
             };
             loop {
                 let obj = self.node(out)?;
-                out.push(TriplePattern { s: subj.clone(), p: pred.clone(), o: obj.clone() });
+                out.push(TriplePattern {
+                    s: subj.clone(),
+                    p: pred.clone(),
+                    o: obj.clone(),
+                });
                 // SPARQL 1.2 annotations: `~ r` names a reifier of the triple just written,
                 // `{| ... |}` describes the preceding reifier or a fresh one
                 if self.is_punct("~") || self.is_punct("{|") {
                     let p = match &pred {
                         Predicate::Var(v) => VarOrTerm::Var(*v),
                         Predicate::Path(Path::Iri(i)) => VarOrTerm::Term(Term::Iri(i.clone())),
-                        Predicate::Path(_) => return self.err("an annotated triple needs a simple predicate"),
+                        Predicate::Path(_) => {
+                            return self.err("an annotated triple needs a simple predicate");
+                        }
                     };
                     let triple = Self::tt(subj.clone(), p, obj.clone());
                     let reifies = Predicate::Path(Path::Iri(rdf::RDF_REIFIES.into()));
@@ -1324,14 +1490,22 @@ impl<'a> Parser<'a> {
                     loop {
                         if self.punct("~") {
                             let r = self.reifier_id()?;
-                            out.push(TriplePattern { s: r.clone(), p: reifies.clone(), o: triple.clone() });
+                            out.push(TriplePattern {
+                                s: r.clone(),
+                                p: reifies.clone(),
+                                o: triple.clone(),
+                            });
                             current = Some(r);
                         } else if self.punct("{|") {
                             let r = match current.take() {
                                 Some(r) => r,
                                 None => {
                                     let r = self.blank_var(None)?;
-                                    out.push(TriplePattern { s: r.clone(), p: reifies.clone(), o: triple.clone() });
+                                    out.push(TriplePattern {
+                                        s: r.clone(),
+                                        p: reifies.clone(),
+                                        o: triple.clone(),
+                                    });
                                     r
                                 }
                             };
@@ -1350,7 +1524,14 @@ impl<'a> Parser<'a> {
                 return Ok(());
             }
             while self.punct(";") {}
-            if self.is_punct(".") || self.is_punct("]") || self.is_punct("}") || self.is_punct("{") || self.is_punct("|}") || self.starts_pattern_keyword() || self.peek() == &Tok::Eof {
+            if self.is_punct(".")
+                || self.is_punct("]")
+                || self.is_punct("}")
+                || self.is_punct("{")
+                || self.is_punct("|}")
+                || self.starts_pattern_keyword()
+                || self.peek() == &Tok::Eof
+            {
                 return Ok(());
             }
         }
@@ -1365,7 +1546,11 @@ impl<'a> Parser<'a> {
         while self.punct("|") {
             alts.push(self.path_seq()?);
         }
-        Ok(if alts.len() == 1 { alts.pop().unwrap() } else { Path::Alt(alts) })
+        Ok(if alts.len() == 1 {
+            alts.pop().unwrap()
+        } else {
+            Path::Alt(alts)
+        })
     }
 
     fn path_seq(&mut self) -> Result<Path, String> {
@@ -1373,7 +1558,11 @@ impl<'a> Parser<'a> {
         while self.punct("/") {
             seq.push(self.path_elt_or_inverse()?);
         }
-        Ok(if seq.len() == 1 { seq.pop().unwrap() } else { Path::Seq(seq) })
+        Ok(if seq.len() == 1 {
+            seq.pop().unwrap()
+        } else {
+            Path::Seq(seq)
+        })
     }
 
     fn path_elt_or_inverse(&mut self) -> Result<Path, String> {
@@ -1486,7 +1675,9 @@ impl<'a> Parser<'a> {
             Tok::Punct("<=") => CmpOp::Le,
             Tok::Punct(">=") => CmpOp::Ge,
             _ => {
-                let negated = if self.is_word("NOT") && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("IN")) {
+                let negated = if self.is_word("NOT")
+                    && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("IN"))
+                {
                     self.i += 2;
                     true
                 } else if self.word("IN") {
@@ -1515,7 +1706,8 @@ impl<'a> Parser<'a> {
             } else if self.punct("-") {
                 let r = self.mul_expr()?;
                 e = Expr::Arith('-', Box::new(e), Box::new(r));
-            } else if matches!(self.peek(), Tok::Int(n) | Tok::Dec(n) | Tok::Dbl(n) if n.starts_with('-') || n.starts_with('+')) {
+            } else if matches!(self.peek(), Tok::Int(n) | Tok::Dec(n) | Tok::Dbl(n) if n.starts_with('-') || n.starts_with('+'))
+            {
                 // signed numeric literal directly after an operand
                 let r = self.mul_expr()?;
                 e = Expr::Arith('+', Box::new(e), Box::new(r));
@@ -1603,13 +1795,17 @@ impl<'a> Parser<'a> {
                     Ok(Expr::Const(Term::Iri(iri)))
                 }
             }
-            Tok::Str(_) | Tok::Int(_) | Tok::Dec(_) | Tok::Dbl(_) => Ok(Expr::Const(self.graph_term()?)),
+            Tok::Str(_) | Tok::Int(_) | Tok::Dec(_) | Tok::Dbl(_) => {
+                Ok(Expr::Const(self.graph_term()?))
+            }
             Tok::Punct("<<(") => {
                 self.check_constant_triple_term()?;
                 let mut scratch = Vec::new();
                 let vt = self.triple_term_pattern(&mut scratch)?;
                 if !scratch.is_empty() {
-                    return self.err("a triple term in an expression cannot contain a blank node property list");
+                    return self.err(
+                        "a triple term in an expression cannot contain a blank node property list",
+                    );
                 }
                 fn to_expr(vt: VarOrTerm) -> Expr {
                     match vt {
@@ -1657,7 +1853,11 @@ impl<'a> Parser<'a> {
                         let distinct = self.word("DISTINCT");
                         // no aggregate inside an aggregate
                         self.allow_aggs = false;
-                        let expr = if up == "COUNT" && self.punct("*") { None } else { Some(self.expr()?) };
+                        let expr = if up == "COUNT" && self.punct("*") {
+                            None
+                        } else {
+                            Some(self.expr()?)
+                        };
                         self.allow_aggs = true;
                         let mut separator = " ".to_string();
                         if self.punct(";") {
@@ -1669,7 +1869,12 @@ impl<'a> Parser<'a> {
                             }
                         }
                         self.expect(")")?;
-                        self.aggs.push(Aggregate { func: up, distinct, expr, separator });
+                        self.aggs.push(Aggregate {
+                            func: up,
+                            distinct,
+                            expr,
+                            separator,
+                        });
                         let hv = self.vars.hidden();
                         self.agg_vars.push(hv);
                         Ok(Expr::Var(hv))
@@ -1679,7 +1884,11 @@ impl<'a> Parser<'a> {
                             return self.err(&format!("unexpected '{w}'"));
                         }
                         self.i += 1;
-                        let args = if self.is_punct("(") { self.arg_list()? } else { Vec::new() };
+                        let args = if self.is_punct("(") {
+                            self.arg_list()?
+                        } else {
+                            Vec::new()
+                        };
                         Ok(Expr::Call(up, args))
                     }
                 }
@@ -1729,15 +1938,28 @@ impl<'a> Parser<'a> {
     }
 
     fn to_quad(&self, t: TriplePattern, g: Option<VarOrTerm>) -> Result<QuadPattern, String> {
-        if self.data_block && [&t.s, &t.o].into_iter().chain(g.as_ref()).any(|x| matches!(x, VarOrTerm::Var(_))) || self.data_block && matches!(t.p, Predicate::Var(_)) {
+        if self.data_block
+            && [&t.s, &t.o]
+                .into_iter()
+                .chain(g.as_ref())
+                .any(|x| matches!(x, VarOrTerm::Var(_)))
+            || self.data_block && matches!(t.p, Predicate::Var(_))
+        {
             return self.err("variables are not allowed in INSERT DATA / DELETE DATA");
         }
         let p = match t.p {
             Predicate::Var(v) => VarOrTerm::Var(v),
             Predicate::Path(Path::Iri(i)) => VarOrTerm::Term(Term::Iri(i)),
-            Predicate::Path(_) => return self.err("property paths are not allowed in update templates"),
+            Predicate::Path(_) => {
+                return self.err("property paths are not allowed in update templates");
+            }
         };
-        Ok(QuadPattern { s: t.s, p, o: t.o, g })
+        Ok(QuadPattern {
+            s: t.s,
+            p,
+            o: t.o,
+            g,
+        })
     }
 
     fn graph_ref_all(&mut self) -> Result<GraphTarget, String> {
@@ -1771,7 +1993,11 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            return Ok(UpdateOp::Load { source, into, silent });
+            return Ok(UpdateOp::Load {
+                source,
+                into,
+                silent,
+            });
         }
         if self.word("CLEAR") {
             let silent = self.word("SILENT");
@@ -1795,14 +2021,18 @@ impl<'a> Parser<'a> {
                 return Ok(UpdateOp::Transfer(op.into(), from, to, silent));
             }
         }
-        if self.is_word("INSERT") && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("DATA")) {
+        if self.is_word("INSERT")
+            && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("DATA"))
+        {
             self.i += 2;
             self.data_block = true;
             let b = self.quad_block(true);
             self.data_block = false;
             return Ok(UpdateOp::InsertData(b?));
         }
-        if self.is_word("DELETE") && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("DATA")) {
+        if self.is_word("DELETE")
+            && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("DATA"))
+        {
             self.i += 2;
             self.data_block = true;
             self.no_bnodes = true;
@@ -1811,14 +2041,20 @@ impl<'a> Parser<'a> {
             self.no_bnodes = false;
             return Ok(UpdateOp::DeleteData(b?));
         }
-        if self.is_word("DELETE") && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("WHERE")) {
+        if self.is_word("DELETE")
+            && matches!(self.peek_at(1), Tok::Word(w) if w.eq_ignore_ascii_case("WHERE"))
+        {
             self.i += 2;
             self.no_bnodes = true;
             let b = self.quad_block(false);
             self.no_bnodes = false;
             return Ok(UpdateOp::DeleteWhere(b?));
         }
-        let with = if self.word("WITH") { Some(self.iri()?) } else { None };
+        let with = if self.word("WITH") {
+            Some(self.iri()?)
+        } else {
+            None
+        };
         let mut delete = Vec::new();
         let mut insert = Vec::new();
         if self.word("DELETE") {
@@ -1846,7 +2082,13 @@ impl<'a> Parser<'a> {
         }
         self.expect_word("WHERE")?;
         let pattern = self.group_graph_pattern()?;
-        Ok(UpdateOp::Modify { with, delete, insert, using: any_using.then_some(using), pattern })
+        Ok(UpdateOp::Modify {
+            with,
+            delete,
+            insert,
+            using: any_using.then_some(using),
+            pattern,
+        })
     }
 }
 
@@ -1861,8 +2103,12 @@ mod tests {
     #[test]
     fn parses_common_queries() {
         q("SELECT * WHERE { ?s ?p ?o } LIMIT 10");
-        q("PREFIX ex: <http://ex.org/> SELECT DISTINCT ?s (COUNT(?o) AS ?n) WHERE { ?s ex:p/ex:q* ?o . OPTIONAL { ?o a ex:C FILTER(?o != ex:x) } } GROUP BY ?s HAVING (COUNT(?o) > 1) ORDER BY DESC(?n) LIMIT 5 OFFSET 2");
-        q("SELECT ?x WHERE { { ?x <p> 1 } UNION { ?x <p> -2.5 } MINUS { ?x <q> [] } BIND(STR(?x) AS ?y) VALUES ?x { <a> <b> } FILTER(REGEX(?y, \"^a\", \"i\") && ?x IN (<a>, <b>)) }");
+        q(
+            "PREFIX ex: <http://ex.org/> SELECT DISTINCT ?s (COUNT(?o) AS ?n) WHERE { ?s ex:p/ex:q* ?o . OPTIONAL { ?o a ex:C FILTER(?o != ex:x) } } GROUP BY ?s HAVING (COUNT(?o) > 1) ORDER BY DESC(?n) LIMIT 5 OFFSET 2",
+        );
+        q(
+            "SELECT ?x WHERE { { ?x <p> 1 } UNION { ?x <p> -2.5 } MINUS { ?x <q> [] } BIND(STR(?x) AS ?y) VALUES ?x { <a> <b> } FILTER(REGEX(?y, \"^a\", \"i\") && ?x IN (<a>, <b>)) }",
+        );
         q("CONSTRUCT { ?s <p> [ <q> ?o ] } WHERE { GRAPH ?g { ?s ?p ?o } }");
         q("CONSTRUCT WHERE { ?s ?p ?o }");
         q("ASK { ?s ^<p> ?o FILTER NOT EXISTS { ?o !(<x>|^<y>) ?z } }");

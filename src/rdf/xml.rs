@@ -8,32 +8,32 @@ use super::*;
 #[derive(Debug, Clone)]
 /// A node of a parsed XML tree.
 pub enum Node {
-/// An element with its name, attributes and children.
+    /// An element with its name, attributes and children.
     Element(Element),
-/// Text between the tags.
+    /// Text between the tags.
     Text(String),
 }
 
 #[derive(Debug, Clone)]
 /// An XML element.
 pub struct Element {
-/// The qualified tag name, as written.
+    /// The qualified tag name, as written.
     pub name: String,
-/// The attributes, in order, namespace prefixes unresolved.
+    /// The attributes, in order, namespace prefixes unresolved.
     pub attrs: Vec<(String, String)>,
-/// The children, in order.
+    /// The children, in order.
     pub children: Vec<Node>,
 }
 
 impl Element {
-/// The element children only.
+    /// The element children only.
     pub fn elements(&self) -> impl Iterator<Item = &Element> {
         self.children.iter().filter_map(|n| match n {
             Node::Element(e) => Some(e),
             _ => None,
         })
     }
-/// All the direct text, concatenated.
+    /// All the direct text, concatenated.
     pub fn text(&self) -> String {
         let mut s = String::new();
         for c in &self.children {
@@ -51,7 +51,12 @@ const MAX_ENTITY_EXPANSION: usize = 8 << 20;
 /// Parse an XML document into a tree; DTD entities are expanded with a cap and a
 /// nesting limit (no billion laughs).
 pub fn parse_xml(text: &str) -> Result<Element, String> {
-    let mut p = XmlParser { s: text.as_bytes(), i: 0, entities: HashMap::new(), expanded: 0 };
+    let mut p = XmlParser {
+        s: text.as_bytes(),
+        i: 0,
+        entities: HashMap::new(),
+        expanded: 0,
+    };
     p.prolog()?;
     let root = p.element(0)?;
     Ok(root)
@@ -67,7 +72,11 @@ struct XmlParser<'a> {
 
 impl XmlParser<'_> {
     fn err<T>(&self, msg: &str) -> Result<T, String> {
-        let line = self.s[..self.i.min(self.s.len())].iter().filter(|&&b| b == b'\n').count() + 1;
+        let line = self.s[..self.i.min(self.s.len())]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1;
         Err(format!("XML: {msg} at line {line}"))
     }
     fn starts(&self, lit: &str) -> bool {
@@ -187,7 +196,9 @@ impl XmlParser<'_> {
                 "quot" => out.push('"'),
                 "apos" => out.push('\''),
                 e if e.starts_with("#x") || e.starts_with("#X") => {
-                    let c = u32::from_str_radix(&e[2..], 16).ok().and_then(char::from_u32);
+                    let c = u32::from_str_radix(&e[2..], 16)
+                        .ok()
+                        .and_then(char::from_u32);
                     out.push(c.unwrap_or('\u{FFFD}'));
                 }
                 e if e.starts_with('#') => {
@@ -226,7 +237,11 @@ impl XmlParser<'_> {
             self.ws();
             if self.starts("/>") {
                 self.i += 2;
-                return Ok(Element { name, attrs, children: Vec::new() });
+                return Ok(Element {
+                    name,
+                    attrs,
+                    children: Vec::new(),
+                });
             }
             if self.starts(">") {
                 self.i += 1;
@@ -268,14 +283,20 @@ impl XmlParser<'_> {
                 }
                 self.ws();
                 self.i += 1; // '>'
-                return Ok(Element { name, attrs, children });
+                return Ok(Element {
+                    name,
+                    attrs,
+                    children,
+                });
             } else if self.starts("<!--") {
                 self.skip_until("-->")?;
             } else if self.starts("<![CDATA[") {
                 self.i += 9;
                 let start = self.i;
                 self.skip_until("]]>")?;
-                children.push(Node::Text(String::from_utf8_lossy(&self.s[start..self.i - 3]).into_owned()));
+                children.push(Node::Text(
+                    String::from_utf8_lossy(&self.s[start..self.i - 3]).into_owned(),
+                ));
             } else if self.starts("<?") {
                 self.skip_until("?>")?;
             } else if self.starts("<") {
@@ -318,7 +339,15 @@ struct RdfXml {
 }
 
 /// RDF/XML 7.2: names reserved by the syntax, and names removed from it.
-const CORE_SYNTAX_TERMS: [&str; 7] = ["RDF", "ID", "about", "parseType", "resource", "nodeID", "datatype"];
+const CORE_SYNTAX_TERMS: [&str; 7] = [
+    "RDF",
+    "ID",
+    "about",
+    "parseType",
+    "resource",
+    "nodeID",
+    "datatype",
+];
 const OLD_TERMS: [&str; 3] = ["aboutEach", "aboutEachPrefix", "bagID"];
 
 fn rdf_local(iri: &str) -> Option<&str> {
@@ -328,7 +357,13 @@ fn rdf_local(iri: &str) -> Option<&str> {
 /// XML NCName (the value space of rdf:ID and rdf:nodeID).
 fn is_ncname(s: &str) -> bool {
     let mut cs = s.chars();
-    matches!(cs.next(), Some(c) if c.is_alphabetic() || c == '_') && cs.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | '\u{B7}') || ('\u{300}'..='\u{36F}').contains(&c) || ('\u{203F}'..='\u{2040}').contains(&c))
+    matches!(cs.next(), Some(c) if c.is_alphabetic() || c == '_')
+        && cs.all(|c| {
+            c.is_alphanumeric()
+                || matches!(c, '_' | '-' | '.' | '\u{B7}')
+                || ('\u{300}'..='\u{36F}').contains(&c)
+                || ('\u{203F}'..='\u{2040}').contains(&c)
+        })
 }
 
 /// Parse an RDF/XML document into quads (relative to `base`).
@@ -336,8 +371,18 @@ pub fn parse_rdfxml(text: &str, base: &str) -> Result<Vec<Quad>, String> {
     let root = parse_xml(text)?;
     let mut ns = HashMap::new();
     ns.insert("xml".to_string(), XML_NS.to_string());
-    let scope = Scope { ns, base: base.to_string(), lang: None, dir: None, versioned: false };
-    let mut st = RdfXml { out: Vec::new(), bnodes: HashMap::new(), ids: Default::default() };
+    let scope = Scope {
+        ns,
+        base: base.to_string(),
+        lang: None,
+        dir: None,
+        versioned: false,
+    };
+    let mut st = RdfXml {
+        out: Vec::new(),
+        bnodes: HashMap::new(),
+        ids: Default::default(),
+    };
     let scope = st.enter(&root, &scope);
     if st.qname(&root.name, &scope)? == format!("{RDF}RDF") {
         for child in root.elements() {
@@ -360,7 +405,11 @@ impl RdfXml {
             } else if k == "xml:base" {
                 s.base = resolve_iri(&parent.base, v);
             } else if k == "xml:lang" {
-                s.lang = if v.is_empty() { None } else { Some(v.to_ascii_lowercase()) };
+                s.lang = if v.is_empty() {
+                    None
+                } else {
+                    Some(v.to_ascii_lowercase())
+                };
             }
         }
         // rdf:version and its:dir are resolved after the namespace declarations of this element
@@ -400,7 +449,9 @@ impl RdfXml {
             }
             // ITS attributes (its:dir, its:version) and rdf:version are not properties
             if let Some((p, local)) = k.split_once(':') {
-                if scope.ns.get(p).is_some_and(|n| n == ITS_NS) || (scope.ns.get(p).is_some_and(|n| n == RDF) && local == "version") {
+                if scope.ns.get(p).is_some_and(|n| n == ITS_NS)
+                    || (scope.ns.get(p).is_some_and(|n| n == RDF) && local == "version")
+                {
                     continue;
                 }
             }
@@ -416,7 +467,12 @@ impl RdfXml {
     }
 
     fn blank(&mut self, label: &str) -> Term {
-        Term::Blank(self.bnodes.entry(label.to_string()).or_insert_with(fresh_blank_id).clone())
+        Term::Blank(
+            self.bnodes
+                .entry(label.to_string())
+                .or_insert_with(fresh_blank_id)
+                .clone(),
+        )
     }
 
     fn emit(&mut self, s: Term, p: Term, o: Term) {
@@ -459,14 +515,24 @@ impl RdfXml {
                     }
                     subject = Some(self.blank(v));
                 }
-                Some(l) if OLD_TERMS.contains(&l) || l == "li" || matches!(l, "parseType" | "resource" | "datatype" | "RDF" | "Description") => {
+                Some(l)
+                    if OLD_TERMS.contains(&l)
+                        || l == "li"
+                        || matches!(
+                            l,
+                            "parseType" | "resource" | "datatype" | "RDF" | "Description"
+                        ) =>
+                {
                     return Err(format!("RDF/XML: rdf:{l} is not allowed on a node element"));
                 }
                 _ => {}
             }
         }
         if identifying > 1 {
-            return Err("RDF/XML: a node element may have only one of rdf:about, rdf:ID and rdf:nodeID".into());
+            return Err(
+                "RDF/XML: a node element may have only one of rdf:about, rdf:ID and rdf:nodeID"
+                    .into(),
+            );
         }
         let subject = subject.unwrap_or_else(Term::fresh_blank);
         if name != format!("{RDF}Description") {
@@ -475,7 +541,11 @@ impl RdfXml {
         for (k, v) in &attrs {
             match rdf_local(k) {
                 Some("about" | "ID" | "nodeID") => {}
-                Some("type") => self.emit(subject.clone(), Term::iri(RDF_TYPE), Term::Iri(resolve_iri(&scope.base, v))),
+                Some("type") => self.emit(
+                    subject.clone(),
+                    Term::iri(RDF_TYPE),
+                    Term::Iri(resolve_iri(&scope.base, v)),
+                ),
                 _ => {
                     let lit = self.literal(v.clone(), &scope);
                     self.emit(subject.clone(), Term::Iri(k.clone()), lit);
@@ -504,10 +574,18 @@ impl RdfXml {
     /// Emit a property statement, and its reification when the property element has rdf:ID.
     fn statement(&mut self, s: Term, p: Term, o: Term, reify: Option<&Term>, ann: Option<&Term>) {
         if let Some(r) = ann {
-            self.emit(r.clone(), Term::iri(super::RDF_REIFIES), Term::triple(s.clone(), p.clone(), o.clone()));
+            self.emit(
+                r.clone(),
+                Term::iri(super::RDF_REIFIES),
+                Term::triple(s.clone(), p.clone(), o.clone()),
+            );
         }
         if let Some(r) = reify {
-            self.emit(r.clone(), Term::iri(RDF_TYPE), Term::iri(format!("{RDF}Statement")));
+            self.emit(
+                r.clone(),
+                Term::iri(RDF_TYPE),
+                Term::iri(format!("{RDF}Statement")),
+            );
             self.emit(r.clone(), Term::iri(format!("{RDF}subject")), s.clone());
             self.emit(r.clone(), Term::iri(format!("{RDF}predicate")), p.clone());
             self.emit(r.clone(), Term::iri(format!("{RDF}object")), o.clone());
@@ -515,7 +593,13 @@ impl RdfXml {
         self.emit(s, p, o);
     }
 
-    fn property_element(&mut self, e: &Element, subject: &Term, parent: &Scope, li: &mut usize) -> Result<(), String> {
+    fn property_element(
+        &mut self,
+        e: &Element,
+        subject: &Term,
+        parent: &Scope,
+        li: &mut usize,
+    ) -> Result<(), String> {
         let scope = self.enter(e, parent);
         let mut pred = self.qname(&e.name, &scope)?;
         if pred == format!("{RDF}li") {
@@ -524,30 +608,55 @@ impl RdfXml {
         }
         if let Some(l) = rdf_local(&pred) {
             if CORE_SYNTAX_TERMS.contains(&l) || OLD_TERMS.contains(&l) || l == "Description" {
-                return Err(format!("RDF/XML: rdf:{l} cannot be used as a property element"));
+                return Err(format!(
+                    "RDF/XML: rdf:{l} cannot be used as a property element"
+                ));
             }
         }
         let pred = Term::Iri(pred);
         let attrs = self.rdf_attrs(e, &scope)?;
-        let get = |n: &str| attrs.iter().find(|(k, _)| k == &format!("{RDF}{n}")).map(|(_, v)| v.clone());
+        let get = |n: &str| {
+            attrs
+                .iter()
+                .find(|(k, _)| k == &format!("{RDF}{n}"))
+                .map(|(_, v)| v.clone())
+        };
         for (k, _) in &attrs {
             if let Some(l) = rdf_local(k) {
                 if OLD_TERMS.contains(&l) || matches!(l, "li" | "about" | "RDF" | "Description") {
-                    return Err(format!("RDF/XML: rdf:{l} is not allowed on a property element"));
+                    return Err(format!(
+                        "RDF/XML: rdf:{l} is not allowed on a property element"
+                    ));
                 }
             }
         }
         let parse_type = get("parseType");
         let has = |n: &str| get(n).is_some();
-        let property_attrs = attrs.iter().any(|(k, _)| !matches!(rdf_local(k), Some("ID" | "datatype" | "parseType" | "resource" | "nodeID" | "annotation" | "annotationNodeID")));
+        let property_attrs = attrs.iter().any(|(k, _)| {
+            !matches!(
+                rdf_local(k),
+                Some(
+                    "ID" | "datatype"
+                        | "parseType"
+                        | "resource"
+                        | "nodeID"
+                        | "annotation"
+                        | "annotationNodeID"
+                )
+            )
+        });
         if has("resource") && has("nodeID") {
             return Err("RDF/XML: rdf:resource and rdf:nodeID cannot be used together".into());
         }
-        if parse_type.is_some() && (has("resource") || has("nodeID") || has("datatype") || property_attrs) {
+        if parse_type.is_some()
+            && (has("resource") || has("nodeID") || has("datatype") || property_attrs)
+        {
             return Err("RDF/XML: rdf:parseType cannot be combined with rdf:resource, rdf:nodeID, rdf:datatype or property attributes".into());
         }
         if has("datatype") && (has("resource") || has("nodeID") || property_attrs) {
-            return Err("RDF/XML: rdf:datatype is only allowed on a literal property element".into());
+            return Err(
+                "RDF/XML: rdf:datatype is only allowed on a literal property element".into(),
+            );
         }
         if let Some(n) = get("nodeID") {
             if !is_ncname(&n) {
@@ -561,11 +670,18 @@ impl RdfXml {
         let reify = reify.as_ref();
         // RDF 1.2: rdf:annotation / rdf:annotationNodeID name a reifier of the statement
         let ann = match (get("annotation"), get("annotationNodeID")) {
-            (Some(_), Some(_)) => return Err("RDF/XML: rdf:annotation and rdf:annotationNodeID cannot be used together".into()),
+            (Some(_), Some(_)) => {
+                return Err(
+                    "RDF/XML: rdf:annotation and rdf:annotationNodeID cannot be used together"
+                        .into(),
+                );
+            }
             (Some(a), None) => Some(Term::Iri(resolve_iri(&scope.base, &a))),
             (None, Some(n)) => {
                 if !is_ncname(&n) {
-                    return Err(format!("RDF/XML: rdf:annotationNodeID \"{n}\" is not an XML name"));
+                    return Err(format!(
+                        "RDF/XML: rdf:annotationNodeID \"{n}\" is not an XML name"
+                    ));
                 }
                 Some(self.blank(&n))
             }
@@ -579,7 +695,13 @@ impl RdfXml {
                 for c in &e.children {
                     write_xml_node(&mut xml, c);
                 }
-                self.statement(subject.clone(), pred, Term::typed(xml, &format!("{RDF}XMLLiteral")), reify, ann.as_ref());
+                self.statement(
+                    subject.clone(),
+                    pred,
+                    Term::typed(xml, &format!("{RDF}XMLLiteral")),
+                    reify,
+                    ann.as_ref(),
+                );
                 return Ok(());
             }
             Some("Resource") => {
@@ -595,13 +717,18 @@ impl RdfXml {
             Some("Triple") => {
                 // the single statement of the content, as a triple term (not asserted)
                 let [child] = children.as_slice() else {
-                    return Err("RDF/XML: rdf:parseType=\"Triple\" needs exactly one node element".into());
+                    return Err(
+                        "RDF/XML: rdf:parseType=\"Triple\" needs exactly one node element".into(),
+                    );
                 };
                 let mark = self.out.len();
                 self.node_element(child, &scope)?;
                 let inner: Vec<Quad> = self.out.drain(mark..).collect();
                 let [q] = inner.as_slice() else {
-                    return Err("RDF/XML: rdf:parseType=\"Triple\" content must produce exactly one triple".into());
+                    return Err(
+                        "RDF/XML: rdf:parseType=\"Triple\" content must produce exactly one triple"
+                            .into(),
+                    );
                 };
                 let tt = Term::triple(q.s.clone(), q.p.clone(), q.o.clone());
                 self.statement(subject.clone(), pred, tt, reify, ann.as_ref());
@@ -636,7 +763,20 @@ impl RdfXml {
 
         let extra: Vec<(String, String)> = attrs
             .iter()
-            .filter(|(k, _)| !matches!(k.strip_prefix(RDF), Some("resource" | "nodeID" | "datatype" | "parseType" | "ID" | "annotation" | "annotationNodeID")))
+            .filter(|(k, _)| {
+                !matches!(
+                    k.strip_prefix(RDF),
+                    Some(
+                        "resource"
+                            | "nodeID"
+                            | "datatype"
+                            | "parseType"
+                            | "ID"
+                            | "annotation"
+                            | "annotationNodeID"
+                    )
+                )
+            })
             .cloned()
             .collect();
         let object = if let Some(r) = get("resource") {
@@ -652,7 +792,11 @@ impl RdfXml {
             Some(obj) => {
                 for (k, v) in extra {
                     if k == RDF_TYPE {
-                        self.emit(obj.clone(), Term::iri(RDF_TYPE), Term::Iri(resolve_iri(&scope.base, &v)));
+                        self.emit(
+                            obj.clone(),
+                            Term::iri(RDF_TYPE),
+                            Term::Iri(resolve_iri(&scope.base, &v)),
+                        );
                     } else {
                         let lit = self.literal(v, &scope);
                         self.emit(obj.clone(), Term::Iri(k), lit);
@@ -712,14 +856,22 @@ fn write_xml_node(out: &mut String, n: &Node) {
 
 /// Split an IRI into (namespace, local) where local is a valid XML NCName.
 fn split_iri(iri: &str) -> Option<(&str, &str)> {
-    let idx = iri.char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.').last()?.0;
+    let idx = iri
+        .char_indices()
+        .rev()
+        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_' || *c == '-' || *c == '.')
+        .last()?
+        .0;
     let local = &iri[idx..];
     let first = local.chars().next()?;
     if first.is_alphabetic() || first == '_' {
         Some((&iri[..idx], local))
     } else {
         // shrink until the local name starts with a letter
-        let pos = local.char_indices().find(|(_, c)| c.is_alphabetic() || *c == '_')?.0;
+        let pos = local
+            .char_indices()
+            .find(|(_, c)| c.is_alphabetic() || *c == '_')?
+            .0;
         Some((&iri[..idx + pos], &local[pos..]))
     }
 }
@@ -753,7 +905,8 @@ pub fn write_rdfxml(quads: &[Quad], prefixes: &[(String, String)]) -> Result<Str
         }
         body.push_str("\">\n");
         for q in &quads[i..j] {
-            let (pns, local) = split_iri(q.p.value()).ok_or_else(|| format!("RDF/XML cannot express predicate <{}>", q.p.value()))?;
+            let (pns, local) = split_iri(q.p.value())
+                .ok_or_else(|| format!("RDF/XML cannot express predicate <{}>", q.p.value()))?;
             let prefix = match ns.iter().find(|(_, n)| n == pns) {
                 Some((p, _)) => p.clone(),
                 None => {
@@ -766,7 +919,10 @@ pub fn write_rdfxml(quads: &[Quad], prefixes: &[(String, String)]) -> Result<Str
             body.push_str("    <");
             body.push_str(&tag);
             match &q.o {
-                Term::Triple(_) => return Err("RDF/XML cannot express RDF-star quoted triples; use Turtle-star or TriG-star".into()),
+                Term::Triple(_) => return Err(
+                    "RDF/XML cannot express RDF-star quoted triples; use Turtle-star or TriG-star"
+                        .into(),
+                ),
                 Term::Iri(o) => {
                     body.push_str(" rdf:resource=\"");
                     xml_escape(&mut body, o, true);
@@ -816,7 +972,9 @@ pub fn write_rdfxml(quads: &[Quad], prefixes: &[(String, String)]) -> Result<Str
 mod tests {
     #[test]
     fn entity_expansion_is_capped() {
-        let mut doc = String::from("<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY a0 \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\">");
+        let mut doc = String::from(
+            "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY a0 \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\">",
+        );
         for i in 1..12 {
             let refs: String = (0..10).map(|_| format!("&a{};", i - 1)).collect();
             doc.push_str(&format!("<!ENTITY a{i} \"{refs}\">"));

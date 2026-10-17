@@ -41,7 +41,9 @@ pub const RDF_DIRLANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#
 pub fn valid_lang(tag: &str) -> bool {
     let mut parts = tag.split('-');
     let first = parts.next().unwrap_or("");
-    (1..=8).contains(&first.len()) && first.bytes().all(|b| b.is_ascii_alphabetic()) && parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
+    (1..=8).contains(&first.len())
+        && first.bytes().all(|b| b.is_ascii_alphabetic())
+        && parts.all(|p| (1..=8).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
 /// `rdf:reifies` (RDF 1.2): a reifier's statement about a triple term.
@@ -58,11 +60,11 @@ pub const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 /// A term of an RDF statement: the subject, predicate or object position.
 pub enum Term {
-/// An IRI.
+    /// An IRI.
     Iri(String),
-/// A blank node, by its label.
+    /// A blank node, by its label.
     Blank(String),
-/// A literal (see [`Literal`]).
+    /// A literal (see [`Literal`]).
     Literal(Literal),
     /// RDF-star quoted triple.
     Triple(Box<[Term; 3]>),
@@ -71,29 +73,37 @@ pub enum Term {
 #[derive(Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 /// A literal: a lexical form with a language tag or a datatype.
 pub struct Literal {
-/// The lexical form, as written.
+    /// The lexical form, as written.
     pub value: String,
     /// Full datatype IRI (xsd:string for plain, rdf:langString with a language).
     pub datatype: String,
-/// The language tag (lowercase), for a language-tagged literal; an RDF 1.2 base
-/// direction may follow after `--` (`en--ltr`).
+    /// The language tag (lowercase), for a language-tagged literal; an RDF 1.2 base
+    /// direction may follow after `--` (`en--ltr`).
     pub lang: Option<String>,
 }
 
 impl Term {
-/// An IRI term.
+    /// An IRI term.
     pub fn iri(s: impl Into<String>) -> Term {
         Term::Iri(s.into())
     }
-/// A plain string literal.
+    /// A plain string literal.
     pub fn string(s: impl Into<String>) -> Term {
-        Term::Literal(Literal { value: s.into(), datatype: XSD_STRING.into(), lang: None })
+        Term::Literal(Literal {
+            value: s.into(),
+            datatype: XSD_STRING.into(),
+            lang: None,
+        })
     }
-/// A literal with the given datatype.
+    /// A literal with the given datatype.
     pub fn typed(s: impl Into<String>, dt: &str) -> Term {
-        Term::Literal(Literal { value: s.into(), datatype: dt.into(), lang: None })
+        Term::Literal(Literal {
+            value: s.into(),
+            datatype: dt.into(),
+            lang: None,
+        })
     }
-/// A language-tagged literal.
+    /// A language-tagged literal.
     pub fn lang(s: impl Into<String>, lang: &str) -> Term {
         Term::Literal(Literal {
             value: s.into(),
@@ -103,41 +113,45 @@ impl Term {
     }
     /// RDF 1.2 literal with a language and a base direction (`ltr` / `rtl`).
     pub fn dir_lang(s: impl Into<String>, lang: &str, dir: &str) -> Term {
-        Term::Literal(Literal { value: s.into(), datatype: RDF_DIRLANGSTRING.into(), lang: Some(format!("{}--{dir}", lang.to_ascii_lowercase())) })
+        Term::Literal(Literal {
+            value: s.into(),
+            datatype: RDF_DIRLANGSTRING.into(),
+            lang: Some(format!("{}--{dir}", lang.to_ascii_lowercase())),
+        })
     }
-/// The `xsd:boolean` literal for `b`.
+    /// The `xsd:boolean` literal for `b`.
     pub fn boolean(b: bool) -> Term {
         Term::typed(if b { "true" } else { "false" }, XSD_BOOLEAN)
     }
-/// The `xsd:integer` literal for `i`.
+    /// The `xsd:integer` literal for `i`.
     pub fn integer(i: i64) -> Term {
         Term::typed(i.to_string(), XSD_INTEGER)
     }
-/// A fresh blank node label, never issued before in this process.
+    /// A fresh blank node label, never issued before in this process.
     pub fn fresh_blank() -> Term {
         Term::Blank(fresh_blank_id())
     }
-/// Whether this is an IRI.
+    /// Whether this is an IRI.
     pub fn is_iri(&self) -> bool {
         matches!(self, Term::Iri(_))
     }
-/// Whether this is a blank node.
+    /// Whether this is a blank node.
     pub fn is_blank(&self) -> bool {
         matches!(self, Term::Blank(_))
     }
-/// Whether this is a literal.
+    /// Whether this is a literal.
     pub fn is_literal(&self) -> bool {
         matches!(self, Term::Literal(_))
     }
-/// Whether this is a quoted triple (RDF-star).
+    /// Whether this is a quoted triple (RDF-star).
     pub fn is_triple(&self) -> bool {
         matches!(self, Term::Triple(_))
     }
-/// A quoted triple term of the three terms.
+    /// A quoted triple term of the three terms.
     pub fn triple(s: Term, p: Term, o: Term) -> Term {
         Term::Triple(Box::new([s, p, o]))
     }
-/// The literal, when this is one.
+    /// The literal, when this is one.
     pub fn as_literal(&self) -> Option<&Literal> {
         match self {
             Term::Literal(l) => Some(l),
@@ -185,7 +199,9 @@ pub fn escape_literal(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -243,11 +259,11 @@ impl fmt::Display for Term {
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 /// One statement: a triple, and the graph it belongs to.
 pub struct Quad {
-/// The subject.
+    /// The subject.
     pub s: Term,
-/// The predicate (always an IRI in RDF; blank nodes only in generalized RDF).
+    /// The predicate (always an IRI in RDF; blank nodes only in generalized RDF).
     pub p: Term,
-/// The object.
+    /// The object.
     pub o: Term,
     /// None = default graph.
     pub g: Option<Term>,
@@ -256,17 +272,17 @@ pub struct Quad {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 /// A concrete RDF serialization.
 pub enum Format {
-/// N-Triples: one triple per line.
+    /// N-Triples: one triple per line.
     NTriples,
-/// N-Quads: one quad per line, graphs included.
+    /// N-Quads: one quad per line, graphs included.
     NQuads,
-/// Turtle.
+    /// Turtle.
     Turtle,
-/// TriG: Turtle with named graphs.
+    /// TriG: Turtle with named graphs.
     TriG,
-/// RDF/XML.
+    /// RDF/XML.
     RdfXml,
-/// JSON-LD 1.1.
+    /// JSON-LD 1.1.
     JsonLd,
     /// YAML-LD 1.0: a JSON-LD document in YAML syntax (application/ld+yaml).
     YamlLd,
@@ -275,14 +291,23 @@ pub enum Format {
 }
 
 impl Format {
-/// The format of a media type, ignoring parameters; `None` when the type names none.
+    /// The format of a media type, ignoring parameters; `None` when the type names none.
     pub fn from_media_type(mt: &str) -> Option<Format> {
-        let mt = mt.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let mt = mt
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         Some(match mt.as_str() {
             "application/n-triples" | "text/plain" | "application/x-ntriples" => Format::NTriples,
             "application/n-quads" | "text/x-nquads" | "text/nquads" => Format::NQuads,
             "text/n3" | "text/rdf+n3" => Format::N3,
-            "text/turtle" | "application/x-turtle" | "application/turtle" | "application/x-turtlestar" | "text/x-turtlestar" => Format::Turtle,
+            "text/turtle"
+            | "application/x-turtle"
+            | "application/turtle"
+            | "application/x-turtlestar"
+            | "text/x-turtlestar" => Format::Turtle,
             "application/trig" | "application/x-trig" | "application/x-trigstar" => Format::TriG,
             "application/rdf+xml" | "application/xml" | "text/xml" => Format::RdfXml,
             "application/ld+json" | "application/json" => Format::JsonLd,
@@ -291,10 +316,14 @@ impl Format {
         })
     }
 
-/// The format of a file name, by extension; `None` when the extension names none.
+    /// The format of a file name, by extension; `None` when the extension names none.
     pub fn from_extension(name: &str) -> Option<Format> {
         let lower = name.to_ascii_lowercase();
-        let ext = lower.trim_end_matches(".gz").rsplit('.').next()?.to_string();
+        let ext = lower
+            .trim_end_matches(".gz")
+            .rsplit('.')
+            .next()?
+            .to_string();
         Some(match ext.as_str() {
             "nt" => Format::NTriples,
             "nq" => Format::NQuads,
@@ -308,7 +337,7 @@ impl Format {
         })
     }
 
-/// The format's canonical media type.
+    /// The format's canonical media type.
     pub fn media_type(self) -> &'static str {
         match self {
             Format::NTriples => "application/n-triples",
@@ -322,7 +351,7 @@ impl Format {
         }
     }
 
-/// The format's canonical file extension.
+    /// The format's canonical file extension.
     pub fn extension(self) -> &'static str {
         match self {
             Format::NTriples => "nt",
@@ -336,9 +365,12 @@ impl Format {
         }
     }
 
-/// Whether the format can hold named graphs.
+    /// Whether the format can hold named graphs.
     pub fn supports_graphs(self) -> bool {
-        matches!(self, Format::NQuads | Format::TriG | Format::JsonLd | Format::YamlLd | Format::N3)
+        matches!(
+            self,
+            Format::NQuads | Format::TriG | Format::JsonLd | Format::YamlLd | Format::N3
+        )
     }
 }
 
@@ -350,15 +382,23 @@ pub const RDF_ACCEPT: &str = "text/turtle, application/trig;q=0.95, application/
 pub fn fetch(url: &str, default_graph: Option<&Term>) -> Result<Vec<Quad>, String> {
     let (ctype, body) = crate::http::fetch(url, RDF_ACCEPT, std::time::Duration::from_secs(60))?;
     let format = Format::from_media_type(&ctype)
-        .filter(|f| *f != Format::NTriples || !ctype.starts_with("text/plain") || url.ends_with(".nt"))
+        .filter(|f| {
+            *f != Format::NTriples || !ctype.starts_with("text/plain") || url.ends_with(".nt")
+        })
         .or_else(|| Format::from_extension(url.split(['?', '#']).next().unwrap_or(url)))
         .unwrap_or(Format::Turtle);
     let text = String::from_utf8_lossy(&body);
-    parse(&text, format, url, default_graph).map_err(|e| format!("{url} ({}): {e}", format.media_type()))
+    parse(&text, format, url, default_graph)
+        .map_err(|e| format!("{url} ({}): {e}", format.media_type()))
 }
 
 /// Parse any supported serialization. Quads without a graph go to `default_graph`.
-pub fn parse(data: &str, format: Format, base: &str, default_graph: Option<&Term>) -> Result<Vec<Quad>, String> {
+pub fn parse(
+    data: &str,
+    format: Format,
+    base: &str,
+    default_graph: Option<&Term>,
+) -> Result<Vec<Quad>, String> {
     let mut quads = match format {
         Format::NTriples => ntriples::parse(data, false, false)?,
         Format::NQuads => ntriples::parse(data, true, false)?,
@@ -382,7 +422,13 @@ pub fn parse(data: &str, format: Format, base: &str, default_graph: Option<&Term
 /// Like `parse`, but statements that do not parse are skipped and their errors added to
 /// `skipped` (N-Triples, N-Quads: the line; Turtle: the statement; TriG: the graph block).
 /// The other formats have no statement boundaries to resume at and parse strictly.
-pub fn parse_lenient(data: &str, format: Format, base: &str, default_graph: Option<&Term>, skipped: &mut Vec<String>) -> Result<Vec<Quad>, String> {
+pub fn parse_lenient(
+    data: &str,
+    format: Format,
+    base: &str,
+    default_graph: Option<&Term>,
+    skipped: &mut Vec<String>,
+) -> Result<Vec<Quad>, String> {
     let mut quads = match format {
         Format::NTriples => ntriples::parse_lenient(data, false, skipped),
         Format::NQuads => ntriples::parse_lenient(data, true, skipped),
@@ -451,8 +497,13 @@ fn has_scheme(s: &str) -> bool {
     match s.find(':') {
         Some(i) if i > 0 => {
             let scheme = &s[..i];
-            scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
-                && scheme.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
+            scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c))
         }
         _ => false,
     }
@@ -526,8 +577,14 @@ mod lenient_tests {
         let mut skipped = Vec::new();
         let q = parse_lenient(ttl, Format::Turtle, "", None, &mut skipped).unwrap();
         let subjects: Vec<&str> = q.iter().map(|q| q.s.value()).collect();
-        assert!(subjects.contains(&"http://ex/a") && subjects.contains(&"http://ex/e"), "{subjects:?}");
-        assert!(!subjects.contains(&"http://ex/c"), "a failed statement leaves nothing behind");
+        assert!(
+            subjects.contains(&"http://ex/a") && subjects.contains(&"http://ex/e"),
+            "{subjects:?}"
+        );
+        assert!(
+            !subjects.contains(&"http://ex/c"),
+            "a failed statement leaves nothing behind"
+        );
         assert_eq!(skipped.len(), 2, "{skipped:?}");
     }
 }

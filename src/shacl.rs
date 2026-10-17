@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 use crate::json::Json;
-use crate::rdf::{Term, RDF, RDFS, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, XSD};
+use crate::rdf::{RDF, RDF_FIRST, RDF_NIL, RDF_REST, RDF_TYPE, RDFS, Term, XSD};
 use crate::sparql::func;
 use crate::sparql::regex::Regex;
 use crate::store::Store;
@@ -35,26 +35,32 @@ enum Target {
 /// A SHACL property path.
 #[derive(Debug, Clone, PartialEq)]
 pub enum PathExpr {
-/// A predicate, directly.
+    /// A predicate, directly.
     Pred(Term),
-/// `^path`: walked backwards.
+    /// `^path`: walked backwards.
     Inverse(Box<PathExpr>),
-/// `p1/p2`: one after the other.
+    /// `p1/p2`: one after the other.
     Seq(Vec<PathExpr>),
-/// `p1|p2`: either.
+    /// `p1|p2`: either.
     Alt(Vec<PathExpr>),
-/// `p*`.
+    /// `p*`.
     ZeroOrMore(Box<PathExpr>),
-/// `p+`.
+    /// `p+`.
     OneOrMore(Box<PathExpr>),
-/// `p?`.
+    /// `p?`.
     ZeroOrOne(Box<PathExpr>),
 }
 
 impl PathExpr {
     /// SPARQL property path syntax (for $PATH and the JSON report).
     pub fn sparql(&self) -> String {
-        let join = |items: &[PathExpr], sep: &str| items.iter().map(|p| p.sparql()).collect::<Vec<_>>().join(sep);
+        let join = |items: &[PathExpr], sep: &str| {
+            items
+                .iter()
+                .map(|p| p.sparql())
+                .collect::<Vec<_>>()
+                .join(sep)
+        };
         match self {
             PathExpr::Pred(p) => p.to_string(),
             PathExpr::Inverse(p) => format!("^({})", p.sparql()),
@@ -68,7 +74,16 @@ impl PathExpr {
 
     /// The path as a SHACL path node in Turtle (for sh:resultPath).
     fn turtle(&self) -> String {
-        let list = |items: &[PathExpr]| format!("( {} )", items.iter().map(|p| p.turtle()).collect::<Vec<_>>().join(" "));
+        let list = |items: &[PathExpr]| {
+            format!(
+                "( {} )",
+                items
+                    .iter()
+                    .map(|p| p.turtle())
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            )
+        };
         match self {
             PathExpr::Pred(p) => p.to_string(),
             PathExpr::Inverse(p) => format!("[ sh:inversePath {} ]", p.turtle()),
@@ -118,7 +133,12 @@ enum Constraint {
     Xone(Vec<usize>),
     Node(usize),
     Property(usize),
-    Qualified { shape: usize, min: Option<usize>, max: Option<usize>, siblings: Vec<usize> },
+    Qualified {
+        shape: usize,
+        min: Option<usize>,
+        max: Option<usize>,
+        siblings: Vec<usize>,
+    },
     Closed(HashSet<Term>),
     Sparql(SparqlQuery),
     /// A SPARQL-based constraint component: its IRI, parameter bindings and validator.
@@ -139,21 +159,21 @@ struct Shape {
 
 /// One constraint violation.
 pub struct Violation {
-/// The value the shape was checked on.
+    /// The value the shape was checked on.
     pub focus: Term,
-/// The path from the focus node to the value, when there is one.
+    /// The path from the focus node to the value, when there is one.
     pub path: Option<PathExpr>,
-/// The offending value, when the constraint names one.
+    /// The offending value, when the constraint names one.
     pub value: Option<Term>,
-/// The shape that was violated.
+    /// The shape that was violated.
     pub shape: Term,
-/// The constraint component's IRI (`sh:MinCountConstraintComponent` ...).
+    /// The constraint component's IRI (`sh:MinCountConstraintComponent` ...).
     pub component: String,
-/// The message, or one made from the parts.
+    /// The message, or one made from the parts.
     pub message: String,
-/// `sh:Info`, `sh:Warning` or `sh:Violation`.
+    /// `sh:Info`, `sh:Warning` or `sh:Violation`.
     pub severity: Term,
-/// The constraint itself, when a node carries it.
+    /// The constraint itself, when a node carries it.
     pub source_constraint: Option<Term>,
 }
 
@@ -173,7 +193,15 @@ struct Graph {
 
 impl Graph {
     fn get(&self, s: &Term, p: &str) -> Vec<Term> {
-        self.by_s.get(s).map(|v| v.iter().filter(|(pp, _)| pp.value() == p).map(|(_, o)| o.clone()).collect()).unwrap_or_default()
+        self.by_s
+            .get(s)
+            .map(|v| {
+                v.iter()
+                    .filter(|(pp, _)| pp.value() == p)
+                    .map(|(_, o)| o.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
     fn sh(&self, s: &Term, local: &str) -> Vec<Term> {
         self.get(s, &format!("{SH}{local}"))
@@ -206,7 +234,9 @@ impl Graph {
             if cur.value() == RDF_NIL {
                 break;
             }
-            let Some(first) = self.get(&cur, RDF_FIRST).into_iter().next() else { break };
+            let Some(first) = self.get(&cur, RDF_FIRST).into_iter().next() else {
+                break;
+            };
             out.push(first);
             match self.get(&cur, RDF_REST).into_iter().next() {
                 Some(r) => cur = r,
@@ -219,7 +249,8 @@ impl Graph {
         t.value() == RDF_NIL || !self.get(t, RDF_FIRST).is_empty()
     }
     fn count(&self, s: &Term, local: &str) -> Option<usize> {
-        self.one(s, local).and_then(|t| t.value().parse::<usize>().ok())
+        self.one(s, local)
+            .and_then(|t| t.value().parse::<usize>().ok())
     }
     fn truthy(&self, s: &Term, local: &str) -> bool {
         // only "true": "1"^^xsd:boolean is a different value and leaves the constraint off
@@ -242,14 +273,22 @@ impl Graph {
         }
         let sub = |p: &Term| self.path_at(p, depth + 1).map(Box::new);
         if self.is_list(t) {
-            let items = self.list(t).iter().map(|i| self.path_at(i, depth + 1)).collect::<Option<Vec<_>>>()?;
+            let items = self
+                .list(t)
+                .iter()
+                .map(|i| self.path_at(i, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
             return (items.len() >= 2).then_some(PathExpr::Seq(items));
         }
         if let Some(p) = self.one(t, "inversePath") {
             return Some(PathExpr::Inverse(sub(&p)?));
         }
         if let Some(l) = self.one(t, "alternativePath") {
-            let items = self.list(&l).iter().map(|i| self.path_at(i, depth + 1)).collect::<Option<Vec<_>>>()?;
+            let items = self
+                .list(&l)
+                .iter()
+                .map(|i| self.path_at(i, depth + 1))
+                .collect::<Option<Vec<_>>>()?;
             return (items.len() >= 2).then_some(PathExpr::Alt(items));
         }
         if let Some(p) = self.one(t, "zeroOrMorePath") {
@@ -285,7 +324,12 @@ impl Graph {
 
     fn query(&self, node: &Term, kind: &str) -> Option<SparqlQuery> {
         let text = self.one(node, kind)?;
-        Some(SparqlQuery { node: None, text: format!("{}{}", self.prefixes(node), text.value()), ask: kind == "ask", messages: self.sh(node, "message") })
+        Some(SparqlQuery {
+            node: None,
+            text: format!("{}{}", self.prefixes(node), text.value()),
+            ask: kind == "ask",
+            messages: self.sh(node, "message"),
+        })
     }
 }
 
@@ -326,13 +370,33 @@ impl Builder<'_> {
             severity: g.one(id, "severity").unwrap_or_else(|| sh("Violation")),
             deactivated: g.truthy(id, "deactivated"),
         });
-        let mut targets: Vec<Target> = g.sh(id, "targetClass").into_iter().map(Target::Class).collect();
+        let mut targets: Vec<Target> = g
+            .sh(id, "targetClass")
+            .into_iter()
+            .map(Target::Class)
+            .collect();
         targets.extend(g.sh(id, "targetNode").into_iter().map(Target::Node));
-        targets.extend(g.sh(id, "targetSubjectsOf").into_iter().map(Target::SubjectsOf));
-        targets.extend(g.sh(id, "targetObjectsOf").into_iter().map(Target::ObjectsOf));
-        targets.extend(g.sh(id, "target").iter().filter_map(|t| g.query(t, "select")).map(Target::Sparql));
+        targets.extend(
+            g.sh(id, "targetSubjectsOf")
+                .into_iter()
+                .map(Target::SubjectsOf),
+        );
+        targets.extend(
+            g.sh(id, "targetObjectsOf")
+                .into_iter()
+                .map(Target::ObjectsOf),
+        );
+        targets.extend(
+            g.sh(id, "target")
+                .iter()
+                .filter_map(|t| g.query(t, "select"))
+                .map(Target::Sparql),
+        );
         // implicit class target: a shape that is also an rdfs:Class
-        if g.has_type(id, &format!("{RDFS}Class")) && (g.has_type(id, &format!("{SH}NodeShape")) || g.has_type(id, &format!("{SH}PropertyShape"))) {
+        if g.has_type(id, &format!("{RDFS}Class"))
+            && (g.has_type(id, &format!("{SH}NodeShape"))
+                || g.has_type(id, &format!("{SH}PropertyShape")))
+        {
             targets.push(Target::Class(id.clone()));
         }
         let constraints = self.constraints(id, path.is_some());
@@ -357,10 +421,15 @@ impl Builder<'_> {
             c.push(Constraint::Class(k));
         }
         for k in g.sh(s, "nodeKind") {
-            c.push(Constraint::NodeKind(k.value().trim_start_matches(SH).to_string()));
+            c.push(Constraint::NodeKind(
+                k.value().trim_start_matches(SH).to_string(),
+            ));
         }
         for p in g.sh(s, "pattern") {
-            let flags = g.one(s, "flags").map(|f| f.value().to_string()).unwrap_or_default();
+            let flags = g
+                .one(s, "flags")
+                .map(|f| f.value().to_string())
+                .unwrap_or_default();
             if let Ok(r) = Regex::new(p.value(), &flags) {
                 c.push(Constraint::Pattern(r, p.value().to_string()));
             }
@@ -372,7 +441,12 @@ impl Builder<'_> {
             c.push(Constraint::MaxLength(n));
         }
         for l in g.sh(s, "languageIn") {
-            c.push(Constraint::LanguageIn(g.list(&l).iter().map(|t| t.value().to_ascii_lowercase()).collect()));
+            c.push(Constraint::LanguageIn(
+                g.list(&l)
+                    .iter()
+                    .map(|t| t.value().to_ascii_lowercase())
+                    .collect(),
+            ));
         }
         if property && g.truthy(s, "uniqueLang") {
             c.push(Constraint::UniqueLang);
@@ -383,7 +457,12 @@ impl Builder<'_> {
         for v in g.sh(s, "hasValue") {
             c.push(Constraint::HasValue(v));
         }
-        for (k, name) in [("minInclusive", "MinInclusive"), ("maxInclusive", "MaxInclusive"), ("minExclusive", "MinExclusive"), ("maxExclusive", "MaxExclusive")] {
+        for (k, name) in [
+            ("minInclusive", "MinInclusive"),
+            ("maxInclusive", "MaxInclusive"),
+            ("minExclusive", "MinExclusive"),
+            ("maxExclusive", "MaxExclusive"),
+        ] {
             for v in g.sh(s, k) {
                 c.push(Constraint::Range(name, v));
             }
@@ -406,7 +485,11 @@ impl Builder<'_> {
             let i = self.shape(&n);
             c.push(Constraint::Not(i));
         }
-        for (k, make) in [("and", Constraint::And as fn(Vec<usize>) -> Constraint), ("or", Constraint::Or), ("xone", Constraint::Xone)] {
+        for (k, make) in [
+            ("and", Constraint::And as fn(Vec<usize>) -> Constraint),
+            ("or", Constraint::Or),
+            ("xone", Constraint::Xone),
+        ] {
             for l in g.sh(s, k) {
                 let members = g.list(&l).iter().map(|m| self.shape(m)).collect();
                 c.push(make(members));
@@ -426,7 +509,15 @@ impl Builder<'_> {
                 let mut siblings = Vec::new();
                 if g.truthy(s, "qualifiedValueShapesDisjoint") {
                     // the qualified value shapes of the other property shapes of the parent shapes
-                    let parents: Vec<Term> = g.by_s.iter().filter(|(_, po)| po.iter().any(|(p, o)| p.value() == format!("{SH}property") && o == s)).map(|(k, _)| k.clone()).collect();
+                    let parents: Vec<Term> = g
+                        .by_s
+                        .iter()
+                        .filter(|(_, po)| {
+                            po.iter()
+                                .any(|(p, o)| p.value() == format!("{SH}property") && o == s)
+                        })
+                        .map(|(k, _)| k.clone())
+                        .collect();
                     for parent in parents {
                         for sib in g.sh(&parent, "property") {
                             if sib != *s {
@@ -438,11 +529,21 @@ impl Builder<'_> {
                         }
                     }
                 }
-                c.push(Constraint::Qualified { shape, min: g.count(s, "qualifiedMinCount"), max: g.count(s, "qualifiedMaxCount"), siblings });
+                c.push(Constraint::Qualified {
+                    shape,
+                    min: g.count(s, "qualifiedMinCount"),
+                    max: g.count(s, "qualifiedMaxCount"),
+                    siblings,
+                });
             }
         }
         if g.truthy(s, "closed") {
-            let mut allowed: HashSet<Term> = g.sh(s, "property").iter().filter_map(|p| g.one(p, "path")).filter(|p| p.is_iri()).collect();
+            let mut allowed: HashSet<Term> = g
+                .sh(s, "property")
+                .iter()
+                .filter_map(|p| g.one(p, "path"))
+                .filter(|p| p.is_iri())
+                .collect();
             for l in g.sh(s, "ignoredProperties") {
                 allowed.extend(g.list(&l));
             }
@@ -469,7 +570,12 @@ impl Builder<'_> {
             if !active || bindings.is_empty() {
                 continue;
             }
-            let validator = if property { comp.property_validator.as_ref() } else { comp.node_validator.as_ref() }.or(comp.validator.as_ref());
+            let validator = if property {
+                comp.property_validator.as_ref()
+            } else {
+                comp.node_validator.as_ref()
+            }
+            .or(comp.validator.as_ref());
             if let Some(v) = validator {
                 let mut v = v.clone();
                 if v.messages.is_empty() {
@@ -509,20 +615,37 @@ impl Shapes {
             .filter(|k| g.instance_of(k, &format!("{SH}ConstraintComponent")))
             .map(|k| Component {
                 id: k.clone(),
-                params: g.sh(k, "parameter").iter().filter_map(|p| Some((g.one(p, "path")?, g.truthy(p, "optional")))).collect(),
-                validator: g.one(k, "validator").and_then(|v| g.query(&v, "ask").or_else(|| g.query(&v, "select"))),
-                node_validator: g.one(k, "nodeValidator").and_then(|v| g.query(&v, "select")),
-                property_validator: g.one(k, "propertyValidator").and_then(|v| g.query(&v, "select")),
+                params: g
+                    .sh(k, "parameter")
+                    .iter()
+                    .filter_map(|p| Some((g.one(p, "path")?, g.truthy(p, "optional"))))
+                    .collect(),
+                validator: g
+                    .one(k, "validator")
+                    .and_then(|v| g.query(&v, "ask").or_else(|| g.query(&v, "select"))),
+                node_validator: g
+                    .one(k, "nodeValidator")
+                    .and_then(|v| g.query(&v, "select")),
+                property_validator: g
+                    .one(k, "propertyValidator")
+                    .and_then(|v| g.query(&v, "select")),
                 messages: g.sh(k, "message"),
             })
             .collect();
-        let mut b = Builder { g, index: HashMap::new(), shapes: Vec::new(), components };
+        let mut b = Builder {
+            g,
+            index: HashMap::new(),
+            shapes: Vec::new(),
+            components,
+        };
         // every shape with a target, plus every node or property shape, compiled up front
         let mut roots: Vec<Term> = g
             .by_s
             .iter()
             .filter(|(s, props)| {
-                props.iter().any(|(p, _)| p.value().starts_with(&format!("{SH}target")))
+                props
+                    .iter()
+                    .any(|(p, _)| p.value().starts_with(&format!("{SH}target")))
                     || g.has_type(s, &format!("{SH}NodeShape"))
                     || g.has_type(s, &format!("{SH}PropertyShape"))
             })
@@ -552,8 +675,17 @@ impl Shapes {
     }
 
     /// Validate; an error is a validation failure (an unusable SPARQL query, `?failure`).
-    pub fn check(&self, store: &Store, only: Option<&HashSet<Term>>) -> Result<Vec<Violation>, String> {
-        let v = Validator { store, shapes: &self.shapes, depth: Cell::new(0), sg: store_shapes_graph(store) };
+    pub fn check(
+        &self,
+        store: &Store,
+        only: Option<&HashSet<Term>>,
+    ) -> Result<Vec<Violation>, String> {
+        let v = Validator {
+            store,
+            shapes: &self.shapes,
+            depth: Cell::new(0),
+            sg: store_shapes_graph(store),
+        };
         let mut out = Vec::new();
         for (i, shape) in self.shapes.iter().enumerate() {
             if shape.targets.is_empty() || shape.deactivated {
@@ -576,22 +708,46 @@ struct Validator<'a> {
 
 impl Validator<'_> {
     fn objects(&self, s: &Term, p: &Term) -> Vec<Term> {
-        let (Some(s), Some(p)) = (self.store.dict.lookup(s), self.store.dict.lookup(p)) else { return Vec::new() };
+        let (Some(s), Some(p)) = (self.store.dict.lookup(s), self.store.dict.lookup(p)) else {
+            return Vec::new();
+        };
         let mut seen = HashSet::new();
-        self.store.quads_matching(Some(s), Some(p), None, None).filter(|q| q[3] != self.sg).map(|q| q[2]).filter(|o| seen.insert(*o)).map(|o| self.store.dict.term(o)).collect()
+        self.store
+            .quads_matching(Some(s), Some(p), None, None)
+            .filter(|q| q[3] != self.sg)
+            .map(|q| q[2])
+            .filter(|o| seen.insert(*o))
+            .map(|o| self.store.dict.term(o))
+            .collect()
     }
 
     fn subjects(&self, p: &Term, o: &Term) -> Vec<Term> {
-        let (Some(p), Some(o)) = (self.store.dict.lookup(p), self.store.dict.lookup(o)) else { return Vec::new() };
+        let (Some(p), Some(o)) = (self.store.dict.lookup(p), self.store.dict.lookup(o)) else {
+            return Vec::new();
+        };
         let mut seen = HashSet::new();
-        self.store.quads_matching(None, Some(p), Some(o), None).filter(|q| q[3] != self.sg).map(|q| q[0]).filter(|s| seen.insert(*s)).map(|s| self.store.dict.term(s)).collect()
+        self.store
+            .quads_matching(None, Some(p), Some(o), None)
+            .filter(|q| q[3] != self.sg)
+            .map(|q| q[0])
+            .filter(|s| seen.insert(*s))
+            .map(|s| self.store.dict.term(s))
+            .collect()
     }
 
     /// Every (predicate, object) of a node.
     fn outgoing(&self, s: &Term) -> Vec<(Term, Term)> {
-        let Some(s) = self.store.dict.lookup(s) else { return Vec::new() };
+        let Some(s) = self.store.dict.lookup(s) else {
+            return Vec::new();
+        };
         let mut seen = HashSet::new();
-        self.store.quads_matching(Some(s), None, None, None).filter(|q| q[3] != self.sg).map(|q| (q[1], q[2])).filter(|po| seen.insert(*po)).map(|(p, o)| (self.store.dict.term(p), self.store.dict.term(o))).collect()
+        self.store
+            .quads_matching(Some(s), None, None, None)
+            .filter(|q| q[3] != self.sg)
+            .map(|q| (q[1], q[2]))
+            .filter(|po| seen.insert(*po))
+            .map(|(p, o)| (self.store.dict.term(p), self.store.dict.term(o)))
+            .collect()
     }
 
     /// Is `node` an instance of `class` (rdf:type, then rdfs:subClassOf*)?
@@ -621,7 +777,11 @@ impl Validator<'_> {
         };
         match p {
             PathExpr::Pred(pr) => {
-                for t in if inverse { self.subjects(pr, node) } else { self.objects(node, pr) } {
+                for t in if inverse {
+                    self.subjects(pr, node)
+                } else {
+                    self.objects(node, pr)
+                } {
                     push(t, &mut out);
                 }
             }
@@ -632,7 +792,11 @@ impl Validator<'_> {
             }
             PathExpr::Seq(items) => {
                 let mut cur = vec![node.clone()];
-                let order: Box<dyn Iterator<Item = &PathExpr>> = if inverse { Box::new(items.iter().rev()) } else { Box::new(items.iter()) };
+                let order: Box<dyn Iterator<Item = &PathExpr>> = if inverse {
+                    Box::new(items.iter().rev())
+                } else {
+                    Box::new(items.iter())
+                };
                 for step in order {
                     let mut next = Vec::new();
                     let mut s2 = HashSet::new();
@@ -707,10 +871,23 @@ impl Validator<'_> {
         Ok(())
     }
 
-    fn check(&self, c: &Constraint, shape: &Shape, focus: &Term, values: &[Term], out: &mut Vec<Violation>) -> Result<(), String> {
+    fn check(
+        &self,
+        c: &Constraint,
+        shape: &Shape,
+        focus: &Term,
+        values: &[Term],
+        out: &mut Vec<Violation>,
+    ) -> Result<(), String> {
         let path = shape.path.as_ref();
         let path_name = path.map_or("the node".to_string(), |p| p.sparql());
-        let message = |default: String| shape.messages.first().map(|m| m.value().to_string()).unwrap_or(default);
+        let message = |default: String| {
+            shape
+                .messages
+                .first()
+                .map(|m| m.value().to_string())
+                .unwrap_or(default)
+        };
         let mut fail = |component: &str, value: Option<&Term>, default: String| {
             out.push(Violation {
                 focus: focus.clone(),
@@ -726,12 +903,26 @@ impl Validator<'_> {
         match c {
             Constraint::MinCount(n) => {
                 if values.len() < *n {
-                    fail("MinCount", None, format!("{path_name} needs at least {n} value(s), found {}", values.len()));
+                    fail(
+                        "MinCount",
+                        None,
+                        format!(
+                            "{path_name} needs at least {n} value(s), found {}",
+                            values.len()
+                        ),
+                    );
                 }
             }
             Constraint::MaxCount(n) => {
                 if values.len() > *n {
-                    fail("MaxCount", None, format!("{path_name} allows at most {n} value(s), found {}", values.len()));
+                    fail(
+                        "MaxCount",
+                        None,
+                        format!(
+                            "{path_name} allows at most {n} value(s), found {}",
+                            values.len()
+                        ),
+                    );
                 }
             }
             Constraint::HasValue(v) => {
@@ -752,19 +943,35 @@ impl Validator<'_> {
                 }
                 for (lang, n) in counts {
                     if n > 1 {
-                        fail("UniqueLang", None, format!("{path_name} has {n} values with language \"{lang}\""));
+                        fail(
+                            "UniqueLang",
+                            None,
+                            format!("{path_name} has {n} values with language \"{lang}\""),
+                        );
                     }
                 }
             }
             Constraint::Equals(p) | Constraint::Disjoint(p) => {
                 let other = self.objects(focus, p);
                 if let Constraint::Equals(_) = c {
-                    for v in values.iter().filter(|v| !other.contains(v)).chain(other.iter().filter(|o| !values.contains(o))) {
-                        fail("Equals", Some(v), format!("{v} is not a value of both {path_name} and {p}"));
+                    for v in values
+                        .iter()
+                        .filter(|v| !other.contains(v))
+                        .chain(other.iter().filter(|o| !values.contains(o)))
+                    {
+                        fail(
+                            "Equals",
+                            Some(v),
+                            format!("{v} is not a value of both {path_name} and {p}"),
+                        );
                     }
                 } else {
                     for v in values.iter().filter(|v| other.contains(v)) {
-                        fail("Disjoint", Some(v), format!("{v} is a value of both {path_name} and {p}"));
+                        fail(
+                            "Disjoint",
+                            Some(v),
+                            format!("{v} is a value of both {path_name} and {p}"),
+                        );
                     }
                 }
             }
@@ -774,14 +981,32 @@ impl Validator<'_> {
                 // one result per pair that is not in order (or not comparable)
                 for v in values {
                     for o in &other {
-                        if !func::compare(v, o).is_some_and(|ord| if strict { ord.is_lt() } else { ord.is_le() }) {
-                            let name = if strict { "LessThan" } else { "LessThanOrEquals" };
-                            fail(name, Some(v), format!("{v} is not {} {o} ({p})", if strict { "less than" } else { "at most" }));
+                        if !func::compare(v, o)
+                            .is_some_and(|ord| if strict { ord.is_lt() } else { ord.is_le() })
+                        {
+                            let name = if strict {
+                                "LessThan"
+                            } else {
+                                "LessThanOrEquals"
+                            };
+                            fail(
+                                name,
+                                Some(v),
+                                format!(
+                                    "{v} is not {} {o} ({p})",
+                                    if strict { "less than" } else { "at most" }
+                                ),
+                            );
                         }
                     }
                 }
             }
-            Constraint::Qualified { shape: q, min, max, siblings } => {
+            Constraint::Qualified {
+                shape: q,
+                min,
+                max,
+                siblings,
+            } => {
                 let mut n = 0;
                 for v in values {
                     if self.conforms(*q, v)? {
@@ -796,10 +1021,26 @@ impl Validator<'_> {
                     }
                 }
                 if min.is_some_and(|m| n < m) {
-                    fail("QualifiedMinCount", None, format!("{path_name} needs at least {} value(s) conforming to {}, found {n}", min.unwrap_or(0), self.shapes[*q].id));
+                    fail(
+                        "QualifiedMinCount",
+                        None,
+                        format!(
+                            "{path_name} needs at least {} value(s) conforming to {}, found {n}",
+                            min.unwrap_or(0),
+                            self.shapes[*q].id
+                        ),
+                    );
                 }
                 if max.is_some_and(|m| n > m) {
-                    fail("QualifiedMaxCount", None, format!("{path_name} allows at most {} value(s) conforming to {}, found {n}", max.unwrap_or(0), self.shapes[*q].id));
+                    fail(
+                        "QualifiedMaxCount",
+                        None,
+                        format!(
+                            "{path_name} allows at most {} value(s) conforming to {}, found {n}",
+                            max.unwrap_or(0),
+                            self.shapes[*q].id
+                        ),
+                    );
                 }
             }
             Constraint::Closed(allowed) => {
@@ -829,26 +1070,40 @@ impl Validator<'_> {
             Constraint::Component(id, params, q) => {
                 if q.ask {
                     for v in values {
-                        let mut bind: Vec<(&str, Term)> = vec![("this", focus.clone()), ("value", v.clone())];
+                        let mut bind: Vec<(&str, Term)> =
+                            vec![("this", focus.clone()), ("value", v.clone())];
                         bind.extend(params.iter().map(|(n, t)| (n.as_str(), t.clone())));
                         bind.extend(self.common(shape));
                         let text = self.with_path(&q.text, shape);
                         if !self.ask(&text, &bind)? {
-                            let msg = substitute(q.messages.first().map(|m| m.value()).unwrap_or("constraint not met"), &bind);
+                            let msg = substitute(
+                                q.messages
+                                    .first()
+                                    .map(|m| m.value())
+                                    .unwrap_or("constraint not met"),
+                                &bind,
+                            );
                             out.push(Violation {
                                 focus: focus.clone(),
                                 path: path.cloned(),
                                 value: Some(v.clone()),
                                 shape: shape.id.clone(),
                                 component: id.value().to_string(),
-                                message: shape.messages.first().map(|m| m.value().to_string()).unwrap_or(msg),
+                                message: shape
+                                    .messages
+                                    .first()
+                                    .map(|m| m.value().to_string())
+                                    .unwrap_or(msg),
                                 severity: shape.severity.clone(),
                                 source_constraint: None,
                             });
                         }
                     }
                 } else {
-                    let bind: Vec<(&str, Term)> = params.iter().map(|(n, t)| (n.as_str(), t.clone())).collect();
+                    let bind: Vec<(&str, Term)> = params
+                        .iter()
+                        .map(|(n, t)| (n.as_str(), t.clone()))
+                        .collect();
                     let before = out.len();
                     self.sparql(q, shape, focus, &bind, "", out)?;
                     for v in &mut out[before..] {
@@ -859,7 +1114,9 @@ impl Validator<'_> {
             _ => {
                 for v in values {
                     let ok = match c {
-                        Constraint::Datatype(dt) => v.as_literal().is_some_and(|l| l.datatype == *dt && well_formed(&l.value, dt)),
+                        Constraint::Datatype(dt) => v
+                            .as_literal()
+                            .is_some_and(|l| l.datatype == *dt && well_formed(&l.value, dt)),
                         Constraint::Class(k) => !v.is_literal() && self.instance_of(v, k),
                         Constraint::NodeKind(k) => match k.as_str() {
                             "IRI" => v.is_iri(),
@@ -871,12 +1128,21 @@ impl Validator<'_> {
                             _ => true,
                         },
                         Constraint::Pattern(r, _) => !v.is_blank() && r.is_match(v.value()),
-                        Constraint::MinLength(n) => !v.is_blank() && v.value().chars().count() >= *n,
-                        Constraint::MaxLength(n) => !v.is_blank() && v.value().chars().count() <= *n,
-                        Constraint::LanguageIn(langs) => v.as_literal().and_then(|l| l.lang.as_ref()).is_some_and(|tag| {
-                            let tag = tag.to_ascii_lowercase();
-                            langs.iter().any(|r| r == "*" || tag == *r || tag.starts_with(&format!("{r}-")))
-                        }),
+                        Constraint::MinLength(n) => {
+                            !v.is_blank() && v.value().chars().count() >= *n
+                        }
+                        Constraint::MaxLength(n) => {
+                            !v.is_blank() && v.value().chars().count() <= *n
+                        }
+                        Constraint::LanguageIn(langs) => v
+                            .as_literal()
+                            .and_then(|l| l.lang.as_ref())
+                            .is_some_and(|tag| {
+                                let tag = tag.to_ascii_lowercase();
+                                langs.iter().any(|r| {
+                                    r == "*" || tag == *r || tag.starts_with(&format!("{r}-"))
+                                })
+                            }),
                         Constraint::In(list) => list.contains(v),
                         Constraint::Range(kind, bound) => match func::compare(v, bound) {
                             Some(o) => match *kind {
@@ -904,26 +1170,60 @@ impl Validator<'_> {
                             for s in list {
                                 n += usize::from(self.conforms(*s, v)?);
                             }
-                            if let Constraint::Or(_) = c { n > 0 } else { n == 1 }
+                            if let Constraint::Or(_) = c {
+                                n > 0
+                            } else {
+                                n == 1
+                            }
                         }
                         _ => true,
                     };
                     if !ok {
                         let (name, msg) = match c {
-                            Constraint::Datatype(dt) => ("Datatype", format!("{v} is not a valid <{dt}>")),
-                            Constraint::Class(k) => ("Class", format!("{v} is not an instance of {k}")),
+                            Constraint::Datatype(dt) => {
+                                ("Datatype", format!("{v} is not a valid <{dt}>"))
+                            }
+                            Constraint::Class(k) => {
+                                ("Class", format!("{v} is not an instance of {k}"))
+                            }
                             Constraint::NodeKind(k) => ("NodeKind", format!("{v} is not a {k}")),
-                            Constraint::Pattern(_, p) => ("Pattern", format!("{v} does not match /{p}/")),
-                            Constraint::MinLength(n) => ("MinLength", format!("{v} is shorter than {n}")),
-                            Constraint::MaxLength(n) => ("MaxLength", format!("{v} is longer than {n}")),
-                            Constraint::LanguageIn(l) => ("LanguageIn", format!("{v} is not in one of the languages {}", l.join(", "))),
-                            Constraint::In(_) => ("In", format!("{v} is not one of the allowed values")),
-                            Constraint::Range(kind, b) => (*kind, format!("{v} is outside the allowed range ({kind} {b})")),
-                            Constraint::Not(s) => ("Not", format!("{v} conforms to {}", self.shapes[*s].id)),
-                            Constraint::Node(s) => ("Node", format!("{v} does not conform to {}", self.shapes[*s].id)),
-                            Constraint::And(_) => ("And", format!("{v} does not conform to all of the shapes")),
-                            Constraint::Or(_) => ("Or", format!("{v} does not conform to any of the shapes")),
-                            Constraint::Xone(_) => ("Xone", format!("{v} does not conform to exactly one of the shapes")),
+                            Constraint::Pattern(_, p) => {
+                                ("Pattern", format!("{v} does not match /{p}/"))
+                            }
+                            Constraint::MinLength(n) => {
+                                ("MinLength", format!("{v} is shorter than {n}"))
+                            }
+                            Constraint::MaxLength(n) => {
+                                ("MaxLength", format!("{v} is longer than {n}"))
+                            }
+                            Constraint::LanguageIn(l) => (
+                                "LanguageIn",
+                                format!("{v} is not in one of the languages {}", l.join(", ")),
+                            ),
+                            Constraint::In(_) => {
+                                ("In", format!("{v} is not one of the allowed values"))
+                            }
+                            Constraint::Range(kind, b) => (
+                                *kind,
+                                format!("{v} is outside the allowed range ({kind} {b})"),
+                            ),
+                            Constraint::Not(s) => {
+                                ("Not", format!("{v} conforms to {}", self.shapes[*s].id))
+                            }
+                            Constraint::Node(s) => (
+                                "Node",
+                                format!("{v} does not conform to {}", self.shapes[*s].id),
+                            ),
+                            Constraint::And(_) => {
+                                ("And", format!("{v} does not conform to all of the shapes"))
+                            }
+                            Constraint::Or(_) => {
+                                ("Or", format!("{v} does not conform to any of the shapes"))
+                            }
+                            Constraint::Xone(_) => (
+                                "Xone",
+                                format!("{v} does not conform to exactly one of the shapes"),
+                            ),
                             _ => ("Unknown", String::new()),
                         };
                         fail(name, Some(v), msg);
@@ -936,7 +1236,10 @@ impl Validator<'_> {
 
     /// $currentShape and $shapesGraph.
     fn common(&self, shape: &Shape) -> [(&'static str, Term); 2] {
-        [("currentShape", shape.id.clone()), ("shapesGraph", Term::iri(SHAPES_GRAPH))]
+        [
+            ("currentShape", shape.id.clone()),
+            ("shapesGraph", Term::iri(SHAPES_GRAPH)),
+        ]
     }
 
     fn with_path(&self, text: &str, shape: &Shape) -> String {
@@ -949,10 +1252,19 @@ impl Validator<'_> {
     /// The ?this values of a SPARQL-based target.
     fn select_this(&self, text: &str) -> Result<Vec<Term>, String> {
         let prefixes = HashMap::new();
-        let opts = crate::sparql::QueryOptions { base: "", prefixes: &prefixes, dataset: None, timeout_secs: None, infer: true, at_query: false };
+        let opts = crate::sparql::QueryOptions {
+            base: "",
+            prefixes: &prefixes,
+            dataset: None,
+            timeout_secs: None,
+            infer: true,
+            at_query: false,
+        };
         match crate::sparql::query_prebound(self.store, text, &opts, &[])? {
             crate::sparql::QueryResult::Solutions { vars, rows } => {
-                let Some(i) = vars.iter().position(|v| v == "this") else { return Err("a SPARQL target must select ?this".into()) };
+                let Some(i) = vars.iter().position(|v| v == "this") else {
+                    return Err("a SPARQL target must select ?this".into());
+                };
                 Ok(rows.into_iter().filter_map(|mut r| r[i].take()).collect())
             }
             _ => Err("a SPARQL target must be a SELECT query".into()),
@@ -961,7 +1273,14 @@ impl Validator<'_> {
 
     fn ask(&self, text: &str, bind: &[(&str, Term)]) -> Result<bool, String> {
         let prefixes = HashMap::new();
-        let opts = crate::sparql::QueryOptions { base: "", prefixes: &prefixes, dataset: None, timeout_secs: None, infer: true, at_query: false };
+        let opts = crate::sparql::QueryOptions {
+            base: "",
+            prefixes: &prefixes,
+            dataset: None,
+            timeout_secs: None,
+            infer: true,
+            at_query: false,
+        };
         match crate::sparql::query_prebound(self.store, text, &opts, bind)? {
             crate::sparql::QueryResult::Boolean(b) => Ok(b),
             _ => Err("a SHACL ASK validator must be an ASK query".into()),
@@ -970,21 +1289,41 @@ impl Validator<'_> {
 
     /// A SELECT-based constraint: each solution is a result. `kind` is the component's
     /// local name (SPARQL), or empty for a constraint component (the caller sets it).
-    fn sparql(&self, q: &SparqlQuery, shape: &Shape, focus: &Term, params: &[(&str, Term)], kind: &str, out: &mut Vec<Violation>) -> Result<(), String> {
+    fn sparql(
+        &self,
+        q: &SparqlQuery,
+        shape: &Shape,
+        focus: &Term,
+        params: &[(&str, Term)],
+        kind: &str,
+        out: &mut Vec<Violation>,
+    ) -> Result<(), String> {
         let mut bind: Vec<(&str, Term)> = vec![("this", focus.clone())];
         bind.extend(params.iter().cloned());
         bind.extend(self.common(shape));
         let text = self.with_path(&q.text, shape);
         let prefixes = HashMap::new();
-        let opts = crate::sparql::QueryOptions { base: "", prefixes: &prefixes, dataset: None, timeout_secs: None, infer: true, at_query: false };
-        let crate::sparql::QueryResult::Solutions { vars, rows } = crate::sparql::query_prebound(self.store, &text, &opts, &bind)? else {
+        let opts = crate::sparql::QueryOptions {
+            base: "",
+            prefixes: &prefixes,
+            dataset: None,
+            timeout_secs: None,
+            infer: true,
+            at_query: false,
+        };
+        let crate::sparql::QueryResult::Solutions { vars, rows } =
+            crate::sparql::query_prebound(self.store, &text, &opts, &bind)?
+        else {
             return Err("a SHACL SPARQL constraint must be a SELECT query".into());
         };
         let col = |name: &str| vars.iter().position(|v| v == name);
         for row in rows {
             let get = |name: &str| col(name).and_then(|i| row[i].clone());
             if get("failure").is_some_and(|f| f.value() == "true") {
-                return Err(format!("the SPARQL constraint of {} reported a failure", shape.id));
+                return Err(format!(
+                    "the SPARQL constraint of {} reported a failure",
+                    shape.id
+                ));
             }
             let value = get("value").or_else(|| shape.path.is_none().then(|| focus.clone()));
             let path = match get("path") {
@@ -997,14 +1336,21 @@ impl Validator<'_> {
                     row_bind.push((v.as_str(), t.clone()));
                 }
             }
-            let template = shape.messages.first().or(q.messages.first()).map(|m| m.value().to_string());
+            let template = shape
+                .messages
+                .first()
+                .or(q.messages.first())
+                .map(|m| m.value().to_string());
             out.push(Violation {
                 focus: get("this").unwrap_or_else(|| focus.clone()),
                 path,
                 value,
                 shape: shape.id.clone(),
                 component: format!("{SH}{kind}ConstraintComponent"),
-                message: substitute(template.as_deref().unwrap_or("SPARQL constraint violated"), &row_bind),
+                message: substitute(
+                    template.as_deref().unwrap_or("SPARQL constraint violated"),
+                    &row_bind,
+                ),
                 severity: shape.severity.clone(),
                 source_constraint: q.node.clone(),
             });
@@ -1021,14 +1367,18 @@ fn substitute(template: &str, bind: &[(&str, Term)]) -> String {
             Term::Iri(_) | Term::Blank(_) => t.to_string(),
             _ => t.value().to_string(),
         };
-        s = s.replace(&format!("{{?{name}}}"), &v).replace(&format!("{{${name}}}"), &v);
+        s = s
+            .replace(&format!("{{?{name}}}"), &v)
+            .replace(&format!("{{${name}}}"), &v);
     }
     s
 }
 
 /// Is `v` a valid lexical form of the XSD datatype `dt` (other datatypes always are)?
 fn well_formed(v: &str, dt: &str) -> bool {
-    let Some(local) = dt.strip_prefix(XSD) else { return true };
+    let Some(local) = dt.strip_prefix(XSD) else {
+        return true;
+    };
     let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
     let int = |s: &str| digits(s.strip_prefix(['+', '-']).unwrap_or(s));
     let ranged = |lo: i128, hi: i128| int(v) && v.parse::<i128>().is_ok_and(|n| n >= lo && n <= hi);
@@ -1049,9 +1399,17 @@ fn well_formed(v: &str, dt: &str) -> bool {
         "decimal" => {
             let s = v.strip_prefix(['+', '-']).unwrap_or(v);
             let (a, b) = s.split_once('.').unwrap_or((s, ""));
-            (!a.is_empty() || !b.is_empty()) && a.bytes().all(|c| c.is_ascii_digit()) && b.bytes().all(|c| c.is_ascii_digit())
+            (!a.is_empty() || !b.is_empty())
+                && a.bytes().all(|c| c.is_ascii_digit())
+                && b.bytes().all(|c| c.is_ascii_digit())
         }
-        "double" | "float" => matches!(v, "INF" | "-INF" | "+INF" | "NaN") || (v.parse::<f64>().is_ok() && !v.chars().any(|c| c.is_ascii_alphabetic() && c != 'e' && c != 'E')),
+        "double" | "float" => {
+            matches!(v, "INF" | "-INF" | "+INF" | "NaN")
+                || (v.parse::<f64>().is_ok()
+                    && !v
+                        .chars()
+                        .any(|c| c.is_ascii_alphabetic() && c != 'e' && c != 'E'))
+        }
         "boolean" => matches!(v, "true" | "false" | "1" | "0"),
         "dateTime" => func::parse_datetime(v).is_some() && v.contains('T'),
         "date" => {
@@ -1059,22 +1417,35 @@ fn well_formed(v: &str, dt: &str) -> bool {
             let body = s.get(..10).unwrap_or("");
             let tz = s.get(10..).unwrap_or("");
             let b = body.as_bytes();
-            body.len() == 10 && b[4] == b'-' && b[7] == b'-' && digits(&body[..4]) && digits(&body[5..7]) && digits(&body[8..10])
-                && (1..=12).contains(&body[5..7].parse::<u32>().unwrap_or(0)) && (1..=31).contains(&body[8..10].parse::<u32>().unwrap_or(0))
-                && (tz.is_empty() || tz == "Z" || (tz.len() == 6 && (tz.starts_with('+') || tz.starts_with('-'))))
+            body.len() == 10
+                && b[4] == b'-'
+                && b[7] == b'-'
+                && digits(&body[..4])
+                && digits(&body[5..7])
+                && digits(&body[8..10])
+                && (1..=12).contains(&body[5..7].parse::<u32>().unwrap_or(0))
+                && (1..=31).contains(&body[8..10].parse::<u32>().unwrap_or(0))
+                && (tz.is_empty()
+                    || tz == "Z"
+                    || (tz.len() == 6 && (tz.starts_with('+') || tz.starts_with('-'))))
         }
         _ => true,
     }
 }
 
 fn store_shapes_graph(store: &Store) -> u32 {
-    store.dict
+    store
+        .dict
         .lookup(&Term::iri(SHAPES_GRAPH))
         .or_else(|| store.dict.lookup(&Term::iri(SHAPES_GRAPH_COMPAT)))
         .unwrap_or(u32::MAX - 7)
 }
 
-fn focus_nodes(v: &Validator, shape: &Shape, only: Option<&HashSet<Term>>) -> Result<Vec<Term>, String> {
+fn focus_nodes(
+    v: &Validator,
+    shape: &Shape,
+    only: Option<&HashSet<Term>>,
+) -> Result<Vec<Term>, String> {
     let store = v.store;
     let mut out: Vec<Term> = Vec::new();
     let mut seen = HashSet::new();
@@ -1082,7 +1453,11 @@ fn focus_nodes(v: &Validator, shape: &Shape, only: Option<&HashSet<Term>>) -> Re
     for t in &shape.targets {
         let candidates: Vec<Term> = match (t, only) {
             (Target::Node(n), _) => vec![n.clone()],
-            (Target::Class(c), Some(set)) => set.iter().filter(|n| v.instance_of(n, c)).cloned().collect(),
+            (Target::Class(c), Some(set)) => set
+                .iter()
+                .filter(|n| v.instance_of(n, c))
+                .cloned()
+                .collect(),
             (Target::Class(c), None) => {
                 // instances of the class and of its subclasses
                 let sub = Term::iri(format!("{RDFS}subClassOf"));
@@ -1099,12 +1474,24 @@ fn focus_nodes(v: &Validator, shape: &Shape, only: Option<&HashSet<Term>>) -> Re
                 classes.iter().flat_map(|c| v.subjects(&ty, c)).collect()
             }
             (Target::SubjectsOf(p), _) => {
-                let Some(pid) = store.dict.lookup(p) else { continue };
-                store.quads_matching(None, Some(pid), None, None).filter(|q| q[3] != v.sg).map(|q| store.dict.term(q[0])).collect()
+                let Some(pid) = store.dict.lookup(p) else {
+                    continue;
+                };
+                store
+                    .quads_matching(None, Some(pid), None, None)
+                    .filter(|q| q[3] != v.sg)
+                    .map(|q| store.dict.term(q[0]))
+                    .collect()
             }
             (Target::ObjectsOf(p), _) => {
-                let Some(pid) = store.dict.lookup(p) else { continue };
-                store.quads_matching(None, Some(pid), None, None).filter(|q| q[3] != v.sg).map(|q| store.dict.term(q[2])).collect()
+                let Some(pid) = store.dict.lookup(p) else {
+                    continue;
+                };
+                store
+                    .quads_matching(None, Some(pid), None, None)
+                    .filter(|q| q[3] != v.sg)
+                    .map(|q| store.dict.term(q[2]))
+                    .collect()
             }
             (Target::Sparql(q), _) => v.select_this(&q.text)?,
         };
@@ -1141,9 +1528,15 @@ pub fn report_json(violations: &[Violation]) -> Json {
 
 /// Validation report as Turtle (sh:ValidationReport).
 pub fn report_turtle(violations: &[Violation]) -> String {
-    let mut s = format!("@prefix sh: <{SH}> .\n@prefix rdf: <{RDF}> .\n\n[] a sh:ValidationReport ;\n  sh:conforms {}", violations.is_empty());
+    let mut s = format!(
+        "@prefix sh: <{SH}> .\n@prefix rdf: <{RDF}> .\n\n[] a sh:ValidationReport ;\n  sh:conforms {}",
+        violations.is_empty()
+    );
     for v in violations {
-        s.push_str(&format!(" ;\n  sh:result [\n    a sh:ValidationResult ;\n    sh:resultSeverity {} ;\n", v.severity));
+        s.push_str(&format!(
+            " ;\n  sh:result [\n    a sh:ValidationResult ;\n    sh:resultSeverity {} ;\n",
+            v.severity
+        ));
         s.push_str(&format!("    sh:focusNode {} ;\n", v.focus));
         if let Some(p) = &v.path {
             s.push_str(&format!("    sh:resultPath {} ;\n", p.turtle()));
@@ -1171,7 +1564,10 @@ pub fn with_referrers(store: &Store, nodes: HashSet<Term>) -> HashSet<Term> {
     let mut out = nodes.clone();
     for n in &nodes {
         if let Some(id) = store.dict.lookup(n) {
-            for q in store.quads_matching(None, None, Some(id), None).take(10_000) {
+            for q in store
+                .quads_matching(None, None, Some(id), None)
+                .take(10_000)
+            {
                 out.insert(store.dict.term(q[0]));
             }
         }
@@ -1184,7 +1580,10 @@ pub fn affected(changes: &[crate::rdf::Quad]) -> (HashSet<Term>, bool) {
     let mut set = HashSet::new();
     let mut shapes_changed = false;
     for q in changes {
-        if q.g.as_ref().is_some_and(|g| g.value() == SHAPES_GRAPH || g.value() == SHAPES_GRAPH_COMPAT) {
+        if q.g
+            .as_ref()
+            .is_some_and(|g| g.value() == SHAPES_GRAPH || g.value() == SHAPES_GRAPH_COMPAT)
+        {
             shapes_changed = true;
             continue;
         }

@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
 
-use super::{resolve_iri, Quad, Term, RDF_FIRST, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE};
+use super::{Quad, RDF_FIRST, RDF_NIL, RDF_REIFIES, RDF_REST, RDF_TYPE, Term, resolve_iri};
 use crate::json::Json;
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -23,7 +23,7 @@ pub type Loader = dyn Fn(&str) -> R<(Json, String)>;
 
 /// Everything a JSON-LD run may be told: mode, direction, safety, loader.
 pub struct Options {
-/// The base IRI relative IRIs resolve against.
+    /// The base IRI relative IRIs resolve against.
     pub base: String,
     /// `json-ld-1.0` or `json-ld-1.1` (default).
     pub processing_mode: String,
@@ -37,14 +37,22 @@ pub struct Options {
     /// compact IRI or a defined term, is an error instead of being dropped (or taken as a
     /// relative IRI), so nothing a sender wrote is lost without a word.
     pub safe_mode: bool,
-/// How remote contexts (and documents) are fetched.
+    /// How remote contexts (and documents) are fetched.
     pub loader: Rc<Loader>,
 }
 
 impl Options {
-/// Default options: JSON-LD 1.1, no direction, unsafe, HTTP(S) loader.
+    /// Default options: JSON-LD 1.1, no direction, unsafe, HTTP(S) loader.
     pub fn new(base: &str) -> Options {
-        Options { base: base.to_string(), processing_mode: "json-ld-1.1".into(), expand_context: None, rdf_direction: None, generalized_rdf: false, safe_mode: false, loader: Rc::new(default_loader) }
+        Options {
+            base: base.to_string(),
+            processing_mode: "json-ld-1.1".into(),
+            expand_context: None,
+            rdf_direction: None,
+            generalized_rdf: false,
+            safe_mode: false,
+            loader: Rc::new(default_loader),
+        }
     }
 }
 
@@ -53,15 +61,24 @@ pub fn default_loader(url: &str) -> R<(Json, String)> {
     if let Ok(map) = std::env::var("GRAPHRD_JSONLD_MAP") {
         if let Some((prefix, dir)) = map.split_once('=') {
             if let Some(rest) = url.strip_prefix(prefix) {
-                let path = std::path::Path::new(dir).join(rest.split(['#', '?']).next().unwrap_or(""));
-                let text = std::fs::read_to_string(&path).map_err(|_| "JSON-LD error: loading document failed".to_string())?;
-                let json = Json::parse(&text).map_err(|_| "JSON-LD error: loading document failed".to_string())?;
+                let path =
+                    std::path::Path::new(dir).join(rest.split(['#', '?']).next().unwrap_or(""));
+                let text = std::fs::read_to_string(&path)
+                    .map_err(|_| "JSON-LD error: loading document failed".to_string())?;
+                let json = Json::parse(&text)
+                    .map_err(|_| "JSON-LD error: loading document failed".to_string())?;
                 return Ok((json, url.to_string()));
             }
         }
     }
-    let (_, body) = crate::http::fetch(url, "application/ld+json, application/json;q=0.9", std::time::Duration::from_secs(30)).map_err(|_| "JSON-LD error: loading remote context failed".to_string())?;
-    let json = Json::parse(&String::from_utf8_lossy(&body)).map_err(|_| "JSON-LD error: loading remote context failed".to_string())?;
+    let (_, body) = crate::http::fetch(
+        url,
+        "application/ld+json, application/json;q=0.9",
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|_| "JSON-LD error: loading remote context failed".to_string())?;
+    let json = Json::parse(&String::from_utf8_lossy(&body))
+        .map_err(|_| "JSON-LD error: loading remote context failed".to_string())?;
     Ok((json, url.to_string()))
 }
 
@@ -70,8 +87,29 @@ pub fn default_loader(url: &str) -> R<(Json, String)> {
 fn is_keyword(s: &str) -> bool {
     matches!(
         s,
-        "@base" | "@container" | "@context" | "@direction" | "@graph" | "@id" | "@import" | "@included" | "@index" | "@json" | "@language" | "@list"
-            | "@nest" | "@none" | "@prefix" | "@propagate" | "@protected" | "@reverse" | "@set" | "@type" | "@value" | "@version" | "@vocab"
+        "@base"
+            | "@container"
+            | "@context"
+            | "@direction"
+            | "@graph"
+            | "@id"
+            | "@import"
+            | "@included"
+            | "@index"
+            | "@json"
+            | "@language"
+            | "@list"
+            | "@nest"
+            | "@none"
+            | "@prefix"
+            | "@propagate"
+            | "@protected"
+            | "@reverse"
+            | "@set"
+            | "@type"
+            | "@value"
+            | "@version"
+            | "@vocab"
     )
 }
 
@@ -81,7 +119,12 @@ fn keyword_form(s: &str) -> bool {
 
 fn is_absolute_iri(s: &str) -> bool {
     match s.find(':') {
-        Some(i) if i > 0 => s.as_bytes()[0].is_ascii_alphabetic() && s[..i].bytes().all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b)),
+        Some(i) if i > 0 => {
+            s.as_bytes()[0].is_ascii_alphabetic()
+                && s[..i]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"+-.".contains(&b))
+        }
         _ => false,
     }
 }
@@ -93,7 +136,11 @@ fn is_blank(s: &str) -> bool {
 /// An IRI usable in RDF: absolute, and free of characters IRIs cannot contain.
 fn well_formed_iri(s: &str) -> bool {
     // (a fragment cannot contain another '#')
-    is_absolute_iri(s) && !s.chars().any(|c| c.is_whitespace() || "<>\"{}|\\^`".contains(c)) && s.matches('#').count() <= 1
+    is_absolute_iri(s)
+        && !s
+            .chars()
+            .any(|c| c.is_whitespace() || "<>\"{}|\\^`".contains(c))
+        && s.matches('#').count() <= 1
 }
 
 fn as_array(v: Json) -> Vec<Json> {
@@ -129,7 +176,11 @@ fn remove(v: &mut Json, k: &str) -> Option<Json> {
 
 /// Append `value` (array or single) to the array at `key` of `obj`.
 fn add_value(obj: &mut Json, key: &str, value: Json, as_list: bool) {
-    let items = if as_list { vec![value] } else { as_array(value) };
+    let items = if as_list {
+        vec![value]
+    } else {
+        as_array(value)
+    };
     if let Json::Obj(f) = obj {
         match f.iter_mut().find(|(k, _)| k == key) {
             Some((_, Json::Arr(a))) => a.extend(items),
@@ -152,7 +203,11 @@ fn is_list_object(v: &Json) -> bool {
 }
 
 fn is_graph_object(v: &Json) -> bool {
-    is_map(v) && get(v, "@graph").is_some() && keys(v).iter().all(|k| matches!(k.as_str(), "@graph" | "@id" | "@index" | "@context"))
+    is_map(v)
+        && get(v, "@graph").is_some()
+        && keys(v)
+            .iter()
+            .all(|k| matches!(k.as_str(), "@graph" | "@id" | "@index" | "@context"))
 }
 
 // ------------------------------------------------------------------ contexts
@@ -214,14 +269,29 @@ impl Processor<'_> {
         if let Some(c) = self.contexts.get(url) {
             return Ok(c.clone());
         }
-        let r = (self.opts.loader)(url).map_err(|e| if e.contains("loading document failed") { "JSON-LD error: loading remote context failed".into() } else { e })?;
+        let r = (self.opts.loader)(url).map_err(|e| {
+            if e.contains("loading document failed") {
+                "JSON-LD error: loading remote context failed".into()
+            } else {
+                e
+            }
+        })?;
         self.contexts.insert(url.to_string(), r.clone());
         Ok(r)
     }
 
     /// 4.1.2 Context Processing.
     #[allow(clippy::too_many_arguments)]
-    fn process_context(&mut self, active: &Context, local: &Json, base_url: &str, remote: &mut Vec<String>, override_protected: bool, mut propagate: bool, validate_scoped: bool) -> R<Context> {
+    fn process_context(
+        &mut self,
+        active: &Context,
+        local: &Json,
+        base_url: &str,
+        remote: &mut Vec<String>,
+        override_protected: bool,
+        mut propagate: bool,
+        validate_scoped: bool,
+    ) -> R<Context> {
         let mut result = active.clone();
         if let Some(p) = get(local, "@propagate") {
             match p {
@@ -239,7 +309,15 @@ impl Processor<'_> {
                         return err("invalid context nullification");
                     }
                     let prev = result.clone();
-                    result = Context { terms: HashMap::new(), base: active.original_base.clone(), original_base: active.original_base.clone(), vocab: None, language: None, direction: None, previous: None };
+                    result = Context {
+                        terms: HashMap::new(),
+                        base: active.original_base.clone(),
+                        original_base: active.original_base.clone(),
+                        vocab: None,
+                        language: None,
+                        direction: None,
+                        previous: None,
+                    };
                     if !propagate {
                         result.previous = Some(Box::new(prev));
                     }
@@ -255,8 +333,18 @@ impl Processor<'_> {
                     }
                     remote.push(url.clone());
                     let (doc, doc_url) = self.load(&url)?;
-                    let Some(ctx) = get(&doc, "@context").cloned() else { return err("invalid remote context") };
-                    result = self.process_context(&result, &ctx, &doc_url, &mut remote.clone(), false, true, validate_scoped)?;
+                    let Some(ctx) = get(&doc, "@context").cloned() else {
+                        return err("invalid remote context");
+                    };
+                    result = self.process_context(
+                        &result,
+                        &ctx,
+                        &doc_url,
+                        &mut remote.clone(),
+                        false,
+                        true,
+                        validate_scoped,
+                    )?;
                     continue;
                 }
                 Json::Obj(_) => {}
@@ -278,10 +366,14 @@ impl Processor<'_> {
                 if self.mode10() {
                     return err("invalid context entry");
                 }
-                let Json::Str(i) = imp else { return err("invalid @import value") };
+                let Json::Str(i) = imp else {
+                    return err("invalid @import value");
+                };
                 let url = resolve_iri(base_url, &i);
                 let (doc, _) = self.load(&url)?;
-                let Some(ictx) = get(&doc, "@context").cloned() else { return err("invalid remote context") };
+                let Some(ictx) = get(&doc, "@context").cloned() else {
+                    return err("invalid remote context");
+                };
                 if !is_map(&ictx) {
                     return err("invalid remote context");
                 }
@@ -315,7 +407,14 @@ impl Processor<'_> {
                     Json::Str(s) => {
                         let mut d = HashMap::new();
                         match self.expand_iri(&mut result, s, true, true, None, &mut d)? {
-                            Some(iri) if is_absolute_iri(&iri) || is_blank(&iri) || iri.is_empty() || !keyword_form(&iri) => result.vocab = Some(iri),
+                            Some(iri)
+                                if is_absolute_iri(&iri)
+                                    || is_blank(&iri)
+                                    || iri.is_empty()
+                                    || !keyword_form(&iri) =>
+                            {
+                                result.vocab = Some(iri)
+                            }
                             _ => return err("invalid vocab mapping"),
                         }
                     }
@@ -354,10 +453,29 @@ impl Processor<'_> {
             };
             let mut defined: HashMap<String, bool> = HashMap::new();
             for k in keys(&context) {
-                if matches!(k.as_str(), "@base" | "@direction" | "@import" | "@language" | "@propagate" | "@protected" | "@version" | "@vocab") {
+                if matches!(
+                    k.as_str(),
+                    "@base"
+                        | "@direction"
+                        | "@import"
+                        | "@language"
+                        | "@propagate"
+                        | "@protected"
+                        | "@version"
+                        | "@vocab"
+                ) {
                     continue;
                 }
-                self.create_term(&mut result, &context, &k, &mut defined, base_url, protected, override_protected, remote)?;
+                self.create_term(
+                    &mut result,
+                    &context,
+                    &k,
+                    &mut defined,
+                    base_url,
+                    protected,
+                    override_protected,
+                    remote,
+                )?;
             }
         }
         Ok(result)
@@ -365,7 +483,17 @@ impl Processor<'_> {
 
     /// 4.2.2 Create Term Definition.
     #[allow(clippy::too_many_arguments)]
-    fn create_term(&mut self, active: &mut Context, local: &Json, term: &str, defined: &mut HashMap<String, bool>, base_url: &str, protected: bool, override_protected: bool, remote: &[String]) -> R<()> {
+    fn create_term(
+        &mut self,
+        active: &mut Context,
+        local: &Json,
+        term: &str,
+        defined: &mut HashMap<String, bool>,
+        base_url: &str,
+        protected: bool,
+        override_protected: bool,
+        remote: &[String],
+    ) -> R<()> {
         match defined.get(term) {
             Some(true) => return Ok(()),
             Some(false) => return err("cyclic IRI mapping"),
@@ -378,7 +506,13 @@ impl Processor<'_> {
         let mut value = get(local, term).cloned().unwrap_or(Json::Null);
         if term == "@type" && !self.mode10() {
             let ok = match &value {
-                Json::Obj(f) => !f.is_empty() && f.iter().all(|(k, v)| (k == "@container" && v == &Json::Str("@set".into())) || (k == "@protected" && matches!(v, Json::Bool(_)))),
+                Json::Obj(f) => {
+                    !f.is_empty()
+                        && f.iter().all(|(k, v)| {
+                            (k == "@container" && v == &Json::Str("@set".into()))
+                                || (k == "@protected" && matches!(v, Json::Bool(_)))
+                        })
+                }
                 _ => false,
             };
             if !ok {
@@ -411,8 +545,12 @@ impl Processor<'_> {
             def.protected = protected;
         }
         if let Some(t) = get(&value, "@type") {
-            let Json::Str(t) = t else { return err("invalid type mapping") };
-            let t = self.expand_iri(active, t, false, true, Some(local), defined)?.unwrap_or_default();
+            let Json::Str(t) = t else {
+                return err("invalid type mapping");
+            };
+            let t = self
+                .expand_iri(active, t, false, true, Some(local), defined)?
+                .unwrap_or_default();
             if (t == "@json" || t == "@none") && self.mode10() {
                 return err("invalid type mapping");
             }
@@ -425,12 +563,16 @@ impl Processor<'_> {
             if get(&value, "@id").is_some() || get(&value, "@nest").is_some() {
                 return err("invalid reverse property");
             }
-            let Json::Str(r) = r else { return err("invalid IRI mapping") };
+            let Json::Str(r) = r else {
+                return err("invalid IRI mapping");
+            };
             if keyword_form(r) {
                 defined.insert(term.to_string(), true);
                 return Ok(());
             }
-            let iri = self.expand_iri(active, r, false, true, Some(local), defined)?.unwrap_or_default();
+            let iri = self
+                .expand_iri(active, r, false, true, Some(local), defined)?
+                .unwrap_or_default();
             if !iri.contains(':') {
                 return err("invalid IRI mapping");
             }
@@ -458,7 +600,14 @@ impl Processor<'_> {
                     }
                     let iri = self.expand_iri(active, &i, false, true, Some(local), defined)?;
                     let iri = match iri {
-                        Some(x) if is_keyword(&x) || is_absolute_iri(&x) || is_blank(&x) || x.contains(':') => x,
+                        Some(x)
+                            if is_keyword(&x)
+                                || is_absolute_iri(&x)
+                                || is_blank(&x)
+                                || x.contains(':') =>
+                        {
+                            x
+                        }
                         _ => return err("invalid IRI mapping"),
                     };
                     if iri == "@context" {
@@ -468,12 +617,17 @@ impl Processor<'_> {
                     let inner_colon = term.find(':').is_some_and(|p| p > 0 && p < term.len() - 1);
                     if inner_colon || term.contains('/') {
                         defined.insert(term.to_string(), true);
-                        let expanded = self.expand_iri(active, term, false, true, Some(local), defined)?;
+                        let expanded =
+                            self.expand_iri(active, term, false, true, Some(local), defined)?;
                         if expanded.as_deref() != Some(iri.as_str()) {
                             return err("invalid IRI mapping");
                         }
                     }
-                    if !term.contains(':') && !term.contains('/') && simple && (iri.ends_with([':', '/', '?', '#', '[', ']', '@']) || is_blank(&iri)) {
+                    if !term.contains(':')
+                        && !term.contains('/')
+                        && simple
+                        && (iri.ends_with([':', '/', '?', '#', '[', ']', '@']) || is_blank(&iri))
+                    {
                         def.prefix = true;
                     }
                 }
@@ -482,14 +636,25 @@ impl Processor<'_> {
         } else if term[1..].contains(':') {
             let (prefix, suffix) = term.split_once(':').unwrap();
             if get(local, prefix).is_some() {
-                self.create_term(active, local, prefix, defined, base_url, protected, override_protected, remote)?;
+                self.create_term(
+                    active,
+                    local,
+                    prefix,
+                    defined,
+                    base_url,
+                    protected,
+                    override_protected,
+                    remote,
+                )?;
             }
             def.iri = Some(match active.terms.get(prefix).and_then(|d| d.iri.clone()) {
                 Some(p) => format!("{p}{suffix}"),
                 None => term.to_string(),
             });
         } else if term.contains('/') {
-            let iri = self.expand_iri(active, term, false, true, Some(local), defined)?.unwrap_or_default();
+            let iri = self
+                .expand_iri(active, term, false, true, Some(local), defined)?
+                .unwrap_or_default();
             if !is_absolute_iri(&iri) {
                 return err("invalid IRI mapping");
             }
@@ -533,8 +698,12 @@ impl Processor<'_> {
             if self.mode10() || !def.container.iter().any(|c| c == "@index") {
                 return err("invalid term definition");
             }
-            let Json::Str(i) = i else { return err("invalid term definition") };
-            let e = self.expand_iri(active, i, false, true, Some(local), defined)?.unwrap_or_default();
+            let Json::Str(i) = i else {
+                return err("invalid term definition");
+            };
+            let e = self
+                .expand_iri(active, i, false, true, Some(local), defined)?
+                .unwrap_or_default();
             if is_keyword(&e) || !is_absolute_iri(&e) {
                 return err("invalid term definition");
             }
@@ -545,7 +714,10 @@ impl Processor<'_> {
                 return err("invalid term definition");
             }
             let mut rc = remote.to_vec();
-            if self.process_context(active, c, base_url, &mut rc, true, true, false).is_err() {
+            if self
+                .process_context(active, c, base_url, &mut rc, true, true, false)
+                .is_err()
+            {
                 return err("invalid scoped context");
             }
             def.context = Some(c.clone());
@@ -562,7 +734,9 @@ impl Processor<'_> {
             if let Some(d) = get(&value, "@direction") {
                 match d {
                     Json::Null => def.direction = Some(None),
-                    Json::Str(s) if s == "ltr" || s == "rtl" => def.direction = Some(Some(s.clone())),
+                    Json::Str(s) if s == "ltr" || s == "rtl" => {
+                        def.direction = Some(Some(s.clone()))
+                    }
                     _ => return err("invalid base direction"),
                 }
             }
@@ -589,7 +763,20 @@ impl Processor<'_> {
             }
         }
         for k in keys(&value) {
-            if !matches!(k.as_str(), "@id" | "@reverse" | "@container" | "@context" | "@direction" | "@index" | "@language" | "@nest" | "@prefix" | "@protected" | "@type") {
+            if !matches!(
+                k.as_str(),
+                "@id"
+                    | "@reverse"
+                    | "@container"
+                    | "@context"
+                    | "@direction"
+                    | "@index"
+                    | "@language"
+                    | "@nest"
+                    | "@prefix"
+                    | "@protected"
+                    | "@type"
+            ) {
                 return err("invalid term definition");
             }
         }
@@ -607,7 +794,15 @@ impl Processor<'_> {
     }
 
     /// 4.3.2 IRI Expansion. `None` stands for a null mapping.
-    fn expand_iri(&mut self, active: &mut Context, value: &str, document_relative: bool, vocab: bool, local: Option<&Json>, defined: &mut HashMap<String, bool>) -> R<Option<String>> {
+    fn expand_iri(
+        &mut self,
+        active: &mut Context,
+        value: &str,
+        document_relative: bool,
+        vocab: bool,
+        local: Option<&Json>,
+        defined: &mut HashMap<String, bool>,
+    ) -> R<Option<String>> {
         if is_keyword(value) {
             return Ok(Some(value.to_string()));
         }
@@ -659,7 +854,13 @@ impl Processor<'_> {
         Ok(Some(value.to_string()))
     }
 
-    fn expand_iri_simple(&mut self, active: &Context, value: &str, document_relative: bool, vocab: bool) -> R<Option<String>> {
+    fn expand_iri_simple(
+        &mut self,
+        active: &Context,
+        value: &str,
+        document_relative: bool,
+        vocab: bool,
+    ) -> R<Option<String>> {
         let mut a = active.clone();
         let mut d = HashMap::new();
         self.expand_iri(&mut a, value, document_relative, vocab, None, &mut d)
@@ -673,10 +874,20 @@ impl Processor<'_> {
         let tm = def.as_ref().and_then(|d| d.type_mapping.clone());
         if let Json::Str(s) = value {
             if tm.as_deref() == Some("@id") {
-                return Ok(Json::obj().with("@id", self.expand_iri_simple(active, s, true, false)?.map(Json::Str).unwrap_or(Json::Null)));
+                return Ok(Json::obj().with(
+                    "@id",
+                    self.expand_iri_simple(active, s, true, false)?
+                        .map(Json::Str)
+                        .unwrap_or(Json::Null),
+                ));
             }
             if tm.as_deref() == Some("@vocab") {
-                return Ok(Json::obj().with("@id", self.expand_iri_simple(active, s, true, true)?.map(Json::Str).unwrap_or(Json::Null)));
+                return Ok(Json::obj().with(
+                    "@id",
+                    self.expand_iri_simple(active, s, true, true)?
+                        .map(Json::Str)
+                        .unwrap_or(Json::Null),
+                ));
             }
         }
         let mut result = Json::obj().with("@value", value.clone());
@@ -705,7 +916,15 @@ impl Processor<'_> {
     }
 
     /// 5.1.2 Expansion Algorithm.
-    fn expand(&mut self, active: &Context, prop: Option<&str>, element: &Json, base_url: &str, from_map: bool, depth: usize) -> R<Json> {
+    fn expand(
+        &mut self,
+        active: &Context,
+        prop: Option<&str>,
+        element: &Json,
+        base_url: &str,
+        from_map: bool,
+        depth: usize,
+    ) -> R<Json> {
         if depth > MAX_EXPANSION_DEPTH {
             return err("expansion too deep");
         }
@@ -719,7 +938,10 @@ impl Processor<'_> {
                 let mut result = Vec::new();
                 for item in items {
                     let mut e = self.expand(active, prop, item, base_url, from_map, depth + 1)?;
-                    if prop_def.as_ref().is_some_and(|d| d.container.iter().any(|c| c == "@list")) {
+                    if prop_def
+                        .as_ref()
+                        .is_some_and(|d| d.container.iter().any(|c| c == "@list"))
+                    {
                         if let Json::Arr(a) = e {
                             e = Json::obj().with("@list", Json::Arr(a));
                         }
@@ -738,8 +960,12 @@ impl Processor<'_> {
                     return Ok(Json::Null);
                 }
                 if let Some(psc) = &property_scoped {
-                    let bu = prop_def.as_ref().and_then(|d| d.base_url.clone()).unwrap_or_else(|| base_url.to_string());
-                    let a = self.process_context(active, psc, &bu, &mut vec![], false, true, true)?;
+                    let bu = prop_def
+                        .as_ref()
+                        .and_then(|d| d.base_url.clone())
+                        .unwrap_or_else(|| base_url.to_string());
+                    let a =
+                        self.process_context(active, psc, &bu, &mut vec![], false, true, true)?;
                     return self.value_expand(&a, prop, scalar);
                 }
                 return self.value_expand(active, prop, scalar);
@@ -765,7 +991,10 @@ impl Processor<'_> {
             }
         }
         if let Some(psc) = &property_scoped {
-            let bu = prop_def.as_ref().and_then(|d| d.base_url.clone()).unwrap_or_else(|| base_url.to_string());
+            let bu = prop_def
+                .as_ref()
+                .and_then(|d| d.base_url.clone())
+                .unwrap_or_else(|| base_url.to_string());
             active = self.process_context(&active, psc, &bu, &mut vec![], true, true, true)?;
         }
         if let Some(c) = get(element, "@context") {
@@ -777,12 +1006,28 @@ impl Processor<'_> {
         sorted_keys.sort();
         for k in &sorted_keys {
             if self.expand_iri_simple(&active, k, false, true)?.as_deref() == Some("@type") {
-                let mut types: Vec<String> = as_array(get(element, k).cloned().unwrap_or(Json::Null)).into_iter().filter_map(|t| t.as_str().map(String::from)).collect();
+                let mut types: Vec<String> =
+                    as_array(get(element, k).cloned().unwrap_or(Json::Null))
+                        .into_iter()
+                        .filter_map(|t| t.as_str().map(String::from))
+                        .collect();
                 types.sort();
                 for t in &types {
                     if let Some(c) = type_scoped.terms.get(t).and_then(|d| d.context.clone()) {
-                        let bu = type_scoped.terms.get(t).and_then(|d| d.base_url.clone()).unwrap_or_else(|| base_url.to_string());
-                        active = self.process_context(&active, &c, &bu, &mut vec![], false, false, true)?;
+                        let bu = type_scoped
+                            .terms
+                            .get(t)
+                            .and_then(|d| d.base_url.clone())
+                            .unwrap_or_else(|| base_url.to_string());
+                        active = self.process_context(
+                            &active,
+                            &c,
+                            &bu,
+                            &mut vec![],
+                            false,
+                            false,
+                            true,
+                        )?;
                     }
                 }
                 if let Some(last) = types.last() {
@@ -793,17 +1038,42 @@ impl Processor<'_> {
         }
         let mut result = Json::obj();
         let mut nests: Vec<String> = Vec::new();
-        self.expand_entries(&active, &type_scoped, prop, element, base_url, &input_type, &mut result, &mut nests, depth)?;
+        self.expand_entries(
+            &active,
+            &type_scoped,
+            prop,
+            element,
+            base_url,
+            &input_type,
+            &mut result,
+            &mut nests,
+            depth,
+        )?;
         // 14: nested properties, each with the scoped context of its nesting term
-        self.expand_nests(&active, &type_scoped, prop, element, base_url, &input_type, &mut result, &nests, depth)?;
+        self.expand_nests(
+            &active,
+            &type_scoped,
+            prop,
+            element,
+            base_url,
+            &input_type,
+            &mut result,
+            &nests,
+            depth,
+        )?;
         // 15: value objects
         if get(&result, "@value").is_some() {
             for k in keys(&result) {
-                if !matches!(k.as_str(), "@annotation" | "@direction" | "@index" | "@language" | "@type" | "@value") {
+                if !matches!(
+                    k.as_str(),
+                    "@annotation" | "@direction" | "@index" | "@language" | "@type" | "@value"
+                ) {
                     return err("invalid value object");
                 }
             }
-            if get(&result, "@type").is_some() && (get(&result, "@language").is_some() || get(&result, "@direction").is_some()) {
+            if get(&result, "@type").is_some()
+                && (get(&result, "@language").is_some() || get(&result, "@direction").is_some())
+            {
                 return err("invalid value object");
             }
             if get(&result, "@type") == Some(&Json::Str("@json".into())) {
@@ -831,7 +1101,11 @@ impl Processor<'_> {
                 result.set("@type", Json::Arr(vec![t]));
             }
         } else if get(&result, "@set").is_some() || get(&result, "@list").is_some() {
-            if keys(&result).len() > 2 || keys(&result).iter().any(|k| !matches!(k.as_str(), "@set" | "@list" | "@index")) {
+            if keys(&result).len() > 2
+                || keys(&result)
+                    .iter()
+                    .any(|k| !matches!(k.as_str(), "@set" | "@list" | "@index"))
+            {
                 return err("invalid set or list object");
             }
             if let Some(s) = remove(&mut result, "@set") {
@@ -842,7 +1116,11 @@ impl Processor<'_> {
             return Ok(Json::Null);
         }
         if prop.is_none() || prop == Some("@graph") {
-            if is_map(&result) && (keys(&result).is_empty() || get(&result, "@value").is_some() || get(&result, "@list").is_some()) {
+            if is_map(&result)
+                && (keys(&result).is_empty()
+                    || get(&result, "@value").is_some()
+                    || get(&result, "@list").is_some())
+            {
                 return Ok(Json::Null);
             }
             if is_map(&result) && keys(&result) == ["@id"] {
@@ -854,7 +1132,18 @@ impl Processor<'_> {
 
     /// Step 14: expand the maps under `nests` (keys of `element` aliased to @nest) into `result`.
     #[allow(clippy::too_many_arguments)]
-    fn expand_nests(&mut self, active: &Context, type_scoped: &Context, prop: Option<&str>, element: &Json, base_url: &str, input_type: &Option<String>, result: &mut Json, nests: &[String], depth: usize) -> R<()> {
+    fn expand_nests(
+        &mut self,
+        active: &Context,
+        type_scoped: &Context,
+        prop: Option<&str>,
+        element: &Json,
+        base_url: &str,
+        input_type: &Option<String>,
+        result: &mut Json,
+        nests: &[String],
+        depth: usize,
+    ) -> R<()> {
         let mut sorted = nests.to_vec();
         sorted.sort();
         for key in sorted {
@@ -862,7 +1151,8 @@ impl Processor<'_> {
             if let Some(d) = active.terms.get(&key) {
                 if let Some(c) = d.context.clone() {
                     let bu = d.base_url.clone().unwrap_or_else(|| base_url.to_string());
-                    nest_ctx = self.process_context(active, &c, &bu, &mut vec![], true, true, true)?;
+                    nest_ctx =
+                        self.process_context(active, &c, &bu, &mut vec![], true, true, true)?;
                 }
             }
             for nested in as_array(get(element, &key).cloned().unwrap_or(Json::Null)) {
@@ -870,13 +1160,37 @@ impl Processor<'_> {
                     return err("invalid @nest value");
                 }
                 for k in keys(&nested) {
-                    if self.expand_iri_simple(&nest_ctx, &k, false, true)?.as_deref() == Some("@value") {
+                    if self
+                        .expand_iri_simple(&nest_ctx, &k, false, true)?
+                        .as_deref()
+                        == Some("@value")
+                    {
                         return err("invalid @nest value");
                     }
                 }
                 let mut inner = Vec::new();
-                self.expand_entries(&nest_ctx, type_scoped, prop, &nested, base_url, input_type, result, &mut inner, depth)?;
-                self.expand_nests(&nest_ctx, type_scoped, prop, &nested, base_url, input_type, result, &inner, depth)?;
+                self.expand_entries(
+                    &nest_ctx,
+                    type_scoped,
+                    prop,
+                    &nested,
+                    base_url,
+                    input_type,
+                    result,
+                    &mut inner,
+                    depth,
+                )?;
+                self.expand_nests(
+                    &nest_ctx,
+                    type_scoped,
+                    prop,
+                    &nested,
+                    base_url,
+                    input_type,
+                    result,
+                    &inner,
+                    depth,
+                )?;
             }
         }
         Ok(())
@@ -884,7 +1198,18 @@ impl Processor<'_> {
 
     /// Step 13 of the Expansion Algorithm, for one (possibly nested) map.
     #[allow(clippy::too_many_arguments)]
-    fn expand_entries(&mut self, active: &Context, type_scoped: &Context, prop: Option<&str>, element: &Json, base_url: &str, input_type: &Option<String>, result: &mut Json, nests: &mut Vec<String>, depth: usize) -> R<()> {
+    fn expand_entries(
+        &mut self,
+        active: &Context,
+        type_scoped: &Context,
+        prop: Option<&str>,
+        element: &Json,
+        base_url: &str,
+        input_type: &Option<String>,
+        result: &mut Json,
+        nests: &mut Vec<String>,
+        depth: usize,
+    ) -> R<()> {
         let mut entries = keys(element);
         entries.sort();
         for key in entries {
@@ -908,13 +1233,17 @@ impl Processor<'_> {
             }
             let Some(eprop) = self.expand_iri_simple(active, &key, false, true)? else {
                 if self.opts.safe_mode {
-                    return Err(format!("JSON-LD error: \"{key}\" is not defined by the context, so it would be dropped"));
+                    return Err(format!(
+                        "JSON-LD error: \"{key}\" is not defined by the context, so it would be dropped"
+                    ));
                 }
                 continue;
             };
             if !eprop.contains(':') && !is_keyword(&eprop) {
                 if self.opts.safe_mode {
-                    return Err(format!("JSON-LD error: \"{key}\" is not defined by the context, so it would be dropped"));
+                    return Err(format!(
+                        "JSON-LD error: \"{key}\" is not defined by the context, so it would be dropped"
+                    ));
                 }
                 continue;
             }
@@ -927,7 +1256,10 @@ impl Processor<'_> {
                 }
                 let expanded: Json = match eprop.as_str() {
                     "@id" => match &value {
-                        Json::Str(s) => self.expand_iri_simple(active, s, true, false)?.map(Json::Str).unwrap_or(Json::Null),
+                        Json::Str(s) => self
+                            .expand_iri_simple(active, s, true, false)?
+                            .map(Json::Str)
+                            .unwrap_or(Json::Null),
                         Json::Obj(_) if self.star => {
                             // JSON-LD-star: a node object as @id denotes the triple it
                             // describes (an RDF 1.2 triple term)
@@ -951,14 +1283,24 @@ impl Processor<'_> {
                         }
                         let mut ex = Vec::new();
                         for t in out {
-                            if self.opts.safe_mode && !self.expand_iri_simple(type_scoped, &t, false, true)?.is_some_and(|i| i.contains(':')) {
-                                return Err(format!("JSON-LD error: the type \"{t}\" is not defined by the context"));
+                            if self.opts.safe_mode
+                                && !self
+                                    .expand_iri_simple(type_scoped, &t, false, true)?
+                                    .is_some_and(|i| i.contains(':'))
+                            {
+                                return Err(format!(
+                                    "JSON-LD error: the type \"{t}\" is not defined by the context"
+                                ));
                             }
                             if let Some(i) = self.expand_iri_simple(type_scoped, &t, true, true)? {
                                 ex.push(Json::Str(i));
                             }
                         }
-                        let ex = if matches!(value, Json::Str(_)) && ex.len() == 1 { ex.pop().unwrap() } else { Json::Arr(ex) };
+                        let ex = if matches!(value, Json::Str(_)) && ex.len() == 1 {
+                            ex.pop().unwrap()
+                        } else {
+                            Json::Arr(ex)
+                        };
                         if let Some(existing) = get(result, "@type").cloned() {
                             let mut all = as_array(existing);
                             all.extend(as_array(ex));
@@ -967,18 +1309,39 @@ impl Processor<'_> {
                             ex
                         }
                     }
-                    "@graph" => Json::Arr(as_array(self.expand(active, Some("@graph"), &value, base_url, false, depth + 1)?)),
+                    "@graph" => Json::Arr(as_array(self.expand(
+                        active,
+                        Some("@graph"),
+                        &value,
+                        base_url,
+                        false,
+                        depth + 1,
+                    )?)),
                     "@included" => {
                         if self.mode10() {
                             continue;
                         }
-                        let items = as_array(self.expand(active, None, &value, base_url, false, depth + 1)?);
+                        let items = as_array(self.expand(
+                            active,
+                            None,
+                            &value,
+                            base_url,
+                            false,
+                            depth + 1,
+                        )?);
                         for i in &items {
-                            if !is_map(i) || is_value_object(i) || is_list_object(i) || get(i, "@set").is_some() {
+                            if !is_map(i)
+                                || is_value_object(i)
+                                || is_list_object(i)
+                                || get(i, "@set").is_some()
+                            {
                                 return err("invalid @included value");
                             }
                         }
-                        let mut all = get(result, "@included").cloned().map(as_array).unwrap_or_default();
+                        let mut all = get(result, "@included")
+                            .cloned()
+                            .map(as_array)
+                            .unwrap_or_default();
                         all.extend(items);
                         Json::Arr(all)
                     }
@@ -1020,20 +1383,40 @@ impl Processor<'_> {
                         if prop.is_none() || prop == Some("@graph") {
                             continue;
                         }
-                        Json::Arr(as_array(self.expand(active, prop, &value, base_url, false, depth + 1)?))
+                        Json::Arr(as_array(self.expand(
+                            active,
+                            prop,
+                            &value,
+                            base_url,
+                            false,
+                            depth + 1,
+                        )?))
                     }
                     "@set" => self.expand(active, prop, &value, base_url, false, depth + 1)?,
                     "@reverse" => {
                         if !is_map(&value) {
                             return err("invalid @reverse value");
                         }
-                        let ex = self.expand(active, Some("@reverse"), &value, base_url, false, depth + 1)?;
+                        let ex = self.expand(
+                            active,
+                            Some("@reverse"),
+                            &value,
+                            base_url,
+                            false,
+                            depth + 1,
+                        )?;
                         if let Some(rev) = get(&ex, "@reverse") {
                             for k in keys(rev) {
-                                add_value(result, &k, get(rev, &k).cloned().unwrap_or(Json::Null), false);
+                                add_value(
+                                    result,
+                                    &k,
+                                    get(rev, &k).cloned().unwrap_or(Json::Null),
+                                    false,
+                                );
                             }
                         }
-                        let others: Vec<String> = keys(&ex).into_iter().filter(|k| k != "@reverse").collect();
+                        let others: Vec<String> =
+                            keys(&ex).into_iter().filter(|k| k != "@reverse").collect();
                         if !others.is_empty() {
                             if get(result, "@reverse").is_none() {
                                 result.set("@reverse", Json::obj());
@@ -1044,7 +1427,9 @@ impl Processor<'_> {
                                         return err("invalid reverse property value");
                                     }
                                     if let Json::Obj(f) = result {
-                                        if let Some((_, rm)) = f.iter_mut().find(|(n, _)| n == "@reverse") {
+                                        if let Some((_, rm)) =
+                                            f.iter_mut().find(|(n, _)| n == "@reverse")
+                                        {
                                             add_value(rm, &k, item, false);
                                         }
                                     }
@@ -1059,7 +1444,10 @@ impl Processor<'_> {
                     }
                     _ => continue,
                 };
-                if !(matches!(expanded, Json::Null) && eprop == "@value" && input_type.as_deref() != Some("@json")) {
+                if !(matches!(expanded, Json::Null)
+                    && eprop == "@value"
+                    && input_type.as_deref() != Some("@json"))
+                {
                     result.set(&eprop, expanded);
                 }
                 continue;
@@ -1068,7 +1456,9 @@ impl Processor<'_> {
             let container = def.container.clone();
             let has = |c: &str| container.iter().any(|x| x == c);
             let mut expanded = if def.type_mapping.as_deref() == Some("@json") {
-                Json::obj().with("@value", value.clone()).with("@type", "@json")
+                Json::obj()
+                    .with("@value", value.clone())
+                    .with("@type", "@json")
             } else if has("@language") && is_map(&value) {
                 let mut out = Vec::new();
                 let dir = match &def.direction {
@@ -1083,7 +1473,11 @@ impl Processor<'_> {
                             Json::Null => continue,
                             Json::Str(s) => {
                                 let mut v = Json::obj().with("@value", s);
-                                let none = lang == "@none" || self.expand_iri_simple(active, &lang, false, true)?.as_deref() == Some("@none");
+                                let none = lang == "@none"
+                                    || self
+                                        .expand_iri_simple(active, &lang, false, true)?
+                                        .as_deref()
+                                        == Some("@none");
                                 if !none {
                                     v.set("@language", lang.to_ascii_lowercase());
                                 }
@@ -1103,24 +1497,58 @@ impl Processor<'_> {
                 let mut indexes = keys(&value);
                 indexes.sort();
                 for index in indexes {
-                    let mut map_ctx = if has("@id") || has("@type") { active.previous.as_deref().cloned().unwrap_or_else(|| active.clone()) } else { active.clone() };
+                    let mut map_ctx = if has("@id") || has("@type") {
+                        active
+                            .previous
+                            .as_deref()
+                            .cloned()
+                            .unwrap_or_else(|| active.clone())
+                    } else {
+                        active.clone()
+                    };
                     if has("@type") {
                         if let Some(c) = map_ctx.terms.get(&index).and_then(|d| d.context.clone()) {
-                            let bu = map_ctx.terms.get(&index).and_then(|d| d.base_url.clone()).unwrap_or_else(|| base_url.to_string());
-                            map_ctx = self.process_context(&map_ctx, &c, &bu, &mut vec![], false, true, true)?;
+                            let bu = map_ctx
+                                .terms
+                                .get(&index)
+                                .and_then(|d| d.base_url.clone())
+                                .unwrap_or_else(|| base_url.to_string());
+                            map_ctx = self.process_context(
+                                &map_ctx,
+                                &c,
+                                &bu,
+                                &mut vec![],
+                                false,
+                                true,
+                                true,
+                            )?;
                         }
                     }
                     let expanded_index = self.expand_iri_simple(active, &index, false, true)?;
                     let none = expanded_index.as_deref() == Some("@none");
-                    let iv = Json::Arr(as_array(get(&value, &index).cloned().unwrap_or(Json::Null)));
-                    let items = as_array(self.expand(&map_ctx, Some(&key), &iv, base_url, true, depth + 1)?);
+                    let iv =
+                        Json::Arr(as_array(get(&value, &index).cloned().unwrap_or(Json::Null)));
+                    let items = as_array(self.expand(
+                        &map_ctx,
+                        Some(&key),
+                        &iv,
+                        base_url,
+                        true,
+                        depth + 1,
+                    )?);
                     for mut item in items {
                         if has("@graph") && !is_graph_object(&item) {
                             item = Json::obj().with("@graph", Json::Arr(as_array(item)));
                         }
                         if has("@index") && index_key != "@index" && !none {
-                            let re = self.value_expand(active, Some(&index_key), &Json::Str(index.clone()))?;
-                            let eik = self.expand_iri_simple(active, &index_key, false, true)?.unwrap_or_default();
+                            let re = self.value_expand(
+                                active,
+                                Some(&index_key),
+                                &Json::Str(index.clone()),
+                            )?;
+                            let eik = self
+                                .expand_iri_simple(active, &index_key, false, true)?
+                                .unwrap_or_default();
                             let mut vals = vec![re];
                             if let Some(existing) = get(&item, &eik).cloned() {
                                 vals.extend(as_array(existing));
@@ -1132,10 +1560,14 @@ impl Processor<'_> {
                         } else if has("@index") && get(&item, "@index").is_none() && !none {
                             item.set("@index", index.as_str());
                         } else if has("@id") && get(&item, "@id").is_none() && !none {
-                            let id = self.expand_iri_simple(active, &index, true, false)?.map(Json::Str).unwrap_or(Json::Null);
+                            let id = self
+                                .expand_iri_simple(active, &index, true, false)?
+                                .map(Json::Str)
+                                .unwrap_or(Json::Null);
                             item.set("@id", id);
                         } else if has("@type") && !none {
-                            let mut types = vec![Json::Str(expanded_index.clone().unwrap_or_default())];
+                            let mut types =
+                                vec![Json::Str(expanded_index.clone().unwrap_or_default())];
                             if let Some(t) = get(&item, "@type").cloned() {
                                 types.extend(as_array(t));
                             }
@@ -1155,7 +1587,12 @@ impl Processor<'_> {
                 expanded = Json::obj().with("@list", Json::Arr(as_array(expanded)));
             }
             if has("@graph") && !has("@id") && !has("@index") {
-                expanded = Json::Arr(as_array(expanded).into_iter().map(|ev| Json::obj().with("@graph", Json::Arr(as_array(ev)))).collect());
+                expanded = Json::Arr(
+                    as_array(expanded)
+                        .into_iter()
+                        .map(|ev| Json::obj().with("@graph", Json::Arr(as_array(ev))))
+                        .collect(),
+                );
             }
             if def.reverse {
                 if get(result, "@reverse").is_none() {
@@ -1181,12 +1618,18 @@ impl Processor<'_> {
 
 fn valid_container(list: &[String], mode10: bool) -> bool {
     let has = |c: &str| list.iter().any(|x| x == c);
-    let all_known = list.iter().all(|c| matches!(c.as_str(), "@graph" | "@id" | "@index" | "@language" | "@list" | "@set" | "@type"));
+    let all_known = list.iter().all(|c| {
+        matches!(
+            c.as_str(),
+            "@graph" | "@id" | "@index" | "@language" | "@list" | "@set" | "@type"
+        )
+    });
     if !all_known {
         return false;
     }
     if mode10 {
-        return list.len() == 1 && matches!(list[0].as_str(), "@list" | "@set" | "@index" | "@language");
+        return list.len() == 1
+            && matches!(list[0].as_str(), "@list" | "@set" | "@index" | "@language");
     }
     if list.len() == 1 {
         return true;
@@ -1195,7 +1638,10 @@ fn valid_container(list: &[String], mode10: bool) -> bool {
         return false;
     }
     if has("@graph") {
-        return list.iter().all(|c| matches!(c.as_str(), "@graph" | "@id" | "@index" | "@set")) && !(has("@id") && has("@index"));
+        return list
+            .iter()
+            .all(|c| matches!(c.as_str(), "@graph" | "@id" | "@index" | "@set"))
+            && !(has("@id") && has("@index"));
     }
     has("@set") && list.len() == 2
 }
@@ -1225,11 +1671,22 @@ impl NodeMapper {
     }
 
     fn node<'a>(&'a mut self, graph: &str, id: &str) -> &'a mut Json {
-        self.map.entry(graph.to_string()).or_default().entry(id.to_string()).or_insert_with(|| Json::obj().with("@id", id))
+        self.map
+            .entry(graph.to_string())
+            .or_default()
+            .entry(id.to_string())
+            .or_insert_with(|| Json::obj().with("@id", id))
     }
 
     /// 7.2.2 Node Map Generation. `list` collects items of an enclosing @list.
-    fn generate(&mut self, element: &Json, graph: &str, subject: Option<&Json>, property: Option<&str>, list: &mut Option<Vec<Json>>) -> R<()> {
+    fn generate(
+        &mut self,
+        element: &Json,
+        graph: &str,
+        subject: Option<&Json>,
+        property: Option<&str>,
+        list: &mut Option<Vec<Json>>,
+    ) -> R<()> {
         if let Json::Arr(items) = element {
             for item in items {
                 self.generate(item, graph, subject, property, list)?;
@@ -1238,17 +1695,23 @@ impl NodeMapper {
         }
         let mut element = element.clone();
         if let Some(Json::Arr(types)) = get(&element, "@type").cloned() {
-            let mapped: Vec<Json> = types.into_iter().map(|t| match t {
-                Json::Str(s) if is_blank(&s) => Json::Str(self.bnode(Some(&s))),
-                other => other,
-            }).collect();
+            let mapped: Vec<Json> = types
+                .into_iter()
+                .map(|t| match t {
+                    Json::Str(s) if is_blank(&s) => Json::Str(self.bnode(Some(&s))),
+                    other => other,
+                })
+                .collect();
             element.set("@type", Json::Arr(mapped));
         }
         if is_value_object(&element) {
             match list {
                 Some(l) => l.push(element),
                 None => {
-                    let (s, p) = (subject.and_then(Json::as_str).unwrap_or(""), property.unwrap_or(""));
+                    let (s, p) = (
+                        subject.and_then(Json::as_str).unwrap_or(""),
+                        property.unwrap_or(""),
+                    );
                     let node = self.node(graph, s);
                     let existing = get(node, p).cloned().map(as_array).unwrap_or_default();
                     if !existing.contains(&element) {
@@ -1265,7 +1728,10 @@ impl NodeMapper {
             match list {
                 Some(l) => l.push(lo),
                 None => {
-                    let (s, p) = (subject.and_then(Json::as_str).unwrap_or("").to_string(), property.unwrap_or("").to_string());
+                    let (s, p) = (
+                        subject.and_then(Json::as_str).unwrap_or("").to_string(),
+                        property.unwrap_or("").to_string(),
+                    );
                     add_value(self.node(graph, &s), &p, lo, true);
                 }
             }
@@ -1282,7 +1748,10 @@ impl NodeMapper {
         if let Some(Json::Obj(subj)) = subject {
             // reverse property: the referencing node gets `property` pointing at this node
             let _ = subj;
-            let s = get(subject.unwrap(), "@id").and_then(Json::as_str).unwrap_or("").to_string();
+            let s = get(subject.unwrap(), "@id")
+                .and_then(Json::as_str)
+                .unwrap_or("")
+                .to_string();
             let reference = Json::obj().with("@id", s);
             let p = property.unwrap_or("");
             let node = self.node(graph, &id);
@@ -1307,7 +1776,10 @@ impl NodeMapper {
         if let Some(Json::Arr(types)) = get(&element, "@type") {
             for t in types.clone() {
                 let node = self.node(graph, &id);
-                let existing = get(node, "@type").cloned().map(as_array).unwrap_or_default();
+                let existing = get(node, "@type")
+                    .cloned()
+                    .map(as_array)
+                    .unwrap_or_default();
                 if !existing.contains(&t) {
                     add_value(node, "@type", t, true);
                 }
@@ -1339,11 +1811,18 @@ impl NodeMapper {
         props.sort();
         let subj = Json::Str(id.clone());
         for p in props {
-            if matches!(p.as_str(), "@id" | "@type" | "@index" | "@reverse" | "@graph" | "@included" | "@context") {
+            if matches!(
+                p.as_str(),
+                "@id" | "@type" | "@index" | "@reverse" | "@graph" | "@included" | "@context"
+            ) {
                 continue;
             }
             let value = get(&element, &p).cloned().unwrap_or(Json::Null);
-            let p = if is_blank(&p) { self.bnode(Some(&p)) } else { p };
+            let p = if is_blank(&p) {
+                self.bnode(Some(&p))
+            } else {
+                p
+            };
             {
                 let node = self.node(graph, &id);
                 if get(node, &p).is_none() {
@@ -1360,11 +1839,19 @@ impl NodeMapper {
 
 fn canonical_double(f: f64) -> String {
     if f == 0.0 {
-        return if f.is_sign_negative() { "-0.0E0".into() } else { "0.0E0".into() };
+        return if f.is_sign_negative() {
+            "-0.0E0".into()
+        } else {
+            "0.0E0".into()
+        };
     }
     let s = format!("{f:E}");
     let (m, e) = s.split_once('E').unwrap();
-    let m = if m.contains('.') { m.to_string() } else { format!("{m}.0") };
+    let m = if m.contains('.') {
+        m.to_string()
+    } else {
+        format!("{m}.0")
+    };
     format!("{m}E{e}")
 }
 
@@ -1380,7 +1867,11 @@ fn es_number(n: f64) -> String {
     }
     let s = format!("{n:e}");
     let (m, e) = s.split_once('e').unwrap();
-    if e.starts_with('-') { format!("{m}e{e}") } else { format!("{m}e+{e}") }
+    if e.starts_with('-') {
+        format!("{m}e{e}")
+    } else {
+        format!("{m}e+{e}")
+    }
 }
 
 /// JSON Canonicalization Scheme (RFC 8785), for rdf:JSON literals.
@@ -1498,7 +1989,12 @@ impl Rdf<'_> {
     }
 
     fn emit(&mut self, s: Term, p: Term, o: Term, g: &Option<Term>) {
-        self.out.push(Quad { s, p, o, g: g.clone() });
+        self.out.push(Quad {
+            s,
+            p,
+            o,
+            g: g.clone(),
+        });
     }
 
     /// 8.3 Object to RDF.
@@ -1513,7 +2009,10 @@ impl Rdf<'_> {
         }
         let value = get(item, "@value")?;
         let mut datatype = get(item, "@type").and_then(Json::as_str).map(String::from);
-        if datatype.as_deref().is_some_and(|d| d != "@json" && !well_formed_iri(d)) {
+        if datatype
+            .as_deref()
+            .is_some_and(|d| d != "@json" && !well_formed_iri(d))
+        {
             return None;
         }
         if let Some(Json::Str(l)) = get(item, "@language") {
@@ -1532,7 +2031,11 @@ impl Rdf<'_> {
                     datatype.get_or_insert(format!("{XSD}boolean"));
                     b.to_string()
                 }
-                Json::Num(n) if n.fract() != 0.0 || n.abs() >= 1e21 || datatype.as_deref() == Some(&format!("{XSD}double")) => {
+                Json::Num(n)
+                    if n.fract() != 0.0
+                        || n.abs() >= 1e21
+                        || datatype.as_deref() == Some(&format!("{XSD}double")) =>
+                {
                     datatype.get_or_insert(format!("{XSD}double"));
                     canonical_double(*n)
                 }
@@ -1549,16 +2052,34 @@ impl Rdf<'_> {
         if let Some(d) = dir {
             match self.opts.rdf_direction.as_deref() {
                 Some("i18n-datatype") => {
-                    let dt = format!("https://www.w3.org/ns/i18n#{}_{d}", lang.unwrap_or("").to_ascii_lowercase());
+                    let dt = format!(
+                        "https://www.w3.org/ns/i18n#{}_{d}",
+                        lang.unwrap_or("").to_ascii_lowercase()
+                    );
                     return Some(Term::typed(lex, &dt));
                 }
                 Some("compound-literal") => {
                     let node = self.fresh();
-                    self.emit(node.clone(), Term::iri(format!("{RDF_NS}value")), Term::string(lex), g);
+                    self.emit(
+                        node.clone(),
+                        Term::iri(format!("{RDF_NS}value")),
+                        Term::string(lex),
+                        g,
+                    );
                     if let Some(l) = lang {
-                        self.emit(node.clone(), Term::iri(format!("{RDF_NS}language")), Term::string(l.to_ascii_lowercase()), g);
+                        self.emit(
+                            node.clone(),
+                            Term::iri(format!("{RDF_NS}language")),
+                            Term::string(l.to_ascii_lowercase()),
+                            g,
+                        );
                     }
-                    self.emit(node.clone(), Term::iri(format!("{RDF_NS}direction")), Term::string(d), g);
+                    self.emit(
+                        node.clone(),
+                        Term::iri(format!("{RDF_NS}direction")),
+                        Term::string(d),
+                        g,
+                    );
                     return Some(node);
                 }
                 _ => {}
@@ -1581,7 +2102,10 @@ impl Rdf<'_> {
             if let Some(o) = self.object(item, g) {
                 self.emit(nodes[i].clone(), Term::iri(RDF_FIRST), o, g);
             }
-            let rest = nodes.get(i + 1).cloned().unwrap_or_else(|| Term::iri(RDF_NIL));
+            let rest = nodes
+                .get(i + 1)
+                .cloned()
+                .unwrap_or_else(|| Term::iri(RDF_NIL));
             self.emit(nodes[i].clone(), Term::iri(RDF_REST), rest, g);
         }
         nodes[0].clone()
@@ -1590,8 +2114,20 @@ impl Rdf<'_> {
 
 /// Expand a JSON-LD document (5.1 expand() of the API).
 fn expand_document(doc: &Json, opts: &Options) -> R<(Json, bool)> {
-    let mut p = Processor { opts, contexts: HashMap::new(), star: opts.processing_mode == "json-ld-1.2" };
-    let mut active = Context { terms: HashMap::new(), base: Some(opts.base.clone()).filter(|b| !b.is_empty()), original_base: Some(opts.base.clone()).filter(|b| !b.is_empty()), vocab: None, language: None, direction: None, previous: None };
+    let mut p = Processor {
+        opts,
+        contexts: HashMap::new(),
+        star: opts.processing_mode == "json-ld-1.2",
+    };
+    let mut active = Context {
+        terms: HashMap::new(),
+        base: Some(opts.base.clone()).filter(|b| !b.is_empty()),
+        original_base: Some(opts.base.clone()).filter(|b| !b.is_empty()),
+        vocab: None,
+        language: None,
+        direction: None,
+        previous: None,
+    };
     if let Some(ec) = &opts.expand_context {
         let ctx = get(ec, "@context").cloned().unwrap_or_else(|| ec.clone());
         active = p.process_context(&active, &ctx, &opts.base, &mut vec![], false, true, true)?;
@@ -1600,22 +2136,29 @@ fn expand_document(doc: &Json, opts: &Options) -> R<(Json, bool)> {
     if is_map(&expanded) && keys(&expanded) == ["@graph"] {
         expanded = remove(&mut expanded, "@graph").unwrap();
     }
-    Ok((match expanded {
-        Json::Null => Json::Arr(vec![]),
-        Json::Arr(a) => Json::Arr(a),
-        other => Json::Arr(vec![other]),
-    }, p.star))
+    Ok((
+        match expanded {
+            Json::Null => Json::Arr(vec![]),
+            Json::Arr(a) => Json::Arr(a),
+            other => Json::Arr(vec![other]),
+        },
+        p.star,
+    ))
 }
 
 /// JSON-LD document text to quads (8.2 Deserialize JSON-LD to RDF).
 pub fn to_rdf(text: &str, opts: &Options) -> R<Vec<Quad>> {
-    let doc = Json::parse(text).map_err(|e| format!("JSON-LD error: loading document failed ({e})"))?;
+    let doc =
+        Json::parse(text).map_err(|e| format!("JSON-LD error: loading document failed ({e})"))?;
     to_rdf_doc(&doc, opts)
 }
 
 /// A parsed JSON-LD document (or a YAML-LD document parsed to JSON) to quads.
 pub fn to_rdf_doc(doc: &Json, opts: &Options) -> R<Vec<Quad>> {
-    if !matches!(opts.processing_mode.as_str(), "json-ld-1.0" | "json-ld-1.1" | "json-ld-1.2") {
+    if !matches!(
+        opts.processing_mode.as_str(),
+        "json-ld-1.0" | "json-ld-1.1" | "json-ld-1.2"
+    ) {
         return err("processing mode not supported");
     }
     let (expanded, star) = expand_document(doc, opts)?;
@@ -1624,10 +2167,19 @@ pub fn to_rdf_doc(doc: &Json, opts: &Options) -> R<Vec<Quad>> {
     if star {
         star_pass(&mut expanded, None, None, &mut star_state);
     }
-    let mut nm = NodeMapper { counter: 0, labels: HashMap::new(), map: BTreeMap::new() };
+    let mut nm = NodeMapper {
+        counter: 0,
+        labels: HashMap::new(),
+        map: BTreeMap::new(),
+    };
     nm.map.insert("@default".into(), BTreeMap::new());
     nm.generate(&expanded, "@default", None, None, &mut None)?;
-    let mut rdf = Rdf { opts, out: Vec::new(), bnodes: 0, embeds: star_state.embeds.clone() };
+    let mut rdf = Rdf {
+        opts,
+        out: Vec::new(),
+        bnodes: 0,
+        embeds: star_state.embeds.clone(),
+    };
     let map = std::mem::take(&mut nm.map);
     for (graph, nodes) in &map {
         let g = if graph == "@default" {
@@ -1638,7 +2190,9 @@ pub fn to_rdf_doc(doc: &Json, opts: &Options) -> R<Vec<Quad>> {
             continue;
         };
         for (subject, node) in nodes {
-            let Some(s) = rdf.node_term(subject) else { continue };
+            let Some(s) = rdf.node_term(subject) else {
+                continue;
+            };
             let mut props = keys(node);
             props.sort();
             for p in props {
@@ -1696,7 +2250,12 @@ pub fn to_rdf_doc(doc: &Json, opts: &Options) -> R<Vec<Quad>> {
             None => continue,
         };
         let reifier = rdf.fresh();
-        rdf.emit(reifier.clone(), Term::iri(RDF_REIFIES), Term::triple(s, p, o), &g);
+        rdf.emit(
+            reifier.clone(),
+            Term::iri(RDF_REIFIES),
+            Term::triple(s, p, o),
+            &g,
+        );
         for k in keys(ann) {
             if k == "@id" {
                 continue;
@@ -1788,7 +2347,13 @@ fn star_pass(v: &mut Json, parent: Option<(&str, &str)>, graph: Option<&str>, st
             if is_value_object(v) {
                 if let Some(ann) = remove(v, "@annotation") {
                     if let Some((s, p)) = parent {
-                        st.annotations.push((graph.map(String::from), s.to_string(), p.to_string(), v.clone(), ann));
+                        st.annotations.push((
+                            graph.map(String::from),
+                            s.to_string(),
+                            p.to_string(),
+                            v.clone(),
+                            ann,
+                        ));
                     }
                 }
                 return;
@@ -1803,7 +2368,13 @@ fn star_pass(v: &mut Json, parent: Option<(&str, &str)>, graph: Option<&str>, st
             let ann = remove(v, "@annotation");
             if let Some(ann) = ann {
                 if let Some((s, p)) = parent {
-                    st.annotations.push((graph.map(String::from), s.to_string(), p.to_string(), v.clone(), ann));
+                    st.annotations.push((
+                        graph.map(String::from),
+                        s.to_string(),
+                        p.to_string(),
+                        v.clone(),
+                        ann,
+                    ));
                 }
             }
             // a node object as @id: the node's own subject is that triple term (also in
@@ -1823,7 +2394,10 @@ fn star_pass(v: &mut Json, parent: Option<(&str, &str)>, graph: Option<&str>, st
                 *v = Json::obj().with("@id", Json::Str(id));
                 return;
             }
-            let id = get(v, "@id").and_then(Json::as_str).unwrap_or_default().to_string();
+            let id = get(v, "@id")
+                .and_then(Json::as_str)
+                .unwrap_or_default()
+                .to_string();
             if let Some(rev) = get(v, "@reverse").cloned() {
                 let mut rev = rev;
                 if let Json::Obj(fields) = &mut rev {
@@ -1879,29 +2453,48 @@ mod tests {
         }"#;
         let q = to_rdf(doc, &Options::new("http://base/")).unwrap();
         let has = |p: &str, o: &Term| q.iter().any(|q| q.p == Term::iri(p) && &q.o == o);
-        assert!(has("http://www.w3.org/1999/02/22-rdf-syntax-ns#type", &Term::iri("http://ex.org/Person")));
+        assert!(has(
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+            &Term::iri("http://ex.org/Person")
+        ));
         assert!(has("http://ex.org/name", &Term::lang("Ann", "en")));
         assert!(has("http://ex.org/knows", &Term::iri("http://ex.org/b")));
         assert!(has("http://ex.org/label", &Term::lang("Anna", "de")));
         assert!(has("http://ex.org/age", &Term::integer(30)));
-        assert!(has("http://ex.org/height", &Term::typed("1.5E0", "http://www.w3.org/2001/XMLSchema#double")));
+        assert!(has(
+            "http://ex.org/height",
+            &Term::typed("1.5E0", "http://www.w3.org/2001/XMLSchema#double")
+        ));
         assert_eq!(q.iter().filter(|q| q.p == Term::iri(RDF_FIRST)).count(), 2);
     }
 
     #[test]
     fn safe_mode_refuses_what_it_would_drop() {
-        let safe = Options { safe_mode: true, ..Options::new("http://base/") };
+        let safe = Options {
+            safe_mode: true,
+            ..Options::new("http://base/")
+        };
         let ctx = r#""@context": {"ex": "http://ex.org/", "name": "http://ex.org/name"}"#;
         // a key the context does not define: dropped normally, an error in safe mode
-        let typo = format!(r#"{{ {ctx}, "@id": "http://ex.org/a", "name": "Ann", "nmae": "lost" }}"#);
-        assert_eq!(to_rdf(&typo, &Options::new("http://base/")).unwrap().len(), 1);
-        assert!(to_rdf(&typo, &safe).unwrap_err().contains("\"nmae\" is not defined"));
+        let typo =
+            format!(r#"{{ {ctx}, "@id": "http://ex.org/a", "name": "Ann", "nmae": "lost" }}"#);
+        assert_eq!(
+            to_rdf(&typo, &Options::new("http://base/")).unwrap().len(),
+            1
+        );
+        assert!(
+            to_rdf(&typo, &safe)
+                .unwrap_err()
+                .contains("\"nmae\" is not defined")
+        );
         // a type that is not an IRI: a relative IRI normally, an error in safe mode
         let bare = format!(r#"{{ {ctx}, "@id": "http://ex.org/a", "@type": "Person" }}"#);
         assert!(to_rdf(&bare, &Options::new("http://base/")).is_ok());
         assert!(to_rdf(&bare, &safe).unwrap_err().contains("\"Person\""));
         // what the context defines, compact IRIs and full IRIs all pass
-        let fine = format!(r#"{{ {ctx}, "@id": "http://ex.org/a", "@type": "ex:Person", "name": "Ann", "ex:age": 3, "http://ex.org/x": 1 }}"#);
+        let fine = format!(
+            r#"{{ {ctx}, "@id": "http://ex.org/a", "@type": "ex:Person", "name": "Ann", "ex:age": 3, "http://ex.org/x": 1 }}"#
+        );
         assert_eq!(to_rdf(&fine, &safe).unwrap().len(), 4);
     }
 
@@ -1909,7 +2502,10 @@ mod tests {
     fn star_triple_term_as_subject_and_object() {
         // JSON-LD-star (RDF 1.2): a node object as @id, or in value position, denotes the
         // single triple it describes
-        let opts = Options { processing_mode: "json-ld-1.2".into(), ..Options::new("") };
+        let opts = Options {
+            processing_mode: "json-ld-1.2".into(),
+            ..Options::new("")
+        };
         let subject = to_rdf(
             r#"{"@context":{"ex":"http://example.org/"},"@id":{"@id":"ex:bob","ex:age":42},"ex:certainty":0.8}"#,
             &opts,
@@ -1932,20 +2528,32 @@ mod tests {
 
     #[test]
     fn star_annotation_asserts_and_annotates() {
-        let opts = Options { processing_mode: "json-ld-1.2".into(), ..Options::new("") };
+        let opts = Options {
+            processing_mode: "json-ld-1.2".into(),
+            ..Options::new("")
+        };
         let quads = to_rdf(
             r#"{"@context":{"ex":"http://example.org/"},"@id":"ex:bob","ex:knows":{"@id":"ex:alice","@annotation":{"ex:certainty":0.8}}}"#,
             &opts,
         )
         .unwrap();
         assert_eq!(quads.len(), 3);
-        let plain = quads.iter().find(|q| !q.s.is_triple() && !q.o.is_triple()).expect("the annotated triple is asserted");
+        let plain = quads
+            .iter()
+            .find(|q| !q.s.is_triple() && !q.o.is_triple())
+            .expect("the annotated triple is asserted");
         assert_eq!(plain.o.value(), "http://example.org/alice");
         // as with Turtle's {| … |}: a reifier carries rdf:reifies and the annotation
-        let reifies = quads.iter().find(|q| q.p.value() == "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies").expect("rdf:reifies");
+        let reifies = quads
+            .iter()
+            .find(|q| q.p.value() == "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies")
+            .expect("rdf:reifies");
         assert!(reifies.o.is_triple());
         assert!(reifies.s.is_blank());
-        let ann = quads.iter().find(|q| q.p.value() == "http://example.org/certainty").expect("the annotation");
+        let ann = quads
+            .iter()
+            .find(|q| q.p.value() == "http://example.org/certainty")
+            .expect("the annotation");
         assert_eq!(ann.s, reifies.s);
     }
 
@@ -1966,19 +2574,34 @@ mod tests {
         assert_eq!(quads.len(), 1);
         assert!(quads[0].s.is_triple());
         // only known processing modes are accepted
-        assert!(to_rdf("{}", &Options { processing_mode: "json-ld-9".into(), ..Options::new("") }).is_err());
+        assert!(
+            to_rdf(
+                "{}",
+                &Options {
+                    processing_mode: "json-ld-9".into(),
+                    ..Options::new("")
+                }
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn star_round_trips_through_the_writer() {
-        let opts = Options { processing_mode: "json-ld-1.2".into(), ..Options::new("") };
+        let opts = Options {
+            processing_mode: "json-ld-1.2".into(),
+            ..Options::new("")
+        };
         let quads = to_rdf(
             r#"{"@context":{"ex":"http://example.org/"},"@id":"ex:alice","ex:claims":{"@id":"ex:bob","ex:knows":{"@id":"ex:alice"}}}"#,
             &opts,
         )
         .unwrap();
         let out = crate::rdf::write::serialize(&quads, crate::rdf::Format::JsonLd, &[]).unwrap();
-        assert!(out.contains(r#""@id":{"@id":"http://example.org/bob""#), "{out}");
+        assert!(
+            out.contains(r#""@id":{"@id":"http://example.org/bob""#),
+            "{out}"
+        );
         assert!(out.contains(r#""http://example.org/knows":["#), "{out}");
     }
 

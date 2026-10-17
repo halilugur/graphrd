@@ -11,7 +11,6 @@ use crate::sparql::hash::hex_digest;
 /// ("poison graphs") are rejected instead of running forever.
 const MAX_NDEGREE_CALLS: usize = 25_000;
 
-
 /// Canonical N-Triples literal escaping: `"` `\` and BS HT LF FF CR as ECHAR, other control
 /// characters as upper-case UCHAR, everything else as is.
 fn escape(out: &mut String, s: &str) {
@@ -24,7 +23,9 @@ fn escape(out: &mut String, s: &str) {
             '\n' => out.push_str("\\n"),
             '\u{c}' => out.push_str("\\f"),
             '\r' => out.push_str("\\r"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
+                out.push_str(&format!("\\u{:04X}", c as u32))
+            }
             c => out.push(c),
         }
     }
@@ -91,7 +92,11 @@ struct Issuer {
 
 impl Issuer {
     fn new(prefix: &'static str) -> Issuer {
-        Issuer { prefix, issued: Vec::new(), map: HashMap::new() }
+        Issuer {
+            prefix,
+            issued: Vec::new(),
+            map: HashMap::new(),
+        }
     }
 
     fn issue(&mut self, b: &str) -> String {
@@ -135,7 +140,14 @@ impl State<'_> {
 
     /// 4.6 Hash First Degree Quads.
     fn first_degree(&self, n: &str) -> String {
-        let mut lines: Vec<String> = self.bnode_quads[n].iter().map(|&i| nquad(&self.quads[i], &|b| if b == n { "a".into() } else { "z".into() })).collect();
+        let mut lines: Vec<String> = self.bnode_quads[n]
+            .iter()
+            .map(|&i| {
+                nquad(&self.quads[i], &|b| {
+                    if b == n { "a".into() } else { "z".into() }
+                })
+            })
+            .collect();
         lines.sort();
         self.hash(&lines.concat())
     }
@@ -163,7 +175,9 @@ impl State<'_> {
     fn n_degree(&mut self, n: &str, issuer: &Issuer) -> Result<(String, Issuer), String> {
         self.calls += 1;
         if self.calls > MAX_NDEGREE_CALLS {
-            return Err("RDFC-1.0: dataset too complex to canonicalize (possible poison graph)".into());
+            return Err(
+                "RDFC-1.0: dataset too complex to canonicalize (possible poison graph)".into(),
+            );
         }
         let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for &i in &self.bnode_quads[n].clone() {
@@ -202,7 +216,10 @@ impl State<'_> {
                             path.push_str(&copy.issue(related));
                         }
                     }
-                    if !chosen_path.is_empty() && path.len() >= chosen_path.len() && path > chosen_path {
+                    if !chosen_path.is_empty()
+                        && path.len() >= chosen_path.len()
+                        && path > chosen_path
+                    {
                         skip = true;
                         break;
                     }
@@ -216,7 +233,10 @@ impl State<'_> {
                         path.push_str(&rh);
                         path.push('>');
                         copy = ri;
-                        if !chosen_path.is_empty() && path.len() >= chosen_path.len() && path > chosen_path {
+                        if !chosen_path.is_empty()
+                            && path.len() >= chosen_path.len()
+                            && path > chosen_path
+                        {
                             skip = true;
                             break;
                         }
@@ -270,7 +290,13 @@ pub fn issued_identifiers_with(quads: &[Quad], alg: &str) -> Result<Vec<(String,
     if hex_digest(alg, b"").is_none() {
         return Err(format!("RDFC-1.0: unknown hash algorithm {alg}"));
     }
-    let mut st = State { quads, alg, bnode_quads: HashMap::new(), canonical: Issuer::new("c14n"), calls: 0 };
+    let mut st = State {
+        quads,
+        alg,
+        bnode_quads: HashMap::new(),
+        canonical: Issuer::new("c14n"),
+        calls: 0,
+    };
     for (i, q) in quads.iter().enumerate() {
         for (b, _) in blanks(q) {
             let list = st.bnode_quads.entry(b.to_string()).or_default();
@@ -283,7 +309,10 @@ pub fn issued_identifiers_with(quads: &[Quad], alg: &str) -> Result<Vec<(String,
     let mut nodes: Vec<&String> = st.bnode_quads.keys().collect();
     nodes.sort();
     for n in nodes {
-        by_hash.entry(st.first_degree(n)).or_default().push(n.clone());
+        by_hash
+            .entry(st.first_degree(n))
+            .or_default()
+            .push(n.clone());
     }
     // unique first-degree hashes are issued in hash order
     let mut shared = Vec::new();
@@ -312,7 +341,10 @@ pub fn issued_identifiers_with(quads: &[Quad], alg: &str) -> Result<Vec<(String,
         }
     }
     let c = st.canonical;
-    Ok(c.issued.iter().map(|b| (b.clone(), c.map[b].clone())).collect())
+    Ok(c.issued
+        .iter()
+        .map(|b| (b.clone(), c.map[b].clone()))
+        .collect())
 }
 
 /// The dataset as canonical N-Quads (RDFC-1.0): canonical blank node labels, canonical term
@@ -324,7 +356,10 @@ pub fn canonical_nquads(quads: &[Quad]) -> Result<String, String> {
 /// RDFC-1.0 (or URGNA2012) canonical N-Quads of a dataset.
 pub fn canonical_nquads_with(quads: &[Quad], alg: &str) -> Result<String, String> {
     let ids: HashMap<String, String> = issued_identifiers_with(quads, alg)?.into_iter().collect();
-    let mut lines: Vec<String> = quads.iter().map(|q| nquad(q, &|b| ids.get(b).cloned().unwrap_or_else(|| b.to_string()))).collect();
+    let mut lines: Vec<String> = quads
+        .iter()
+        .map(|q| nquad(q, &|b| ids.get(b).cloned().unwrap_or_else(|| b.to_string())))
+        .collect();
     lines.sort();
     lines.dedup();
     Ok(lines.concat())
@@ -336,8 +371,10 @@ mod tests {
     fn isomorphic_datasets_canonicalize_identically() {
         let a = "_:x <http://p> _:y .\n_:y <http://p> _:x .\n_:x <http://q> \"v\" .\n";
         let b = "_:k <http://p> _:j .\n_:j <http://p> _:k .\n_:j <http://q> \"v\" .\n";
-        let ca = super::canonical_nquads(&super::super::ntriples::parse(a, true, true).unwrap()).unwrap();
-        let cb = super::canonical_nquads(&super::super::ntriples::parse(b, true, true).unwrap()).unwrap();
+        let ca = super::canonical_nquads(&super::super::ntriples::parse(a, true, true).unwrap())
+            .unwrap();
+        let cb = super::canonical_nquads(&super::super::ntriples::parse(b, true, true).unwrap())
+            .unwrap();
         assert_eq!(ca, cb);
         assert!(ca.contains("_:c14n0") && ca.contains("_:c14n1"), "{ca}");
     }

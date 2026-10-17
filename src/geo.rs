@@ -29,19 +29,19 @@ pub type C = (f64, f64);
 #[derive(Clone, Debug, PartialEq)]
 /// A geometry in coordinate space.
 pub enum Geom {
-/// A single point.
+    /// A single point.
     Point(C),
-/// A line through the given points.
+    /// A line through the given points.
     Line(Vec<C>),
     /// Exterior ring first, then holes; rings are closed (first == last).
     Polygon(Vec<Vec<C>>),
-/// Several points.
+    /// Several points.
     MultiPoint(Vec<C>),
-/// Several lines.
+    /// Several lines.
     MultiLine(Vec<Vec<C>>),
-/// Several polygons, each with its rings.
+    /// Several polygons, each with its rings.
     MultiPolygon(Vec<Vec<Vec<C>>>),
-/// Geometries of any kind together.
+    /// Geometries of any kind together.
     Collection(Vec<Geom>),
     /// An empty geometry of the given kind (POINT EMPTY ...).
     Empty(&'static str),
@@ -54,13 +54,24 @@ pub enum Geom {
 /// directly. Also returns the coordinate dimension written (2 for XY, 3 for Z or M, 4 for ZM).
 pub fn parse_wkt(s: &str) -> Result<(Geom, u8), String> {
     let (crs, s) = split_crs(s)?;
-    let mut p = WktParser { s: s.as_bytes(), i: 0, dim: 2 };
+    let mut p = WktParser {
+        s: s.as_bytes(),
+        i: 0,
+        dim: 2,
+    };
     let g = p.geometry()?;
     p.ws();
     if p.i != p.s.len() {
         return Err("trailing characters in WKT".into());
     }
-    Ok((if crs == Crs::Crs84 { g } else { map_coords(g, &|c| crs.to_crs84(c)) }, p.dim))
+    Ok((
+        if crs == Crs::Crs84 {
+            g
+        } else {
+            map_coords(g, &|c| crs.to_crs84(c))
+        },
+        p.dim,
+    ))
 }
 
 /// The CRS IRI of a WKT literal (CRS84 when it names none).
@@ -73,7 +84,9 @@ pub fn wkt_srid(s: &str) -> &str {
 
 fn split_crs(s: &str) -> Result<(Crs, &str), String> {
     let s = s.trim();
-    let Some(rest) = s.strip_prefix('<') else { return Ok((Crs::Crs84, s)) };
+    let Some(rest) = s.strip_prefix('<') else {
+        return Ok((Crs::Crs84, s));
+    };
     let (iri, body) = rest.split_once('>').ok_or("bad CRS in WKT literal")?;
     let crs = Crs::from_iri(iri).ok_or_else(|| format!("unsupported CRS <{iri}> (CRS84, EPSG:4326, 4258, 4269, 3857 and WGS 84 / UTM 326xx, 327xx are)"))?;
     Ok((crs, body.trim()))
@@ -102,8 +115,8 @@ pub enum Crs {
 }
 
 impl Crs {
-/// The coordinate reference system an IRI names; `None` when the IRI names none.
-/// Unknown CRSes are rejected at parse time.
+    /// The coordinate reference system an IRI names; `None` when the IRI names none.
+    /// Unknown CRSes are rejected at parse time.
     pub fn from_iri(iri: &str) -> Option<Crs> {
         if iri == CRS84 {
             return Some(Crs::Crs84);
@@ -123,7 +136,10 @@ impl Crs {
         match self {
             Crs::Crs84 => (x, y),
             Crs::LatLong => (y, x),
-            Crs::WebMercator => ((x / WGS84_A).to_degrees(), (2.0 * (y / WGS84_A).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees()),
+            Crs::WebMercator => (
+                (x / WGS84_A).to_degrees(),
+                (2.0 * (y / WGS84_A).exp().atan() - std::f64::consts::FRAC_PI_2).to_degrees(),
+            ),
             Crs::Utm(zone, north) => utm_inverse(x, if north { y } else { y - 10_000_000.0 }, zone),
         }
     }
@@ -141,7 +157,9 @@ fn utm_inverse(e: f64, n: f64, zone: u8) -> C {
     let ep2 = e2 / (1.0 - e2);
     let e1 = (1.0 - (1.0 - e2).sqrt()) / (1.0 + (1.0 - e2).sqrt());
     let x = e - 500_000.0;
-    let mu = n / UTM_K0 / (WGS84_A * (1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * e2 * e2 * e2 / 256.0));
+    let mu = n
+        / UTM_K0
+        / (WGS84_A * (1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * e2 * e2 * e2 / 256.0));
     let phi1 = mu
         + (3.0 * e1 / 2.0 - 27.0 * e1.powi(3) / 32.0) * (2.0 * mu).sin()
         + (21.0 * e1 * e1 / 16.0 - 55.0 * e1.powi(4) / 32.0) * (4.0 * mu).sin()
@@ -155,10 +173,17 @@ fn utm_inverse(e: f64, n: f64, zone: u8) -> C {
     let d = x / (n1 * UTM_K0);
     let lat = phi1
         - (n1 * t / r1)
-            * (d * d / 2.0 - (5.0 + 3.0 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * ep2) * d.powi(4) / 24.0
-                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1 - 252.0 * ep2 - 3.0 * c1 * c1) * d.powi(6) / 720.0);
+            * (d * d / 2.0
+                - (5.0 + 3.0 * t1 + 10.0 * c1 - 4.0 * c1 * c1 - 9.0 * ep2) * d.powi(4) / 24.0
+                + (61.0 + 90.0 * t1 + 298.0 * c1 + 45.0 * t1 * t1 - 252.0 * ep2 - 3.0 * c1 * c1)
+                    * d.powi(6)
+                    / 720.0);
     let lon = utm_meridian(zone)
-        + (d - (1.0 + 2.0 * t1 + c1) * d.powi(3) / 6.0 + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * ep2 + 24.0 * t1 * t1) * d.powi(5) / 120.0) / c;
+        + (d - (1.0 + 2.0 * t1 + c1) * d.powi(3) / 6.0
+            + (5.0 - 2.0 * c1 + 28.0 * t1 - 3.0 * c1 * c1 + 8.0 * ep2 + 24.0 * t1 * t1)
+                * d.powi(5)
+                / 120.0)
+            / c;
     (lon.to_degrees(), lat.to_degrees())
 }
 
@@ -175,11 +200,22 @@ fn utm_forward((lon, lat): C, zone: u8) -> C {
     let cc = ep2 * c * c;
     let a = c * (lon.to_radians() - utm_meridian(zone));
     let m = WGS84_A
-        * ((1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * e2.powi(3) / 256.0) * phi - (3.0 * e2 / 8.0 + 3.0 * e2 * e2 / 32.0 + 45.0 * e2.powi(3) / 1024.0) * (2.0 * phi).sin()
+        * ((1.0 - e2 / 4.0 - 3.0 * e2 * e2 / 64.0 - 5.0 * e2.powi(3) / 256.0) * phi
+            - (3.0 * e2 / 8.0 + 3.0 * e2 * e2 / 32.0 + 45.0 * e2.powi(3) / 1024.0)
+                * (2.0 * phi).sin()
             + (15.0 * e2 * e2 / 256.0 + 45.0 * e2.powi(3) / 1024.0) * (4.0 * phi).sin()
             - (35.0 * e2.powi(3) / 3072.0) * (6.0 * phi).sin());
-    let east = UTM_K0 * n * (a + (1.0 - t + cc) * a.powi(3) / 6.0 + (5.0 - 18.0 * t + t * t + 72.0 * cc - 58.0 * ep2) * a.powi(5) / 120.0) + 500_000.0;
-    let north = UTM_K0 * (m + n * phi.tan() * (a * a / 2.0 + (5.0 - t + 9.0 * cc + 4.0 * cc * cc) * a.powi(4) / 24.0 + (61.0 - 58.0 * t + t * t + 600.0 * cc - 330.0 * ep2) * a.powi(6) / 720.0));
+    let east = UTM_K0
+        * n
+        * (a + (1.0 - t + cc) * a.powi(3) / 6.0
+            + (5.0 - 18.0 * t + t * t + 72.0 * cc - 58.0 * ep2) * a.powi(5) / 120.0)
+        + 500_000.0;
+    let north = UTM_K0
+        * (m + n
+            * phi.tan()
+            * (a * a / 2.0
+                + (5.0 - t + 9.0 * cc + 4.0 * cc * cc) * a.powi(4) / 24.0
+                + (61.0 - 58.0 * t + t * t + 600.0 * cc - 330.0 * ep2) * a.powi(6) / 720.0));
     (east, north)
 }
 
@@ -193,7 +229,9 @@ fn map_coords(g: Geom, f: &dyn Fn(C) -> C) -> Geom {
         Geom::MultiPoint(l) => Geom::MultiPoint(line(l)),
         Geom::MultiLine(p) => Geom::MultiLine(poly(p)),
         Geom::MultiPolygon(ps) => Geom::MultiPolygon(ps.into_iter().map(poly).collect()),
-        Geom::Collection(gs) => Geom::Collection(gs.into_iter().map(|g| map_coords(g, f)).collect()),
+        Geom::Collection(gs) => {
+            Geom::Collection(gs.into_iter().map(|g| map_coords(g, f)).collect())
+        }
         e @ Geom::Empty(_) => e,
     }
 }
@@ -231,7 +269,11 @@ impl WktParser<'_> {
     }
 
     fn expect(&mut self, c: u8) -> Result<(), String> {
-        if self.eat(c) { Ok(()) } else { Err(format!("expected '{}' in WKT", c as char)) }
+        if self.eat(c) {
+            Ok(())
+        } else {
+            Err(format!("expected '{}' in WKT", c as char))
+        }
     }
 
     /// `EMPTY` (true) or an opening parenthesis (false).
@@ -249,10 +291,17 @@ impl WktParser<'_> {
     fn number(&mut self) -> Result<f64, String> {
         self.ws();
         let start = self.i;
-        while self.s.get(self.i).is_some_and(|c| c.is_ascii_digit() || b"+-.eE".contains(c)) {
+        while self
+            .s
+            .get(self.i)
+            .is_some_and(|c| c.is_ascii_digit() || b"+-.eE".contains(c))
+        {
             self.i += 1;
         }
-        std::str::from_utf8(&self.s[start..self.i]).ok().and_then(|t| t.parse().ok()).ok_or_else(|| "bad number in WKT".to_string())
+        std::str::from_utf8(&self.s[start..self.i])
+            .ok()
+            .and_then(|t| t.parse().ok())
+            .ok_or_else(|| "bad number in WKT".to_string())
     }
 
     fn coord(&mut self) -> Result<C, String> {
@@ -262,7 +311,11 @@ impl WktParser<'_> {
         let mut n = 2;
         loop {
             self.ws();
-            if self.s.get(self.i).is_some_and(|c| c.is_ascii_digit() || b"+-.".contains(c)) {
+            if self
+                .s
+                .get(self.i)
+                .is_some_and(|c| c.is_ascii_digit() || b"+-.".contains(c))
+            {
                 self.number()?;
                 n += 1;
             } else {
@@ -410,10 +463,18 @@ pub fn parse_geojson(s: &str) -> Result<Geom, String> {
         }
     }
     fn list(v: Option<&Json>) -> Result<Vec<C>, String> {
-        v.and_then(Json::as_array).ok_or("bad GeoJSON coordinates")?.iter().map(pos).collect()
+        v.and_then(Json::as_array)
+            .ok_or("bad GeoJSON coordinates")?
+            .iter()
+            .map(pos)
+            .collect()
     }
     fn rings(v: Option<&Json>) -> Result<Vec<Vec<C>>, String> {
-        v.and_then(Json::as_array).ok_or("bad GeoJSON coordinates")?.iter().map(|r| list(Some(r))).collect()
+        v.and_then(Json::as_array)
+            .ok_or("bad GeoJSON coordinates")?
+            .iter()
+            .map(|r| list(Some(r)))
+            .collect()
     }
     fn geom(j: &Json) -> Result<Geom, String> {
         let c = j.get("coordinates");
@@ -426,9 +487,25 @@ pub fn parse_geojson(s: &str) -> Result<Geom, String> {
             "Polygon" => Geom::Polygon(rings(c)?),
             "MultiPoint" => Geom::MultiPoint(list(c)?),
             "MultiLineString" => Geom::MultiLine(rings(c)?),
-            "MultiPolygon" => Geom::MultiPolygon(c.and_then(Json::as_array).ok_or("bad GeoJSON")?.iter().map(|p| rings(Some(p))).collect::<Result<_, _>>()?),
-            "GeometryCollection" => Geom::Collection(j.get("geometries").and_then(Json::as_array).ok_or("bad GeoJSON")?.iter().map(geom).collect::<Result<_, _>>()?),
-            "Feature" => geom(j.get("geometry").ok_or("GeoJSON feature without geometry")?)?,
+            "MultiPolygon" => Geom::MultiPolygon(
+                c.and_then(Json::as_array)
+                    .ok_or("bad GeoJSON")?
+                    .iter()
+                    .map(|p| rings(Some(p)))
+                    .collect::<Result<_, _>>()?,
+            ),
+            "GeometryCollection" => Geom::Collection(
+                j.get("geometries")
+                    .and_then(Json::as_array)
+                    .ok_or("bad GeoJSON")?
+                    .iter()
+                    .map(geom)
+                    .collect::<Result<_, _>>()?,
+            ),
+            "Feature" => geom(
+                j.get("geometry")
+                    .ok_or("GeoJSON feature without geometry")?,
+            )?,
             other => return Err(format!("unknown GeoJSON type {other}")),
         })
     }
@@ -438,15 +515,25 @@ pub fn parse_geojson(s: &str) -> Result<Geom, String> {
 // ------------------------------------------------------------------ writing
 
 fn fmt_num(v: f64) -> String {
-    if v == v.trunc() && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
+    if v == v.trunc() && v.abs() < 1e15 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
 }
 
 fn wkt_coords(cs: &[C]) -> String {
-    cs.iter().map(|(x, y)| format!("{} {}", fmt_num(*x), fmt_num(*y))).collect::<Vec<_>>().join(", ")
+    cs.iter()
+        .map(|(x, y)| format!("{} {}", fmt_num(*x), fmt_num(*y)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn wkt_rings(rs: &[Vec<C>]) -> String {
-    rs.iter().map(|r| format!("({})", wkt_coords(r))).collect::<Vec<_>>().join(", ")
+    rs.iter()
+        .map(|r| format!("({})", wkt_coords(r)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The geometry in WKT, numbers trimmed.
@@ -455,10 +542,25 @@ pub fn to_wkt(g: &Geom) -> String {
         Geom::Point((x, y)) => format!("POINT({} {})", fmt_num(*x), fmt_num(*y)),
         Geom::Line(cs) => format!("LINESTRING({})", wkt_coords(cs)),
         Geom::Polygon(rs) => format!("POLYGON({})", wkt_rings(rs)),
-        Geom::MultiPoint(ps) => format!("MULTIPOINT({})", ps.iter().map(|p| format!("({})", wkt_coords(&[*p]))).collect::<Vec<_>>().join(", ")),
+        Geom::MultiPoint(ps) => format!(
+            "MULTIPOINT({})",
+            ps.iter()
+                .map(|p| format!("({})", wkt_coords(&[*p])))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
         Geom::MultiLine(ls) => format!("MULTILINESTRING({})", wkt_rings(ls)),
-        Geom::MultiPolygon(ps) => format!("MULTIPOLYGON({})", ps.iter().map(|p| format!("({})", wkt_rings(p))).collect::<Vec<_>>().join(", ")),
-        Geom::Collection(gs) => format!("GEOMETRYCOLLECTION({})", gs.iter().map(to_wkt).collect::<Vec<_>>().join(", ")),
+        Geom::MultiPolygon(ps) => format!(
+            "MULTIPOLYGON({})",
+            ps.iter()
+                .map(|p| format!("({})", wkt_rings(p)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Geom::Collection(gs) => format!(
+            "GEOMETRYCOLLECTION({})",
+            gs.iter().map(to_wkt).collect::<Vec<_>>().join(", ")
+        ),
         Geom::Empty(k) => format!("{} EMPTY", k.to_ascii_uppercase()),
     }
 }
@@ -469,14 +571,31 @@ pub fn to_geojson(g: &Geom) -> Json {
     let line = |cs: &[C]| Json::Arr(cs.iter().map(pos).collect());
     let rings = |rs: &[Vec<C>]| Json::Arr(rs.iter().map(|r| line(r)).collect());
     match g {
-        Geom::Point(c) => Json::obj().with("type", "Point").with("coordinates", pos(c)),
-        Geom::Line(cs) => Json::obj().with("type", "LineString").with("coordinates", line(cs)),
-        Geom::Polygon(rs) => Json::obj().with("type", "Polygon").with("coordinates", rings(rs)),
-        Geom::MultiPoint(ps) => Json::obj().with("type", "MultiPoint").with("coordinates", line(ps)),
-        Geom::MultiLine(ls) => Json::obj().with("type", "MultiLineString").with("coordinates", rings(ls)),
-        Geom::MultiPolygon(ps) => Json::obj().with("type", "MultiPolygon").with("coordinates", Json::Arr(ps.iter().map(|p| rings(p)).collect())),
-        Geom::Collection(gs) => Json::obj().with("type", "GeometryCollection").with("geometries", Json::Arr(gs.iter().map(to_geojson).collect())),
-        Geom::Empty(k) => Json::obj().with("type", *k).with("coordinates", Json::Arr(vec![])),
+        Geom::Point(c) => Json::obj()
+            .with("type", "Point")
+            .with("coordinates", pos(c)),
+        Geom::Line(cs) => Json::obj()
+            .with("type", "LineString")
+            .with("coordinates", line(cs)),
+        Geom::Polygon(rs) => Json::obj()
+            .with("type", "Polygon")
+            .with("coordinates", rings(rs)),
+        Geom::MultiPoint(ps) => Json::obj()
+            .with("type", "MultiPoint")
+            .with("coordinates", line(ps)),
+        Geom::MultiLine(ls) => Json::obj()
+            .with("type", "MultiLineString")
+            .with("coordinates", rings(ls)),
+        Geom::MultiPolygon(ps) => Json::obj().with("type", "MultiPolygon").with(
+            "coordinates",
+            Json::Arr(ps.iter().map(|p| rings(p)).collect()),
+        ),
+        Geom::Collection(gs) => Json::obj()
+            .with("type", "GeometryCollection")
+            .with("geometries", Json::Arr(gs.iter().map(to_geojson).collect())),
+        Geom::Empty(k) => Json::obj()
+            .with("type", *k)
+            .with("coordinates", Json::Arr(vec![])),
     }
 }
 
@@ -576,7 +695,10 @@ fn on_segment(p: C, a: C, b: C) -> bool {
     if cross(a, b, p).abs() > tol * len.max(1e-300) {
         return false;
     }
-    p.0 >= a.0.min(b.0) - tol && p.0 <= a.0.max(b.0) + tol && p.1 >= a.1.min(b.1) - tol && p.1 <= a.1.max(b.1) + tol
+    p.0 >= a.0.min(b.0) - tol
+        && p.0 <= a.0.max(b.0) + tol
+        && p.1 >= a.1.min(b.1) - tol
+        && p.1 <= a.1.max(b.1) + tol
 }
 
 /// Point in ring: Some(true) inside, Some(false) outside, None on the ring.
@@ -636,7 +758,11 @@ fn locate(p: C, g: &Parts) -> Loc {
         }
     }
     if on_line {
-        return if ends.iter().any(|e| near(*e, p)) { Loc::Boundary } else { Loc::Interior };
+        return if ends.iter().any(|e| near(*e, p)) {
+            Loc::Boundary
+        } else {
+            Loc::Interior
+        };
     }
     if g.points.iter().any(|q| near(*q, p)) {
         return Loc::Interior;
@@ -711,7 +837,10 @@ impl Snap {
         let t = Snap::tol(c);
         for dx in -1..=1 {
             for dy in -1..=1 {
-                if let Some(n) = self.nodes.get(&(kx + dx, ky + dy)).and_then(|v| v.iter().find(|n| (n.0 - c.0).abs() <= t && (n.1 - c.1).abs() <= t)) {
+                if let Some(n) = self.nodes.get(&(kx + dx, ky + dy)).and_then(|v| {
+                    v.iter()
+                        .find(|n| (n.0 - c.0).abs() <= t && (n.1 - c.1).abs() <= t)
+                }) {
                     return *n;
                 }
             }
@@ -730,7 +859,12 @@ fn noded_edges(a: &Parts, b: &Parts) -> Vec<(C, C)> {
     for s in segs.iter_mut() {
         *s = (snap.snap(s.0), snap.snap(s.1));
     }
-    let points: Vec<C> = a.points.iter().chain(&b.points).map(|p| snap.snap(*p)).collect();
+    let points: Vec<C> = a
+        .points
+        .iter()
+        .chain(&b.points)
+        .map(|p| snap.snap(*p))
+        .collect();
     let bbox = |&(p, q): &(C, C)| (p.0.min(q.0), p.1.min(q.1), p.0.max(q.0), p.1.max(q.1));
     let boxes: Vec<_> = segs.iter().map(bbox).collect();
     let mut out = Vec::new();
@@ -740,8 +874,17 @@ fn noded_edges(a: &Parts, b: &Parts) -> Vec<(C, C)> {
         let t = Snap::tol(p).max(Snap::tol(q));
         for (j, &(r, s)) in segs.iter().enumerate() {
             let bj = boxes[j];
-            if i != j && bj.0 <= bi.2 + t && bi.0 <= bj.2 + t && bj.1 <= bi.3 + t && bi.1 <= bj.3 + t {
-                cuts.extend(seg_intersections(p, q, r, s).into_iter().map(|c| snap.snap(c)));
+            if i != j
+                && bj.0 <= bi.2 + t
+                && bi.0 <= bj.2 + t
+                && bj.1 <= bi.3 + t
+                && bi.1 <= bj.3 + t
+            {
+                cuts.extend(
+                    seg_intersections(p, q, r, s)
+                        .into_iter()
+                        .map(|c| snap.snap(c)),
+                );
             }
         }
         for pt in &points {
@@ -773,7 +916,9 @@ fn side_points(a: C, b: C) -> (C, C) {
 /// A point strictly inside a polygon (for polygons that no edge test reaches).
 fn interior_point(poly: &[Vec<C>]) -> Option<C> {
     let ring = &poly[0];
-    let (y0, y1) = ring.iter().fold((f64::MAX, f64::MIN), |(lo, hi), c| (lo.min(c.1), hi.max(c.1)));
+    let (y0, y1) = ring.iter().fold((f64::MAX, f64::MIN), |(lo, hi), c| {
+        (lo.min(c.1), hi.max(c.1))
+    });
     // scan a horizontal line through the middle and take the midpoint of the widest inside span
     for frac in [0.5, 0.37, 0.63, 0.21, 0.79] {
         let y = y0 + (y1 - y0) * frac;
@@ -787,7 +932,10 @@ fn interior_point(poly: &[Vec<C>]) -> Option<C> {
             }
         }
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        let best = xs.chunks(2).filter(|c| c.len() == 2).max_by(|a, b| (a[1] - a[0]).partial_cmp(&(b[1] - b[0])).unwrap());
+        let best = xs
+            .chunks(2)
+            .filter(|c| c.len() == 2)
+            .max_by(|a, b| (a[1] - a[0]).partial_cmp(&(b[1] - b[0])).unwrap());
         if let Some(c) = best {
             let p = ((c[0] + c[1]) / 2.0, y);
             if locate_poly(p, poly) == Loc::Interior {
@@ -809,11 +957,35 @@ pub fn relate(ga: &Geom, gb: &Geom) -> String {
     let at = |l: Loc, want: Loc| if l == want { '0' } else { 'F' };
     if let (Geom::Point(p), true) = (ga, only_polys(&b)) {
         let l = locate(*p, &b);
-        return [at(l, Loc::Interior), at(l, Loc::Boundary), at(l, Loc::Exterior), 'F', 'F', 'F', '2', '1', '2'].iter().collect();
+        return [
+            at(l, Loc::Interior),
+            at(l, Loc::Boundary),
+            at(l, Loc::Exterior),
+            'F',
+            'F',
+            'F',
+            '2',
+            '1',
+            '2',
+        ]
+        .iter()
+        .collect();
     }
     if let (true, Geom::Point(p)) = (only_polys(&a), gb) {
         let l = locate(*p, &a);
-        return [at(l, Loc::Interior), 'F', '2', at(l, Loc::Boundary), 'F', '1', at(l, Loc::Exterior), 'F', '2'].iter().collect();
+        return [
+            at(l, Loc::Interior),
+            'F',
+            '2',
+            at(l, Loc::Boundary),
+            'F',
+            '1',
+            at(l, Loc::Exterior),
+            'F',
+            '2',
+        ]
+        .iter()
+        .collect();
     }
     let mut m = [[-1i8; 3]; 3];
     let idx = |l: Loc| match l {
@@ -847,9 +1019,21 @@ pub fn relate(ga: &Geom, gb: &Geom) -> String {
         let (l, r) = side_points(p, q);
         for s in [l, r] {
             let (sa, sb) = (locate(s, &a), locate(s, &b));
-            if sa != Loc::Boundary && sb != Loc::Boundary && (sa == Loc::Interior && !a.polys.is_empty() || sb == Loc::Interior && !b.polys.is_empty()) {
-                let da = if sa == Loc::Interior && !a.polys.is_empty() { 2 } else { -1 };
-                let db = if sb == Loc::Interior && !b.polys.is_empty() { 2 } else { -1 };
+            if sa != Loc::Boundary
+                && sb != Loc::Boundary
+                && (sa == Loc::Interior && !a.polys.is_empty()
+                    || sb == Loc::Interior && !b.polys.is_empty())
+            {
+                let da = if sa == Loc::Interior && !a.polys.is_empty() {
+                    2
+                } else {
+                    -1
+                };
+                let db = if sb == Loc::Interior && !b.polys.is_empty() {
+                    2
+                } else {
+                    -1
+                };
                 // a 2D cell needs both sides' locations to be areal (or exterior)
                 let ok_a = sa == Loc::Exterior || da == 2;
                 let ok_b = sb == Loc::Exterior || db == 2;
@@ -866,7 +1050,15 @@ pub fn relate(ga: &Geom, gb: &Geom) -> String {
                 // a 2D cell of `own`'s interior lies in `other`'s areal interior or, around
                 // any lower-dimensional part of `other`, in its exterior
                 let lo = locate(p, own);
-                let lt = if other.polys.iter().any(|q| locate_poly(p, q) == Loc::Interior) { Loc::Interior } else { Loc::Exterior };
+                let lt = if other
+                    .polys
+                    .iter()
+                    .any(|q| locate_poly(p, q) == Loc::Interior)
+                {
+                    Loc::Interior
+                } else {
+                    Loc::Exterior
+                };
                 if flip { set(lt, lo, 2) } else { set(lo, lt, 2) }
             }
         }
@@ -885,19 +1077,41 @@ pub fn relate(ga: &Geom, gb: &Geom) -> String {
 
 /// DE-9IM pattern test: `T` (non-empty), `F` (empty), `*` (any), or `0`/`1`/`2`.
 pub fn matches(matrix: &str, pattern: &str) -> bool {
-    matrix.chars().zip(pattern.chars()).all(|(m, p)| match p.to_ascii_uppercase() {
-        '*' => true,
-        'T' => m != 'F',
-        'F' => m == 'F',
-        d => m == d,
-    })
+    matrix
+        .chars()
+        .zip(pattern.chars())
+        .all(|(m, p)| match p.to_ascii_uppercase() {
+            '*' => true,
+            'T' => m != 'F',
+            'F' => m == 'F',
+            d => m == d,
+        })
 }
 
 /// The topology functions that hold only for geometries that meet (all but the disjointness
 /// ones).
 const MEETING: [&str; 21] = [
-    "sfEquals", "ehEquals", "rcc8eq", "sfIntersects", "sfTouches", "ehMeet", "sfCrosses", "sfWithin", "sfContains", "sfOverlaps", "ehOverlap", "ehCovers",
-    "ehCoveredBy", "ehInside", "ehContains", "rcc8ec", "rcc8po", "rcc8tppi", "rcc8tpp", "rcc8ntpp", "rcc8ntppi",
+    "sfEquals",
+    "ehEquals",
+    "rcc8eq",
+    "sfIntersects",
+    "sfTouches",
+    "ehMeet",
+    "sfCrosses",
+    "sfWithin",
+    "sfContains",
+    "sfOverlaps",
+    "ehOverlap",
+    "ehCovers",
+    "ehCoveredBy",
+    "ehInside",
+    "ehContains",
+    "rcc8ec",
+    "rcc8po",
+    "rcc8tppi",
+    "rcc8tpp",
+    "rcc8ntpp",
+    "rcc8ntppi",
 ];
 
 /// Topology functions of the three GeoSPARQL families, by local name.
@@ -965,13 +1179,13 @@ pub fn topology(name: &str, a: &Geom, b: &Geom) -> Option<bool> {
 #[derive(Clone, Copy, PartialEq)]
 /// A set operation on two geometries.
 pub enum SetOp {
-/// The shared area.
+    /// The shared area.
     Intersection,
-/// Both together.
+    /// Both together.
     Union,
-/// The first without the second.
+    /// The first without the second.
     Difference,
-/// What belongs to exactly one of the two.
+    /// What belongs to exactly one of the two.
     SymDifference,
 }
 
@@ -989,14 +1203,33 @@ fn inside(op: SetOp, ia: bool, ib: bool) -> bool {
 /// into rings; then the lines and points of the result.
 pub fn set_op(op: SetOp, ga: &Geom, gb: &Geom) -> Geom {
     let (a, b) = (parts(ga), parts(gb));
-    let area_in = |p: C, g: &Parts| g.polys.iter().any(|poly| locate_poly(p, poly) == Loc::Interior);
-    let edges = noded_edges(&Parts { polys: a.polys.clone(), ..Default::default() }, &Parts { polys: b.polys.clone(), ..Default::default() });
+    let area_in = |p: C, g: &Parts| {
+        g.polys
+            .iter()
+            .any(|poly| locate_poly(p, poly) == Loc::Interior)
+    };
+    let edges = noded_edges(
+        &Parts {
+            polys: a.polys.clone(),
+            ..Default::default()
+        },
+        &Parts {
+            polys: b.polys.clone(),
+            ..Default::default()
+        },
+    );
     let mut kept: Vec<(C, C)> = Vec::new();
     for &(p, q) in &edges {
         let (l, r) = side_points(p, q);
         let li = inside(op, area_in(l, &a), area_in(l, &b));
         let ri = inside(op, area_in(r, &a), area_in(r, &b));
-        let e = if li && !ri { (p, q) } else if ri && !li { (q, p) } else { continue };
+        let e = if li && !ri {
+            (p, q)
+        } else if ri && !li {
+            (q, p)
+        } else {
+            continue;
+        };
         if !kept.iter().any(|k| near(k.0, e.0) && near(k.1, e.1)) {
             kept.push(e);
         }
@@ -1006,19 +1239,36 @@ pub fn set_op(op: SetOp, ga: &Geom, gb: &Geom) -> Geom {
     let mut shells: Vec<Vec<Vec<C>>> = Vec::new();
     let mut holes: Vec<Vec<C>> = Vec::new();
     for r in rings {
-        if signed_area(&r) > 0.0 { shells.push(vec![r]) } else { holes.push(r) }
+        if signed_area(&r) > 0.0 {
+            shells.push(vec![r])
+        } else {
+            holes.push(r)
+        }
     }
     for h in holes {
         // the smallest shell around the whole hole (an island inside the hole is smaller)
         let hole_area = signed_area(&h).abs();
-        if let Some(s) = shells.iter_mut().filter(|s| signed_area(&s[0]) > hole_area && h.iter().all(|p| in_ring(*p, &s[0]) != Some(false))).min_by(|x, y| signed_area(&x[0]).partial_cmp(&signed_area(&y[0])).unwrap()) {
+        if let Some(s) = shells
+            .iter_mut()
+            .filter(|s| {
+                signed_area(&s[0]) > hole_area
+                    && h.iter().all(|p| in_ring(*p, &s[0]) != Some(false))
+            })
+            .min_by(|x, y| signed_area(&x[0]).partial_cmp(&signed_area(&y[0])).unwrap())
+        {
             s.push(h);
         }
     }
     let mut out: Vec<Geom> = shells.into_iter().map(Geom::Polygon).collect();
     // lines and points: arrangement pieces and nodes in the result (closed-set membership)
     // that no resulting area already covers - shared edges, crossings, touching vertices
-    let in_result = |p: C| inside(op, locate(p, &a) != Loc::Exterior, locate(p, &b) != Loc::Exterior);
+    let in_result = |p: C| {
+        inside(
+            op,
+            locate(p, &a) != Loc::Exterior,
+            locate(p, &b) != Loc::Exterior,
+        )
+    };
     let area_side = |p: C| inside(op, area_in(p, &a), area_in(p, &b));
     let all = Parts {
         points: a.points.iter().chain(&b.points).copied().collect(),
@@ -1030,7 +1280,13 @@ pub fn set_op(op: SetOp, ga: &Geom, gb: &Geom) -> Geom {
     for &(p, q) in &pieces_all {
         let mid = ((p.0 + q.0) / 2.0, (p.1 + q.1) / 2.0);
         let (l, r) = side_points(p, q);
-        if in_result(mid) && !area_side(l) && !area_side(r) && !pieces.iter().any(|x| (near(x.0, p) && near(x.1, q)) || (near(x.0, q) && near(x.1, p))) {
+        if in_result(mid)
+            && !area_side(l)
+            && !area_side(r)
+            && !pieces
+                .iter()
+                .any(|x| (near(x.0, p) && near(x.1, q)) || (near(x.0, q) && near(x.1, p)))
+        {
             pieces.push((p, q));
         }
     }
@@ -1038,7 +1294,12 @@ pub fn set_op(op: SetOp, ga: &Geom, gb: &Geom) -> Geom {
         out.push(Geom::Line(l));
     }
     let mut covered = parts(&simplify_collection(out.clone()));
-    let nodes: Vec<C> = all.points.iter().copied().chain(pieces_all.iter().flat_map(|e| [e.0, e.1])).collect();
+    let nodes: Vec<C> = all
+        .points
+        .iter()
+        .copied()
+        .chain(pieces_all.iter().flat_map(|e| [e.0, e.1]))
+        .collect();
     for p in nodes {
         if in_result(p) && locate(p, &covered) == Loc::Exterior {
             out.push(Geom::Point(p));
@@ -1049,7 +1310,10 @@ pub fn set_op(op: SetOp, ga: &Geom, gb: &Geom) -> Geom {
 }
 
 fn signed_area(r: &[C]) -> f64 {
-    r.windows(2).map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1).sum::<f64>() / 2.0
+    r.windows(2)
+        .map(|w| w[0].0 * w[1].1 - w[1].0 * w[0].1)
+        .sum::<f64>()
+        / 2.0
 }
 
 /// Link directed edges into closed rings, turning as far left as possible at each node.
@@ -1063,11 +1327,13 @@ fn link_rings(mut edges: Vec<(C, C)>) -> Vec<Vec<C>> {
             let cur = *ring.last().unwrap();
             let prev = ring[ring.len() - 2];
             let heading = (cur.1 - prev.1).atan2(cur.0 - prev.0);
-            let candidates: Vec<usize> = (0..edges.len()).filter(|&i| near(edges[i].0, cur)).collect();
+            let candidates: Vec<usize> = (0..edges.len())
+                .filter(|&i| near(edges[i].0, cur))
+                .collect();
             let Some(&best) = candidates.iter().max_by(|&&i, &&j| {
                 let turn = |k: usize| {
                     let e = edges[k];
-                    let h = (e.1 .1 - e.0 .1).atan2(e.1 .0 - e.0 .0);
+                    let h = (e.1.1 - e.0.1).atan2(e.1.0 - e.0.0);
                     let mut d = h - heading;
                     while d <= -std::f64::consts::PI {
                         d += 2.0 * std::f64::consts::PI;
@@ -1078,7 +1344,9 @@ fn link_rings(mut edges: Vec<(C, C)>) -> Vec<Vec<C>> {
                     d
                 };
                 turn(i).partial_cmp(&turn(j)).unwrap()
-            }) else { break };
+            }) else {
+                break;
+            };
             ring.push(edges.remove(best).1);
         }
         if ring.len() >= 4 && near(*ring.last().unwrap(), ring[0]) {
@@ -1101,7 +1369,10 @@ fn merge_lines(mut pieces: Vec<(C, C)>) -> Vec<Vec<C>> {
             if let Some(i) = pieces.iter().position(|p| near(p.0, end) || near(p.1, end)) {
                 let p = pieces.remove(i);
                 line.push(if near(p.0, end) { p.1 } else { p.0 });
-            } else if let Some(i) = pieces.iter().position(|p| near(p.0, start) || near(p.1, start)) {
+            } else if let Some(i) = pieces
+                .iter()
+                .position(|p| near(p.0, start) || near(p.1, start))
+            {
                 let p = pieces.remove(i);
                 line.insert(0, if near(p.1, start) { p.0 } else { p.1 });
             } else {
@@ -1119,11 +1390,41 @@ fn simplify_collection(mut gs: Vec<Geom>) -> Geom {
         1 => gs.pop().unwrap(),
         _ => {
             if gs.iter().all(|g| matches!(g, Geom::Polygon(_))) {
-                Geom::MultiPolygon(gs.into_iter().map(|g| if let Geom::Polygon(p) = g { p } else { unreachable!() }).collect())
+                Geom::MultiPolygon(
+                    gs.into_iter()
+                        .map(|g| {
+                            if let Geom::Polygon(p) = g {
+                                p
+                            } else {
+                                unreachable!()
+                            }
+                        })
+                        .collect(),
+                )
             } else if gs.iter().all(|g| matches!(g, Geom::Line(_))) {
-                Geom::MultiLine(gs.into_iter().map(|g| if let Geom::Line(l) = g { l } else { unreachable!() }).collect())
+                Geom::MultiLine(
+                    gs.into_iter()
+                        .map(|g| {
+                            if let Geom::Line(l) = g {
+                                l
+                            } else {
+                                unreachable!()
+                            }
+                        })
+                        .collect(),
+                )
             } else if gs.iter().all(|g| matches!(g, Geom::Point(_))) {
-                Geom::MultiPoint(gs.into_iter().map(|g| if let Geom::Point(p) = g { p } else { unreachable!() }).collect())
+                Geom::MultiPoint(
+                    gs.into_iter()
+                        .map(|g| {
+                            if let Geom::Point(p) = g {
+                                p
+                            } else {
+                                unreachable!()
+                            }
+                        })
+                        .collect(),
+                )
             } else {
                 Geom::Collection(gs)
             }
@@ -1178,7 +1479,11 @@ pub fn convex_hull(g: &Geom) -> Geom {
         return Geom::Empty("Polygon");
     }
     if pts.len() < 3 {
-        return if pts.len() == 1 { Geom::Point(pts[0]) } else { Geom::Line(pts) };
+        return if pts.len() == 1 {
+            Geom::Point(pts[0])
+        } else {
+            Geom::Line(pts)
+        };
     }
     let mut lower: Vec<C> = Vec::new();
     for &p in &pts {
@@ -1248,7 +1553,10 @@ pub fn centroid(g: &Geom) -> Geom {
     }
     if !p.points.is_empty() {
         let n = p.points.len() as f64;
-        return Geom::Point((p.points.iter().map(|c| c.0).sum::<f64>() / n, p.points.iter().map(|c| c.1).sum::<f64>() / n));
+        return Geom::Point((
+            p.points.iter().map(|c| c.0).sum::<f64>() / n,
+            p.points.iter().map(|c| c.1).sum::<f64>() / n,
+        ));
     }
     Geom::Empty("Point")
 }
@@ -1277,7 +1585,11 @@ pub fn is_simple(g: &Geom) -> bool {
             for j in i + 1..segs.len() {
                 let pts = seg_intersections(segs[i].0, segs[i].1, segs[j].0, segs[j].1);
                 let adjacent = j == i + 1 && pts.len() == 1 && near(pts[0], segs[i].1);
-                let closing = i == 0 && j == segs.len() - 1 && near(l[0], *l.last().unwrap()) && pts.len() == 1 && near(pts[0], l[0]);
+                let closing = i == 0
+                    && j == segs.len() - 1
+                    && near(l[0], *l.last().unwrap())
+                    && pts.len() == 1
+                    && near(pts[0], l[0]);
                 if !pts.is_empty() && !adjacent && !closing {
                     return false;
                 }
@@ -1355,7 +1667,11 @@ pub fn area_m2(g: &Geom) -> f64 {
         }
         (s * EARTH_RADIUS * EARTH_RADIUS / 2.0).abs()
     };
-    parts(g).polys.iter().map(|poly| ring_area(&poly[0]) - poly[1..].iter().map(|h| ring_area(h)).sum::<f64>()).sum()
+    parts(g)
+        .polys
+        .iter()
+        .map(|poly| ring_area(&poly[0]) - poly[1..].iter().map(|h| ring_area(h)).sum::<f64>())
+        .sum()
 }
 
 /// Convert metres (or square metres) to the unit IRI.
@@ -1368,7 +1684,11 @@ pub fn in_units(metres: f64, unit: &str, squared: bool) -> Option<f64> {
         "radian" => EARTH_RADIUS,
         _ => return None,
     };
-    Some(if squared { metres / (f * f) } else { metres / f })
+    Some(if squared {
+        metres / (f * f)
+    } else {
+        metres / f
+    })
 }
 
 // ------------------------------------------------------------------ spatial index
@@ -1388,7 +1708,8 @@ pub fn literal_bbox(t: &Term) -> Option<Bbox> {
 
 /// Whether the term is a WKT or GeoJSON literal.
 pub fn is_geometry_literal(t: &Term) -> bool {
-    t.as_literal().is_some_and(|l| l.datatype == WKT_LITERAL || l.datatype == GEOJSON_LITERAL)
+    t.as_literal()
+        .is_some_and(|l| l.datatype == WKT_LITERAL || l.datatype == GEOJSON_LITERAL)
 }
 
 /// Degrees -> the unit square, clamped (so out-of-range coordinates still land in a cell) and
@@ -1397,7 +1718,11 @@ fn unit(b: Bbox) -> (f64, f64, f64, f64) {
     let ok = !(b.0.is_nan() || b.1.is_nan() || b.2.is_nan() || b.3.is_nan());
     let x = |v: f64| ((v + 180.0) / 360.0).clamp(0.0, 1.0);
     let y = |v: f64| ((v + 90.0) / 180.0).clamp(0.0, 1.0);
-    if ok { (x(b.0), y(b.1), x(b.2), y(b.3)) } else { (0.0, 0.0, 1.0, 1.0) }
+    if ok {
+        (x(b.0), y(b.1), x(b.2), y(b.3))
+    } else {
+        (0.0, 0.0, 1.0, 1.0)
+    }
 }
 
 fn cell_of(v: f64, level: u32) -> u64 {
@@ -1424,7 +1749,11 @@ fn cell_base(level: u32, i: u64, j: u64) -> u64 {
 pub fn index_cells(b: Bbox) -> Vec<(u64, u32)> {
     let (x0, y0, x1, y1) = unit(b);
     let size = (x1 - x0).max(y1 - y0);
-    let level = if size <= 0.0 { CELL_LEVELS } else { ((-size.log2()).floor().max(0.0) as u32).min(CELL_LEVELS) };
+    let level = if size <= 0.0 {
+        CELL_LEVELS
+    } else {
+        ((-size.log2()).floor().max(0.0) as u32).min(CELL_LEVELS)
+    };
     let mut out = Vec::new();
     for i in cell_of(x0, level)..=cell_of(x1, level) {
         for j in cell_of(y0, level)..=cell_of(y1, level) {
@@ -1442,8 +1771,17 @@ pub fn query_cells(b: Bbox) -> (Vec<(u64, u64)>, Vec<(u64, u32)>) {
     let size = (x1 - x0).max(y1 - y0);
     // cells of a sixteenth to an eighth of the query's size: at most 17 x 17 of them cover
     // it, and the area they cover is at most 1.6 times the query's
-    let depth = if size <= 0.0 { CELL_LEVELS } else { ((-size.log2()).floor().max(0.0) as u32 + 4).min(CELL_LEVELS) };
-    let (i0, i1, j0, j1) = (cell_of(x0, depth), cell_of(x1, depth), cell_of(y0, depth), cell_of(y1, depth));
+    let depth = if size <= 0.0 {
+        CELL_LEVELS
+    } else {
+        ((-size.log2()).floor().max(0.0) as u32 + 4).min(CELL_LEVELS)
+    };
+    let (i0, i1, j0, j1) = (
+        cell_of(x0, depth),
+        cell_of(x1, depth),
+        cell_of(y0, depth),
+        cell_of(y1, depth),
+    );
     let span = 1u64 << (2 * (CELL_LEVELS - depth));
     let mut ranges = Vec::new();
     let mut coarse = std::collections::BTreeSet::new();
@@ -1466,11 +1804,22 @@ pub fn query_cells(b: Bbox) -> (Vec<(u64, u64)>, Vec<(u64, u32)>) {
 /// ones (`geof:sfWithin(?g, <const>)`, either order), or `geof:distance(?g, <const>[, unit]) <
 /// r` (also `<=`, and `r >` / `r >=`). `var_arg` says whether an argument is the variable.
 /// Every geometry satisfying the call has a box meeting the returned one.
-pub fn filter_box(name: &str, args: &[Option<Term>], var_arg: &dyn Fn(usize) -> bool, radius: Option<f64>) -> Option<Bbox> {
+pub fn filter_box(
+    name: &str,
+    args: &[Option<Term>],
+    var_arg: &dyn Fn(usize) -> bool,
+    radius: Option<f64>,
+) -> Option<Bbox> {
     if !indexable(name, radius) {
         return None;
     }
-    let constant = |i: usize| -> Option<Bbox> { if var_arg(1 - i) && !var_arg(i) { coord_bounds(&geom_arg(args[i].as_ref())?.0) } else { None } };
+    let constant = |i: usize| -> Option<Bbox> {
+        if var_arg(1 - i) && !var_arg(i) {
+            coord_bounds(&geom_arg(args[i].as_ref())?.0)
+        } else {
+            None
+        }
+    };
     if args.len() < 2 {
         return None;
     }
@@ -1493,11 +1842,23 @@ pub fn filter_box(name: &str, args: &[Option<Term>], var_arg: &dyn Fn(usize) -> 
             }
             let rad = metres / EARTH_RADIUS;
             let dlat = rad.to_degrees() + pad;
-            let far = (b.1 - dlat).abs().max((b.3 + dlat).abs()).min(90.0).to_radians();
+            let far = (b.1 - dlat)
+                .abs()
+                .max((b.3 + dlat).abs())
+                .min(90.0)
+                .to_radians();
             let s = (rad / 2.0).sin() / far.cos();
-            let dlon = if !(s < 1.0) || rad >= std::f64::consts::PI { 360.0 } else { (2.0 * s.asin()).to_degrees() + pad };
+            let dlon = if !(s < 1.0) || rad >= std::f64::consts::PI {
+                360.0
+            } else {
+                (2.0 * s.asin()).to_degrees() + pad
+            };
             // near the antimeridian the circle wraps around: take every longitude
-            let (w, e) = if b.0 - dlon < -180.0 || b.2 + dlon > 180.0 { (-180.0, 180.0) } else { (b.0 - dlon, b.2 + dlon) };
+            let (w, e) = if b.0 - dlon < -180.0 || b.2 + dlon > 180.0 {
+                (-180.0, 180.0)
+            } else {
+                (b.0 - dlon, b.2 + dlon)
+            };
             Some((w, b.1 - dlat, e, b.3 + dlat))
         }
         None if args.len() == 2 => Some((b.0 - pad, b.1 - pad, b.2 + pad, b.3 + pad)),
@@ -1528,7 +1889,13 @@ fn geom_arg(t: Option<&Term>) -> Option<(Geom, u8)> {
     thread_local! {
         static PARSED: std::cell::RefCell<std::collections::HashMap<String, Option<(Geom, u8)>>> = Default::default();
     }
-    if let Some(hit) = PARSED.with(|c| if cached { c.borrow().get(&l.value).cloned() } else { None }) {
+    if let Some(hit) = PARSED.with(|c| {
+        if cached {
+            c.borrow().get(&l.value).cloned()
+        } else {
+            None
+        }
+    }) {
         return hit;
     }
     let g = match l.datatype.as_str() {
@@ -1596,7 +1963,11 @@ pub fn sparql_call(name: &str, args: &[Option<Term>]) -> Option<Term> {
             let (x, _) = geom_arg(a(0))?;
             let (y, _) = geom_arg(a(1))?;
             let pattern = &a(2)?.as_literal()?.value;
-            if pattern.len() != 9 || !pattern.chars().all(|c| "TF*012".contains(c.to_ascii_uppercase())) {
+            if pattern.len() != 9
+                || !pattern
+                    .chars()
+                    .all(|c| "TF*012".contains(c.to_ascii_uppercase()))
+            {
                 return None;
             }
             Term::boolean(matches(&relate(&x, &y), pattern))
@@ -1618,8 +1989,16 @@ pub fn sparql_call(name: &str, args: &[Option<Term>]) -> Option<Term> {
             double(in_units(distance_m(&x, &y), &unit(2)?, false)?)
         }
         "area" => double(in_units(area_m2(&geom_arg(a(0))?.0), &unit(1)?, true)?),
-        "length" => double(in_units(length_m(&geom_arg(a(0))?.0, false), &unit(1)?, false)?),
-        "perimeter" => double(in_units(length_m(&geom_arg(a(0))?.0, true), &unit(1)?, false)?),
+        "length" => double(in_units(
+            length_m(&geom_arg(a(0))?.0, false),
+            &unit(1)?,
+            false,
+        )?),
+        "perimeter" => double(in_units(
+            length_m(&geom_arg(a(0))?.0, true),
+            &unit(1)?,
+            false,
+        )?),
         "envelope" => wkt_term(&envelope(&geom_arg(a(0))?.0)),
         "convexHull" => wkt_term(&convex_hull(&geom_arg(a(0))?.0)),
         "centroid" => wkt_term(&centroid(&geom_arg(a(0))?.0)),
@@ -1634,7 +2013,11 @@ pub fn sparql_call(name: &str, args: &[Option<Term>]) -> Option<Term> {
         "getSRID" => {
             geom_arg(a(0))?;
             let l = a(0)?.as_literal()?;
-            let crs = if l.datatype == WKT_LITERAL { wkt_srid(&l.value) } else { CRS84 };
+            let crs = if l.datatype == WKT_LITERAL {
+                wkt_srid(&l.value)
+            } else {
+                CRS84
+            };
             Term::typed(crs, "http://www.w3.org/2001/XMLSchema#anyURI")
         }
         "minX" | "minY" | "maxX" | "maxY" => {
@@ -1690,7 +2073,10 @@ mod tests {
         assert_eq!(topology("sfTouches", &edge_pt, &sq), Some(true));
         let line = g("LINESTRING(-1 2, 5 2)");
         assert_eq!(topology("sfCrosses", &line, &sq), Some(true));
-        assert_eq!(relate(&g("LINESTRING(0 0, 2 2)"), &g("LINESTRING(0 2, 2 0)")), "0F1FF0102");
+        assert_eq!(
+            relate(&g("LINESTRING(0 0, 2 2)"), &g("LINESTRING(0 2, 2 0)")),
+            "0F1FF0102"
+        );
     }
 
     #[test]
@@ -1698,17 +2084,36 @@ mod tests {
         let a = g("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))");
         let b = g("POLYGON((1 1, 3 1, 3 3, 1 3, 1 1))");
         let i = set_op(SetOp::Intersection, &a, &b);
-        assert_eq!(topology("sfEquals", &i, &g("POLYGON((1 1, 2 1, 2 2, 1 2, 1 1))")), Some(true), "{}", to_wkt(&i));
+        assert_eq!(
+            topology("sfEquals", &i, &g("POLYGON((1 1, 2 1, 2 2, 1 2, 1 1))")),
+            Some(true),
+            "{}",
+            to_wkt(&i)
+        );
         let u = set_op(SetOp::Union, &a, &b);
-        assert!((signed_area(&parts(&u).polys[0][0]).abs() - 7.0).abs() < 1e-9, "{}", to_wkt(&u));
+        assert!(
+            (signed_area(&parts(&u).polys[0][0]).abs() - 7.0).abs() < 1e-9,
+            "{}",
+            to_wkt(&u)
+        );
         let d = set_op(SetOp::Difference, &a, &b);
-        assert!((signed_area(&parts(&d).polys[0][0]).abs() - 3.0).abs() < 1e-9, "{}", to_wkt(&d));
+        assert!(
+            (signed_area(&parts(&d).polys[0][0]).abs() - 3.0).abs() < 1e-9,
+            "{}",
+            to_wkt(&d)
+        );
         // Paris - London ~ 344 km
         let km = distance_m(&g("POINT(2.3522 48.8566)"), &g("POINT(-0.1276 51.5072)")) / 1000.0;
         assert!((km - 343.5).abs() < 2.0, "{km}");
-        assert_eq!(to_wkt(&envelope(&g("LINESTRING(0 0, 3 1, 1 4)"))), "POLYGON((0 0, 3 0, 3 4, 0 4, 0 0))");
+        assert_eq!(
+            to_wkt(&envelope(&g("LINESTRING(0 0, 3 1, 1 4)"))),
+            "POLYGON((0 0, 3 0, 3 4, 0 4, 0 0))"
+        );
         assert_eq!(to_wkt(&centroid(&a)), "POINT(1 1)");
-        assert!(parse_geojson(r#"{"type":"Point","coordinates":[1,2]}"#).unwrap() == Geom::Point((1.0, 2.0)));
+        assert!(
+            parse_geojson(r#"{"type":"Point","coordinates":[1,2]}"#).unwrap()
+                == Geom::Point((1.0, 2.0))
+        );
     }
 }
 
@@ -1720,25 +2125,57 @@ mod spatial {
     fn coordinate_systems() {
         // reference values from PROJ (pyproj 3, EPSG:4326 -> target, always_xy)
         let cases = [
-            (32635, (666370.5050168498, 4541552.4871906955), (28.9784, 41.0082)),
-            (32631, (452482.5327026278, 5411717.176868899), (2.3522, 48.8566)),
-            (32756, (334368.633648097, 6250948.345385009), (151.2093, -33.8688)),
-            (3857, (3225860.7320037987, 5013551.237222597), (28.9784, 41.0082)),
+            (
+                32635,
+                (666370.5050168498, 4541552.4871906955),
+                (28.9784, 41.0082),
+            ),
+            (
+                32631,
+                (452482.5327026278, 5411717.176868899),
+                (2.3522, 48.8566),
+            ),
+            (
+                32756,
+                (334368.633648097, 6250948.345385009),
+                (151.2093, -33.8688),
+            ),
+            (
+                3857,
+                (3225860.7320037987, 5013551.237222597),
+                (28.9784, 41.0082),
+            ),
         ];
         for (code, (x, y), (lon, lat)) in cases {
             let (g, _) = parse_wkt(&format!("<{EPSG}{code}> POINT({x} {y})")).unwrap();
             let Geom::Point((a, b)) = g else { panic!() };
-            assert!((a - lon).abs() < 1e-7 && (b - lat).abs() < 1e-7, "{code}: {a} {b}");
+            assert!(
+                (a - lon).abs() < 1e-7 && (b - lat).abs() < 1e-7,
+                "{code}: {a} {b}"
+            );
         }
         let (fx, fy) = utm_forward((28.9784, 41.0082), 35);
-        assert!((fx - 666370.505).abs() < 0.01 && (fy - 4541552.487).abs() < 0.01, "{fx} {fy}");
+        assert!(
+            (fx - 666370.505).abs() < 0.01 && (fy - 4541552.487).abs() < 0.01,
+            "{fx} {fy}"
+        );
         // EPSG:4326 is written latitude first
-        assert_eq!(parse_wkt(&format!("<{EPSG}4326> POINT(41 29)")).unwrap().0, Geom::Point((29.0, 41.0)));
-        assert_eq!(wkt_srid(&format!("<{EPSG}3857> POINT(0 0)")), format!("{EPSG}3857"));
+        assert_eq!(
+            parse_wkt(&format!("<{EPSG}4326> POINT(41 29)")).unwrap().0,
+            Geom::Point((29.0, 41.0))
+        );
+        assert_eq!(
+            wkt_srid(&format!("<{EPSG}3857> POINT(0 0)")),
+            format!("{EPSG}3857")
+        );
         assert!(parse_wkt(&format!("<{EPSG}2154> POINT(0 0)")).is_err());
         // the same place in two systems
-        let a = parse_wkt("POLYGON((28.9 41.0, 29.1 41.0, 29.1 41.1, 28.9 41.1, 28.9 41.0))").unwrap().0;
-        let b = parse_wkt(&format!("<{EPSG}32635> POINT(666370.505 4541552.487)")).unwrap().0;
+        let a = parse_wkt("POLYGON((28.9 41.0, 29.1 41.0, 29.1 41.1, 28.9 41.1, 28.9 41.0))")
+            .unwrap()
+            .0;
+        let b = parse_wkt(&format!("<{EPSG}32635> POINT(666370.505 4541552.487)"))
+            .unwrap()
+            .0;
         assert_eq!(topology("sfWithin", &b, &a), Some(true));
     }
 
@@ -1760,7 +2197,11 @@ mod spatial {
             boxes.push((x, y, x + size * rnd(), y + size * rnd()));
         }
         let meets = |a: Bbox, b: Bbox| a.0 <= b.2 && b.0 <= a.2 && a.1 <= b.3 && b.1 <= a.3;
-        let index: Vec<(u64, u32, usize)> = boxes.iter().enumerate().flat_map(|(i, b)| index_cells(*b).into_iter().map(move |(z, l)| (z, l, i))).collect();
+        let index: Vec<(u64, u32, usize)> = boxes
+            .iter()
+            .enumerate()
+            .flat_map(|(i, b)| index_cells(*b).into_iter().map(move |(z, l)| (z, l, i)))
+            .collect();
         for q in 0..300 {
             let size = [0.0, 1e-5, 0.01, 1.0, 30.0][q % 5];
             let (x, y) = (rnd() * 360.0 - 180.0, rnd() * 180.0 - 90.0);
@@ -1769,12 +2210,17 @@ mod spatial {
             assert!(ranges.len() <= 17 * 17, "{}", ranges.len());
             let found: std::collections::HashSet<usize> = index
                 .iter()
-                .filter(|(z, l, _)| ranges.iter().any(|(a, b)| a <= z && z < b) || coarse.contains(&(*z, *l)))
+                .filter(|(z, l, _)| {
+                    ranges.iter().any(|(a, b)| a <= z && z < b) || coarse.contains(&(*z, *l))
+                })
                 .map(|e| e.2)
                 .collect();
             for (i, b) in boxes.iter().enumerate() {
                 if meets(*b, qb) {
-                    assert!(found.contains(&i), "box {b:?} meets {qb:?} but was not found");
+                    assert!(
+                        found.contains(&i),
+                        "box {b:?} meets {qb:?} but was not found"
+                    );
                 }
             }
         }
@@ -1787,14 +2233,38 @@ mod spatial {
         let within = format!("{GEOF}sfWithin");
         let b = filter_box(&within, &[None, sq.clone()], &|i| i == 0, None).unwrap();
         assert!(b.0 < 0.0 && b.0 > -1e-6 && b.2 > 1.0 && b.2 < 1.0 + 1e-6);
-        assert!(filter_box(&format!("{GEOF}sfDisjoint"), &[None, sq.clone()], &|i| i == 0, None).is_none());
+        assert!(
+            filter_box(
+                &format!("{GEOF}sfDisjoint"),
+                &[None, sq.clone()],
+                &|i| i == 0,
+                None
+            )
+            .is_none()
+        );
         assert!(filter_box(&within, &[sq.clone(), sq.clone()], &|_| false, None).is_none());
         // 10 km around a point at 60 N: ~0.09 degrees of latitude, ~0.18 of longitude
-        let d = filter_box(&format!("{GEOF}distance"), &[None, wkt("POINT(10 60)"), Some(Term::iri(format!("{UOM}kilometre")))], &|i| i == 0, Some(10.0)).unwrap();
-        assert!((d.3 - 60.0 - 0.0899).abs() < 0.001 && (d.2 - 10.0 - 0.1799).abs() < 0.002, "{d:?}");
+        let d = filter_box(
+            &format!("{GEOF}distance"),
+            &[
+                None,
+                wkt("POINT(10 60)"),
+                Some(Term::iri(format!("{UOM}kilometre"))),
+            ],
+            &|i| i == 0,
+            Some(10.0),
+        )
+        .unwrap();
+        assert!(
+            (d.3 - 60.0 - 0.0899).abs() < 0.001 && (d.2 - 10.0 - 0.1799).abs() < 0.002,
+            "{d:?}"
+        );
         // every point the box leaves out is farther than the radius
         for (lon, lat) in [(10.0, d.3 + 1e-4), (d.2 + 1e-4, 60.09), (d.0 - 1e-4, 59.91)] {
-            assert!(haversine((lon, lat), (10.0, 60.0)) > 10_000.0, "{lon} {lat}");
+            assert!(
+                haversine((lon, lat), (10.0, 60.0)) > 10_000.0,
+                "{lon} {lat}"
+            );
         }
     }
 }
@@ -1807,14 +2277,27 @@ mod differential {
     #[test]
     #[ignore]
     fn dump() {
-        let (Ok(cases), Ok(out)) = (std::env::var("GEO_CASES"), std::env::var("GEO_OUT")) else { return };
+        let (Ok(cases), Ok(out)) = (std::env::var("GEO_CASES"), std::env::var("GEO_OUT")) else {
+            return;
+        };
         let mut lines = Vec::new();
         for line in std::fs::read_to_string(cases).unwrap().lines() {
             let (a, b) = line.split_once('\t').unwrap();
-            let (a, b) = (super::parse_wkt(a).unwrap().0, super::parse_wkt(b).unwrap().0);
-            let ops = [super::SetOp::Intersection, super::SetOp::Union, super::SetOp::Difference, super::SetOp::SymDifference];
+            let (a, b) = (
+                super::parse_wkt(a).unwrap().0,
+                super::parse_wkt(b).unwrap().0,
+            );
+            let ops = [
+                super::SetOp::Intersection,
+                super::SetOp::Union,
+                super::SetOp::Difference,
+                super::SetOp::SymDifference,
+            ];
             let mut cols = vec![super::relate(&a, &b)];
-            cols.extend(ops.iter().map(|op| super::to_wkt(&super::set_op(*op, &a, &b))));
+            cols.extend(
+                ops.iter()
+                    .map(|op| super::to_wkt(&super::set_op(*op, &a, &b))),
+            );
             lines.push(cols.join("\t"));
         }
         std::fs::write(out, lines.join("\n") + "\n").unwrap();

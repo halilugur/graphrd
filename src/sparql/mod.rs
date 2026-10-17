@@ -10,24 +10,24 @@ pub mod regex;
 
 use std::collections::HashMap;
 
-use ast::*;
-pub use eval::QueryResult;
-use eval::Ctx;
-use crate::json::{escape_into, Json};
+use crate::json::{Json, escape_into};
 use crate::rdf::{self, Format, Quad, Term, XSD_STRING};
-use crate::store::{Store, DEFAULT_GRAPH};
+use crate::store::{DEFAULT_GRAPH, Store};
+use ast::*;
+use eval::Ctx;
+pub use eval::QueryResult;
 
 /// Everything a query may be run with, besides its text.
 pub struct QueryOptions<'a> {
-/// The base IRI for relative IRIs in the query.
+    /// The base IRI for relative IRIs in the query.
     pub base: &'a str,
-/// Well-known prefixes (`PREFIX` declarations are parsed into this table).
+    /// Well-known prefixes (`PREFIX` declarations are parsed into this table).
     pub prefixes: &'a HashMap<String, String>,
-/// The dataset the query reads, overriding its own FROM/FROM NAMED.
+    /// The dataset the query reads, overriding its own FROM/FROM NAMED.
     pub dataset: Option<Dataset>,
-/// A time limit in seconds.
+    /// A time limit in seconds.
     pub timeout_secs: Option<u64>,
-/// Whether inferred statements take part (the default).
+    /// Whether inferred statements take part (the default).
     pub infer: bool,
     /// Query-time inference (`infer=at-query`, see `reasoning`).
     pub at_query: bool,
@@ -48,9 +48,17 @@ pub fn query(store: &Store, text: &str, opts: &QueryOptions) -> Result<QueryResu
 /// A query with variables pre-bound to terms (SHACL-SPARQL's `$this`, `$value`, ...). Following
 /// SHACL, the query may not use MINUS, VALUES or SERVICE, nor assign a pre-bound variable, and
 /// its subqueries must project every pre-bound variable (and see them bound).
-pub fn query_prebound(store: &Store, text: &str, opts: &QueryOptions, bindings: &[(&str, Term)]) -> Result<QueryResult, String> {
+pub fn query_prebound(
+    store: &Store,
+    text: &str,
+    opts: &QueryOptions,
+    bindings: &[(&str, Term)],
+) -> Result<QueryResult, String> {
     let parsed = parser::parse_query(text, opts.base, opts.prefixes)?;
-    let bound: Vec<(Var, Term)> = bindings.iter().filter_map(|(n, t)| Some((parsed.vars.names.iter().position(|v| v == n)?, t.clone()))).collect();
+    let bound: Vec<(Var, Term)> = bindings
+        .iter()
+        .filter_map(|(n, t)| Some((parsed.vars.names.iter().position(|v| v == n)?, t.clone())))
+        .collect();
     let vars: Vec<Var> = bound.iter().map(|(v, _)| *v).collect();
     if parsed.query.values.is_some() {
         return Err("VALUES is not allowed in a query with pre-bound variables".into());
@@ -80,23 +88,38 @@ fn prebound_check(p: &Pattern, vars: &[Var], names: &VarTable) -> Result<(), Str
         walk(e, vars, names)
     };
     match p {
-        Pattern::Minus(..) => Err("MINUS is not allowed in a query with pre-bound variables".into()),
-        Pattern::Values(..) => Err("VALUES is not allowed in a query with pre-bound variables".into()),
-        Pattern::Service(..) => Err("SERVICE is not allowed in a query with pre-bound variables".into()),
+        Pattern::Minus(..) => {
+            Err("MINUS is not allowed in a query with pre-bound variables".into())
+        }
+        Pattern::Values(..) => {
+            Err("VALUES is not allowed in a query with pre-bound variables".into())
+        }
+        Pattern::Service(..) => {
+            Err("SERVICE is not allowed in a query with pre-bound variables".into())
+        }
         Pattern::Extend(inner, v, e) => {
             if vars.contains(v) {
-                return Err(format!("?{} is pre-bound and cannot be assigned", names.names[*v]));
+                return Err(format!(
+                    "?{} is pre-bound and cannot be assigned",
+                    names.names[*v]
+                ));
             }
             expr(e)?;
             prebound_check(inner, vars, names)
         }
         Pattern::SubSelect(q) => {
             let projected: Vec<Var> = match &q.form {
-                Form::Select { projection: Some(proj), .. } => proj.iter().map(|(_, v)| *v).collect(),
+                Form::Select {
+                    projection: Some(proj),
+                    ..
+                } => proj.iter().map(|(_, v)| *v).collect(),
                 _ => eval::visible_vars(&q.pattern, names),
             };
             if let Some(v) = vars.iter().find(|v| !projected.contains(v)) {
-                return Err(format!("a subquery must project the pre-bound ?{}", names.names[*v]));
+                return Err(format!(
+                    "a subquery must project the pre-bound ?{}",
+                    names.names[*v]
+                ));
             }
             prebound_check(&q.pattern, vars, names)
         }
@@ -131,14 +154,25 @@ pub fn explain(store: &Store, text: &str, opts: &QueryOptions) -> Result<String,
 }
 
 /// Parse and apply an update: all of its operations or none.
-pub fn update(store: &mut Store, text: &str, base: &str, prefixes: &HashMap<String, String>) -> Result<(), String> {
+pub fn update(
+    store: &mut Store,
+    text: &str,
+    base: &str,
+    prefixes: &HashMap<String, String>,
+) -> Result<(), String> {
     update_with_dataset(store, text, base, prefixes, None)
 }
 
 /// An update whose WHERE clauses read the given dataset (the SPARQL protocol's
 /// `using-graph-uri` / `using-named-graph-uri` parameters). It is an error for an
 /// operation to name its own dataset with USING or WITH as well.
-pub fn update_with_dataset(store: &mut Store, text: &str, base: &str, prefixes: &HashMap<String, String>, dataset: Option<Dataset>) -> Result<(), String> {
+pub fn update_with_dataset(
+    store: &mut Store,
+    text: &str,
+    base: &str,
+    prefixes: &HashMap<String, String>,
+    dataset: Option<Dataset>,
+) -> Result<(), String> {
     let mut parsed = parser::parse_update(text, base, prefixes)?;
     if let Some(ds) = dataset {
         for op in &mut parsed.ops {
@@ -168,14 +202,26 @@ fn rename_blanks(quads: Vec<Quad>) -> Vec<Quad> {
         }
     }
     let mut map: HashMap<String, Term> = HashMap::new();
-    quads.into_iter().map(|q| Quad { s: f(&mut map, q.s), p: q.p, o: f(&mut map, q.o), g: q.g }).collect()
+    quads
+        .into_iter()
+        .map(|q| Quad {
+            s: f(&mut map, q.s),
+            p: q.p,
+            o: f(&mut map, q.o),
+            g: q.g,
+        })
+        .collect()
 }
 
 fn ground(quads: &[QuadPattern]) -> Result<Vec<Quad>, String> {
     let term = |vt: &VarOrTerm| match vt {
         VarOrTerm::Term(t) => Ok(t.clone()),
-        VarOrTerm::Var(_) => Err("variables are not allowed in INSERT DATA / DELETE DATA".to_string()),
-        VarOrTerm::Triple(_) => Err("variables are not allowed in INSERT DATA / DELETE DATA".to_string()),
+        VarOrTerm::Var(_) => {
+            Err("variables are not allowed in INSERT DATA / DELETE DATA".to_string())
+        }
+        VarOrTerm::Triple(_) => {
+            Err("variables are not allowed in INSERT DATA / DELETE DATA".to_string())
+        }
     };
     quads
         .iter()
@@ -201,7 +247,13 @@ fn expand_removals(store: &Store, quads: Vec<Quad>) -> Vec<Quad> {
             out.push(q);
             continue;
         }
-        let (Some(s), Some(p), Some(o)) = (store.dict.lookup(&q.s), store.dict.lookup(&q.p), store.dict.lookup(&q.o)) else { continue };
+        let (Some(s), Some(p), Some(o)) = (
+            store.dict.lookup(&q.s),
+            store.dict.lookup(&q.p),
+            store.dict.lookup(&q.o),
+        ) else {
+            continue;
+        };
         for ids in store.quads_matching(Some(s), Some(p), Some(o), None) {
             out.push(store.decode(ids));
         }
@@ -217,7 +269,10 @@ fn graph_quads(store: &Store, g: Option<&str>) -> Vec<Quad> {
             None => return Vec::new(),
         },
     };
-    store.quads_matching(None, None, None, gid).map(|q| store.decode(q)).collect()
+    store
+        .quads_matching(None, None, None, gid)
+        .map(|q| store.decode(q))
+        .collect()
 }
 
 fn execute(store: &mut Store, op: &UpdateOp, vars: &VarTable, base: &str) -> Result<(), String> {
@@ -241,13 +296,29 @@ fn execute(store: &mut Store, op: &UpdateOp, vars: &VarTable, base: &str) -> Res
             let removals = expand_removals(store, removals);
             store.apply(&removals, &[]).map_err(io)?;
         }
-        UpdateOp::Modify { with, delete, insert, using, pattern } => {
+        UpdateOp::Modify {
+            with,
+            delete,
+            insert,
+            using,
+            pattern,
+        } => {
             let with_term = with.as_ref().map(|w| Term::iri(w.clone()));
             let (removals, additions) = {
                 let mut ctx = Ctx::new(store, vars, base, None);
                 ctx.set_dataset(using.as_ref());
-                let sols = ctx.eval_where(pattern, if using.is_some() { None } else { with_term.as_ref() })?;
-                (ctx.instantiate(delete, &sols, with_term.as_ref()), ctx.instantiate(insert, &sols, with_term.as_ref()))
+                let sols = ctx.eval_where(
+                    pattern,
+                    if using.is_some() {
+                        None
+                    } else {
+                        with_term.as_ref()
+                    },
+                )?;
+                (
+                    ctx.instantiate(delete, &sols, with_term.as_ref()),
+                    ctx.instantiate(insert, &sols, with_term.as_ref()),
+                )
             };
             let removals = expand_removals(store, removals);
             store.apply(&removals, &additions).map_err(io)?;
@@ -271,7 +342,11 @@ fn execute(store: &mut Store, op: &UpdateOp, vars: &VarTable, base: &str) -> Res
             }
         },
         UpdateOp::Create(..) => {}
-        UpdateOp::Load { source, into, silent } => {
+        UpdateOp::Load {
+            source,
+            into,
+            silent,
+        } => {
             let graph = into.as_ref().map(|g| Term::iri(g.clone()));
             match crate::rdf::fetch(source, graph.as_ref()) {
                 Ok(quads) => {
@@ -291,7 +366,13 @@ fn execute(store: &mut Store, op: &UpdateOp, vars: &VarTable, base: &str) -> Res
                 let dst = graph_quads(store, to.as_deref());
                 store.apply(&dst, &[]).map_err(io)?;
             }
-            let copies: Vec<Quad> = src.iter().map(|q| Quad { g: to_term.clone(), ..q.clone() }).collect();
+            let copies: Vec<Quad> = src
+                .iter()
+                .map(|q| Quad {
+                    g: to_term.clone(),
+                    ..q.clone()
+                })
+                .collect();
             let removals = if kind == "MOVE" { src } else { Vec::new() };
             store.apply(&removals, &copies).map_err(io)?;
         }
@@ -304,20 +385,20 @@ fn execute(store: &mut Store, op: &UpdateOp, vars: &VarTable, base: &str) -> Res
 #[derive(Clone, Copy, PartialEq, Debug)]
 /// The wire format of a tabular SPARQL result.
 pub enum ResultFormat {
-/// SPARQL Results JSON.
+    /// SPARQL Results JSON.
     Json,
-/// SPARQL Results XML.
+    /// SPARQL Results XML.
     Xml,
-/// CSV.
+    /// CSV.
     Csv,
-/// TSV.
+    /// TSV.
     Tsv,
-/// `text/boolean`: just `true` or `false`.
+    /// `text/boolean`: just `true` or `false`.
     Text,
 }
 
 impl ResultFormat {
-/// The format's canonical media type.
+    /// The format's canonical media type.
     pub fn media_type(self) -> &'static str {
         match self {
             ResultFormat::Json => "application/sparql-results+json",
@@ -332,12 +413,24 @@ impl ResultFormat {
 /// Pick a tabular result format from an Accept header (first acceptable wins).
 pub fn negotiate_results(accept: &str) -> ResultFormat {
     for part in accept.split(',') {
-        let mt = part.split(';').next().unwrap_or("").trim().to_ascii_lowercase();
+        let mt = part
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
         let f = match mt.as_str() {
-            "application/sparql-results+json" | "application/json" | "application/x-sparqlstar-results+json" => ResultFormat::Json,
-            "application/sparql-results+xml" | "application/xml" | "text/xml" | "application/x-sparqlstar-results+xml" => ResultFormat::Xml,
+            "application/sparql-results+json"
+            | "application/json"
+            | "application/x-sparqlstar-results+json" => ResultFormat::Json,
+            "application/sparql-results+xml"
+            | "application/xml"
+            | "text/xml"
+            | "application/x-sparqlstar-results+xml" => ResultFormat::Xml,
             "text/csv" => ResultFormat::Csv,
-            "text/tab-separated-values" | "application/x-sparqlstar-results+tsv" => ResultFormat::Tsv,
+            "text/tab-separated-values" | "application/x-sparqlstar-results+tsv" => {
+                ResultFormat::Tsv
+            }
             "text/boolean" => ResultFormat::Text,
             _ => continue,
         };
@@ -407,7 +500,10 @@ fn write_term_json(out: &mut String, t: &Term) {
 }
 
 fn xml_esc(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn xml_term(out: &mut String, t: &Term) {
@@ -417,7 +513,11 @@ fn xml_term(out: &mut String, t: &Term) {
         Term::Literal(l) => {
             if let Some(lang) = &l.lang {
                 match lang.split_once("--") {
-                    Some((lang, dir)) => out.push_str(&format!("<literal xml:lang=\"{}\" its:dir=\"{}\">", xml_esc(lang), xml_esc(dir))),
+                    Some((lang, dir)) => out.push_str(&format!(
+                        "<literal xml:lang=\"{}\" its:dir=\"{}\">",
+                        xml_esc(lang),
+                        xml_esc(dir)
+                    )),
                     None => out.push_str(&format!("<literal xml:lang=\"{}\">", xml_esc(lang))),
                 }
             } else if l.datatype != XSD_STRING {
@@ -449,7 +549,9 @@ fn csv_field(s: &str) -> String {
 }
 
 /// Parse a SPARQL JSON results document: (variables, rows) for SELECT, or a boolean for ASK.
-pub fn parse_results_json(text: &str) -> Result<Result<(Vec<String>, Vec<Vec<Option<Term>>>), bool>, String> {
+pub fn parse_results_json(
+    text: &str,
+) -> Result<Result<(Vec<String>, Vec<Vec<Option<Term>>>), bool>, String> {
     let doc = Json::parse(text).map_err(|e| format!("bad SPARQL JSON results: {e}"))?;
     if let Some(Json::Bool(b)) = doc.get("boolean") {
         return Ok(Err(*b));
@@ -458,15 +560,26 @@ pub fn parse_results_json(text: &str) -> Result<Result<(Vec<String>, Vec<Vec<Opt
         .get("head")
         .and_then(|h| h.get("vars"))
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
-    let bindings = doc.get("results").and_then(|r| r.get("bindings")).and_then(|b| b.as_array()).ok_or("SPARQL JSON results without results.bindings")?;
+    let bindings = doc
+        .get("results")
+        .and_then(|r| r.get("bindings"))
+        .and_then(|b| b.as_array())
+        .ok_or("SPARQL JSON results without results.bindings")?;
     fn term(v: &Json) -> Result<Term, String> {
         let value = v.str_at(&["value"]).to_string();
         Ok(match v.str_at(&["type"]) {
             "uri" => Term::iri(value),
             "bnode" => Term::Blank(value),
-            "literal" | "typed-literal" => match (v.get("xml:lang").and_then(Json::as_str), v.get("datatype").and_then(Json::as_str)) {
+            "literal" | "typed-literal" => match (
+                v.get("xml:lang").and_then(Json::as_str),
+                v.get("datatype").and_then(Json::as_str),
+            ) {
                 (Some(l), _) => match v.get("its:dir").and_then(Json::as_str) {
                     Some(d) => Term::dir_lang(value, l, d),
                     None => Term::lang(value, l),
@@ -476,7 +589,11 @@ pub fn parse_results_json(text: &str) -> Result<Result<(Vec<String>, Vec<Vec<Opt
             },
             "triple" => {
                 let t = v.get("value").ok_or("triple without value")?;
-                let part = |k: &str| t.get(k).ok_or_else(|| format!("triple without {k}")).and_then(term);
+                let part = |k: &str| {
+                    t.get(k)
+                        .ok_or_else(|| format!("triple without {k}"))
+                        .and_then(term)
+                };
                 Term::triple(part("subject")?, part("predicate")?, part("object")?)
             }
             other => return Err(format!("unknown RDF term type {other:?} in SPARQL results")),
@@ -528,7 +645,9 @@ pub fn write_solutions(vars: &[String], rows: &[Vec<Option<Term>>], f: ResultFor
             out.into_bytes()
         }
         ResultFormat::Xml => {
-            let mut out = String::from("<?xml version=\"1.0\"?>\n<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"http://www.w3.org/2005/11/its\">\n<head>");
+            let mut out = String::from(
+                "<?xml version=\"1.0\"?>\n<sparql xmlns=\"http://www.w3.org/2005/sparql-results#\" xmlns:its=\"http://www.w3.org/2005/11/its\">\n<head>",
+            );
             for v in vars {
                 out.push_str(&format!("<variable name=\"{}\"/>", xml_esc(v)));
             }
@@ -565,10 +684,17 @@ pub fn write_solutions(vars: &[String], rows: &[Vec<Option<Term>>], f: ResultFor
             out.into_bytes()
         }
         ResultFormat::Tsv => {
-            let mut out = vars.iter().map(|v| format!("?{v}")).collect::<Vec<_>>().join("\t");
+            let mut out = vars
+                .iter()
+                .map(|v| format!("?{v}"))
+                .collect::<Vec<_>>()
+                .join("\t");
             out.push('\n');
             for row in rows {
-                let cells: Vec<String> = row.iter().map(|t| t.as_ref().map_or(String::new(), tsv_cell)).collect();
+                let cells: Vec<String> = row
+                    .iter()
+                    .map(|t| t.as_ref().map_or(String::new(), tsv_cell))
+                    .collect();
                 out.push_str(&cells.join("\t"));
                 out.push('\n');
             }
@@ -585,15 +711,23 @@ fn tsv_cell(t: &Term) -> String {
         let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
         let bare = match l.datatype.as_str() {
             "http://www.w3.org/2001/XMLSchema#integer" => digits(body),
-            "http://www.w3.org/2001/XMLSchema#decimal" => body.split_once('.').is_some_and(|(i, f)| (i.is_empty() || digits(i)) && digits(f)),
-            "http://www.w3.org/2001/XMLSchema#double" => body.split_once(['e', 'E']).is_some_and(|(m, e)| {
-                let e = e.strip_prefix(['+', '-']).unwrap_or(e);
-                let m_ok = match m.split_once('.') {
-                    Some((i, f)) => (digits(i) || i.is_empty()) && (digits(f) || f.is_empty()) && !(i.is_empty() && f.is_empty()),
-                    None => digits(m),
-                };
-                m_ok && digits(e)
-            }),
+            "http://www.w3.org/2001/XMLSchema#decimal" => body
+                .split_once('.')
+                .is_some_and(|(i, f)| (i.is_empty() || digits(i)) && digits(f)),
+            "http://www.w3.org/2001/XMLSchema#double" => {
+                body.split_once(['e', 'E']).is_some_and(|(m, e)| {
+                    let e = e.strip_prefix(['+', '-']).unwrap_or(e);
+                    let m_ok = match m.split_once('.') {
+                        Some((i, f)) => {
+                            (digits(i) || i.is_empty())
+                                && (digits(f) || f.is_empty())
+                                && !(i.is_empty() && f.is_empty())
+                        }
+                        None => digits(m),
+                    };
+                    m_ok && digits(e)
+                })
+            }
             _ => false,
         };
         if bare {
@@ -616,7 +750,11 @@ pub fn write_boolean(b: bool, f: ResultFormat) -> Vec<u8> {
 }
 
 /// A graph result (CONSTRUCT/DESCRIBE) in one of the RDF formats.
-pub fn write_graph(quads: &[Quad], f: Format, prefixes: &[(String, String)]) -> Result<Vec<u8>, String> {
+pub fn write_graph(
+    quads: &[Quad],
+    f: Format,
+    prefixes: &[(String, String)],
+) -> Result<Vec<u8>, String> {
     rdf::write::serialize(quads, f, prefixes).map(String::into_bytes)
 }
 
@@ -626,7 +764,20 @@ mod tests {
 
     fn run(store: &Store, q: &str) -> Vec<Vec<Option<Term>>> {
         let pf = HashMap::new();
-        match query(store, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }).unwrap() {
+        match query(
+            store,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        )
+        .unwrap()
+        {
             QueryResult::Solutions { rows, .. } => rows,
             _ => panic!("not a select"),
         }
@@ -635,10 +786,13 @@ mod tests {
     #[test]
     fn service_calls_run_in_parallel_with_cache_and_retries() {
         use std::io::{Read, Write};
-        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
         // endpoints that answer after 300 ms; the third fails once with 503
-        let endpoint = |name: &'static str, var: &'static str, fail_first: bool| -> (String, Arc<AtomicUsize>) {
+        let endpoint = |name: &'static str,
+                        var: &'static str,
+                        fail_first: bool|
+         -> (String, Arc<AtomicUsize>) {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
             let url = format!("http://{}/sparql", listener.local_addr().unwrap());
             let calls = Arc::new(AtomicUsize::new(0));
@@ -651,11 +805,16 @@ mod tests {
                         let mut buf = [0u8; 8192];
                         let _ = s.read(&mut buf);
                         std::thread::sleep(std::time::Duration::from_millis(300));
-                        let body = format!(r#"{{"head":{{"vars":["{var}"]}},"results":{{"bindings":[{{"{var}":{{"type":"uri","value":"http://e/{name}"}}}}]}}}}"#);
+                        let body = format!(
+                            r#"{{"head":{{"vars":["{var}"]}},"results":{{"bindings":[{{"{var}":{{"type":"uri","value":"http://e/{name}"}}}}]}}}}"#
+                        );
                         let resp = if fail_first && n == 0 {
                             "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
                         } else {
-                            format!("HTTP/1.1 200 OK\r\nContent-Type: application/sparql-results+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/sparql-results+json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
                         };
                         let _ = s.write_all(resp.as_bytes());
                     });
@@ -667,7 +826,9 @@ mod tests {
         let (b, _) = endpoint("b", "y", false);
         let (c, cc) = endpoint("c", "z", true);
         let st = Store::memory();
-        let q = format!("SELECT ?x ?y ?z WHERE {{ SERVICE <{a}> {{ ?x ?p1 ?o1 }} SERVICE <{b}> {{ ?y ?p2 ?o2 }} SERVICE <{c}> {{ ?z ?p3 ?o3 }} }}");
+        let q = format!(
+            "SELECT ?x ?y ?z WHERE {{ SERVICE <{a}> {{ ?x ?p1 ?o1 }} SERVICE <{b}> {{ ?y ?p2 ?o2 }} SERVICE <{c}> {{ ?z ?p3 ?o3 }} }}"
+        );
         let ev = eval::SERVICE_RETRIES.load(SeqCst);
         eval::SERVICE_RETRIES.store(1, SeqCst);
         eval::SERVICE_CACHE_SECS.store(60, SeqCst);
@@ -680,7 +841,10 @@ mod tests {
         assert_eq!(cc.load(SeqCst), 2, "the 503 was retried");
         let t0 = std::time::Instant::now();
         assert_eq!(run(&st, &q).len(), 1);
-        assert!(t0.elapsed() < std::time::Duration::from_millis(100), "answers reused");
+        assert!(
+            t0.elapsed() < std::time::Duration::from_millis(100),
+            "answers reused"
+        );
         assert_eq!(ca.load(SeqCst), 1);
         eval::SERVICE_CACHE_SECS.store(0, SeqCst);
         eval::SERVICE_RETRIES.store(ev, SeqCst);
@@ -695,7 +859,8 @@ mod tests {
             ex:parent rdfs:subPropertyOf ex:ancestor .
             ex:rex a ex:Dog . ex:ann ex:hasDog ex:rex . ex:bob ex:friend ex:ann . ex:cy ex:parent ex:dee . ex:dee ex:parent ex:eve . ex:eve ex:ancestor ex:fay .
             ex:kit a ex:Companion .";
-        let quads = crate::rdf::turtle::parse(schema, "", crate::rdf::turtle::Mode::Turtle).unwrap();
+        let quads =
+            crate::rdf::turtle::parse(schema, "", crate::rdf::turtle::Mode::Turtle).unwrap();
         let mut mat = Store::memory();
         mat.set_ruleset("rdfsplus-optimized", false);
         mat.insert(&quads).unwrap();
@@ -703,7 +868,14 @@ mod tests {
         plain.insert(&quads).unwrap();
         let pf = HashMap::new();
         let run_with = |st: &Store, q: &str, at_query: bool| -> Vec<Vec<Option<Term>>> {
-            let opts = QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query };
+            let opts = QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query,
+            };
             match query(st, q, &opts).unwrap() {
                 QueryResult::Solutions { mut rows, .. } => {
                     rows.sort_by_key(|r| format!("{r:?}"));
@@ -728,7 +900,11 @@ mod tests {
             let expected = run_with(&mat, q, false);
             assert!(!expected.is_empty(), "{q}");
             assert_eq!(run_with(&plain, q, true), expected, "{q}");
-            assert_ne!(run_with(&plain, q, false), expected, "{q}: nothing is materialized");
+            assert_ne!(
+                run_with(&plain, q, false),
+                expected,
+                "{q}: nothing is materialized"
+            );
         }
     }
 
@@ -737,17 +913,32 @@ mod tests {
         let mut st = Store::memory();
         let mut data = String::from("INSERT DATA {");
         for i in 0..2000 {
-            data.push_str(&format!(" <http://e/p{i}> <http://e/age> {} . <http://e/p{i}> <http://e/n> \"{}\" .", i % 50, i));
+            data.push_str(&format!(
+                " <http://e/p{i}> <http://e/age> {} . <http://e/p{i}> <http://e/n> \"{}\" .",
+                i % 50,
+                i
+            ));
         }
         data.push_str(" }");
         update(&mut st, &data, "", &HashMap::new()).unwrap();
         let count = |q: &str| run(&st, q)[0][0].as_ref().unwrap().value().to_string();
-        assert_eq!(count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(?a >= 40) }"), "400");
-        assert_eq!(count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(?a = 7 || STR(?a) = \"8\") }"), "80");
+        assert_eq!(
+            count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(?a >= 40) }"),
+            "400"
+        );
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(?a = 7 || STR(?a) = \"8\") }"
+            ),
+            "80"
+        );
         // two variables: evaluated per row
         assert_eq!(count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a ; <http://e/n> ?n FILTER(?a = xsd:integer(?n)) }".replace("xsd:", "<http://www.w3.org/2001/XMLSchema#>").replace("<http://www.w3.org/2001/XMLSchema#>integer", "<http://www.w3.org/2001/XMLSchema#integer>").as_str()), "50");
         // RAND answers differently each time: never memoized, so about half the rows pass
-        let n: usize = count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(RAND() + ?a * 0 < 0.5) }").parse().unwrap();
+        let n: usize =
+            count("SELECT (COUNT(*) AS ?c) { ?p <http://e/age> ?a FILTER(RAND() + ?a * 0 < 0.5) }")
+                .parse()
+                .unwrap();
         assert!(n > 700 && n < 1300, "{n}");
         assert!(eval::single_var(&ast::Expr::Var(3)).is_some());
     }
@@ -786,12 +977,29 @@ mod tests {
         };
         let size = |seen: Vec<bool>| seen.iter().filter(|&&s| s).count().to_string();
         let count = |q: &str| run(&st, q)[0][0].as_ref().unwrap().value().to_string();
-        assert_eq!(count("SELECT (COUNT(*) AS ?c) { <http://e/n3> <http://e/k>+ ?x }"), size(reach(3, false)));
-        assert_eq!(count(&format!("SELECT (COUNT(*) AS ?c) {{ ?x <http://e/k>+ <http://e/n{}> }}", N - 2)), size(reach(N - 2, true)));
+        assert_eq!(
+            count("SELECT (COUNT(*) AS ?c) { <http://e/n3> <http://e/k>+ ?x }"),
+            size(reach(3, false))
+        );
+        assert_eq!(
+            count(&format!(
+                "SELECT (COUNT(*) AS ?c) {{ ?x <http://e/k>+ <http://e/n{}> }}",
+                N - 2
+            )),
+            size(reach(N - 2, true))
+        );
         let mut star = reach(3, false);
         star[3] = true;
-        assert_eq!(count("SELECT (COUNT(*) AS ?c) FROM <http://e/g> { <http://e/n3> <http://e/k>* ?x }"), size(star));
-        assert_eq!(count("SELECT (COUNT(*) AS ?c) FROM <http://e/none> { <http://e/n3> <http://e/k>+ ?x }"), "0");
+        assert_eq!(
+            count("SELECT (COUNT(*) AS ?c) FROM <http://e/g> { <http://e/n3> <http://e/k>* ?x }"),
+            size(star)
+        );
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?c) FROM <http://e/none> { <http://e/n3> <http://e/k>+ ?x }"
+            ),
+            "0"
+        );
     }
 
     #[test]
@@ -804,7 +1012,13 @@ mod tests {
                 data.push_str(&format!("INSERT DATA {{ <http://e/p{i}> <http://e/works> <http://e/c{}> . <http://e/c{}> <http://e/name> \"c{}\" }} ;\n", i % 7, i % 7, i % 7));
             }
         }
-        update(&mut st, data.trim_end().trim_end_matches(';'), "", &HashMap::new()).unwrap();
+        update(
+            &mut st,
+            data.trim_end().trim_end_matches(';'),
+            "",
+            &HashMap::new(),
+        )
+        .unwrap();
         let shapes = [
             "SELECT * { ?p a <http://e/P> OPTIONAL { ?p <http://e/works> ?c . ?c <http://e/name> ?n } }",
             "SELECT * { ?p a <http://e/P> . ?p <http://e/age> ?a }",
@@ -816,8 +1030,15 @@ mod tests {
             let all = run(&st, q);
             for (limit, offset) in [(1, 0), (7, 0), (200, 0), (50, 30), (100_000, 0)] {
                 let part = run(&st, &format!("{q} LIMIT {limit} OFFSET {offset}"));
-                assert_eq!(part.len(), all.len().saturating_sub(offset).min(limit), "{q} LIMIT {limit} OFFSET {offset}");
-                assert!(part.iter().all(|r| all.contains(r)), "{q}: every row is a real solution");
+                assert_eq!(
+                    part.len(),
+                    all.len().saturating_sub(offset).min(limit),
+                    "{q} LIMIT {limit} OFFSET {offset}"
+                );
+                assert!(
+                    part.iter().all(|r| all.contains(r)),
+                    "{q}: every row is a real solution"
+                );
             }
         }
     }
@@ -826,40 +1047,83 @@ mod tests {
     fn sparql_rdf12() {
         let mut st = Store::memory();
         let pf = HashMap::new();
-        update(&mut st, r#"PREFIX ex: <http://ex.org/>
+        update(
+            &mut st,
+            r#"PREFIX ex: <http://ex.org/>
             INSERT DATA {
               << ex:alice ex:knows ex:bob ~ ex:r1 >> ex:since 2019 ; ex:source ex:hr .
               ex:bob ex:knows ex:carol {| ex:since 2021 |} .
-            }"#, "", &pf).unwrap();
+            }"#,
+            "",
+            &pf,
+        )
+        .unwrap();
         // r1 reifies + 2 about r1; asserted triple + reifier + 1 annotation
         assert_eq!(st.len(), 6);
-        let rows = |q: &str| match query(&st, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }).unwrap() {
+        let rows = |q: &str| match query(
+            &st,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        )
+        .unwrap()
+        {
             QueryResult::Solutions { rows, .. } => rows,
             _ => panic!(),
         };
         // reified triple patterns with variables
-        let r = rows("PREFIX ex: <http://ex.org/> SELECT ?a ?b ?y WHERE { << ?a ex:knows ?b >> ex:since ?y } ORDER BY ?y");
+        let r = rows(
+            "PREFIX ex: <http://ex.org/> SELECT ?a ?b ?y WHERE { << ?a ex:knows ?b >> ex:since ?y } ORDER BY ?y",
+        );
         assert_eq!(r.len(), 2);
         assert_eq!(r[0][0], Some(Term::iri("http://ex.org/alice")));
         assert_eq!(r[1][2], Some(Term::integer(2021)));
         // the reifier can be named in a pattern
-        let r = rows("PREFIX ex: <http://ex.org/> SELECT ?r WHERE { << ex:alice ex:knows ex:bob ~ ?r >> ex:source ex:hr }");
+        let r = rows(
+            "PREFIX ex: <http://ex.org/> SELECT ?r WHERE { << ex:alice ex:knows ex:bob ~ ?r >> ex:source ex:hr }",
+        );
         assert_eq!(r, vec![vec![Some(Term::iri("http://ex.org/r1"))]]);
         // annotation syntax in a query; a reified triple is not asserted
         assert_eq!(rows("PREFIX ex: <http://ex.org/> SELECT ?x WHERE { ?x ex:knows ex:carol {| ex:since ?y |} }").len(), 1);
-        assert!(rows("PREFIX ex: <http://ex.org/> SELECT * WHERE { ex:alice ex:knows ex:bob }").is_empty());
+        assert!(
+            rows("PREFIX ex: <http://ex.org/> SELECT * WHERE { ex:alice ex:knows ex:bob }")
+                .is_empty()
+        );
         // triple terms in patterns, expressions and functions
-        let r = rows("PREFIX ex: <http://ex.org/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT ?t ?s (isTRIPLE(?t) AS ?is) WHERE { ex:r1 rdf:reifies ?t BIND(SUBJECT(?t) AS ?s) }");
+        let r = rows(
+            "PREFIX ex: <http://ex.org/> PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> SELECT ?t ?s (isTRIPLE(?t) AS ?is) WHERE { ex:r1 rdf:reifies ?t BIND(SUBJECT(?t) AS ?s) }",
+        );
         assert!(r[0][0].as_ref().unwrap().is_triple());
         assert_eq!(r[0][1], Some(Term::iri("http://ex.org/alice")));
         assert_eq!(r[0][2], Some(Term::boolean(true)));
-        let r = rows("PREFIX ex: <http://ex.org/> SELECT ?t WHERE { VALUES ?o { 1 } BIND(<<( ex:a ex:b ?o )>> AS ?t) }");
-        assert_eq!(r[0][0], Some(Term::triple(Term::iri("http://ex.org/a"), Term::iri("http://ex.org/b"), Term::integer(1))));
-        let json = String::from_utf8(write_solutions(&["t".into()], &r, ResultFormat::Json)).unwrap();
+        let r = rows(
+            "PREFIX ex: <http://ex.org/> SELECT ?t WHERE { VALUES ?o { 1 } BIND(<<( ex:a ex:b ?o )>> AS ?t) }",
+        );
+        assert_eq!(
+            r[0][0],
+            Some(Term::triple(
+                Term::iri("http://ex.org/a"),
+                Term::iri("http://ex.org/b"),
+                Term::integer(1)
+            ))
+        );
+        let json =
+            String::from_utf8(write_solutions(&["t".into()], &r, ResultFormat::Json)).unwrap();
         assert!(json.contains("\"type\":\"triple\""), "{json}");
         // base direction
-        let r = rows(r#"SELECT (LANG(?v) AS ?l) (LANGDIR(?v) AS ?d) WHERE { BIND("x"@ar--rtl AS ?v) }"#);
-        assert_eq!(r[0], vec![Some(Term::string("ar")), Some(Term::string("rtl"))]);
+        let r = rows(
+            r#"SELECT (LANG(?v) AS ?l) (LANGDIR(?v) AS ?d) WHERE { BIND("x"@ar--rtl AS ?v) }"#,
+        );
+        assert_eq!(
+            r[0],
+            vec![Some(Term::string("ar")), Some(Term::string("rtl"))]
+        );
         // CONSTRUCT with a reified template, then round-trip through Turtle 1.2
         match query(&st, "PREFIX ex: <http://ex.org/> CONSTRUCT { << ?a ex:knows ?b >> ex:year ?y } WHERE { << ?a ex:knows ?b >> ex:since ?y }",
             &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }).unwrap() {
@@ -877,15 +1141,37 @@ mod tests {
         let mut st = Store::memory();
         let pf = HashMap::new();
         update(&mut st, "PREFIX ex: <http://ex.org/> INSERT DATA { ex:a ex:p ex:b . GRAPH ex:g1 { ex:a ex:p ex:b } GRAPH ex:g2 { ex:a ex:p ex:b . ex:b ex:p ex:c } }", "", &pf).unwrap();
-        let count = |q: &str| match query(&st, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }).unwrap() {
+        let count = |q: &str| match query(
+            &st,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        )
+        .unwrap()
+        {
             QueryResult::Solutions { rows, .. } => rows.len(),
             _ => panic!(),
         };
         // the same triple in three graphs is one triple of the default graph (their RDF merge)
         assert_eq!(count("SELECT * { ?s ?p ?o }"), 2);
-        assert_eq!(count("PREFIX ex: <http://ex.org/> SELECT * { ex:a ex:p ?o }"), 1);
-        assert_eq!(count("PREFIX ex: <http://ex.org/> SELECT * { ex:a ex:p/ex:p ?o }"), 1);
-        assert_eq!(count("PREFIX ex: <http://ex.org/> SELECT * FROM ex:g1 FROM ex:g2 { ?s ?p ?o }"), 2);
+        assert_eq!(
+            count("PREFIX ex: <http://ex.org/> SELECT * { ex:a ex:p ?o }"),
+            1
+        );
+        assert_eq!(
+            count("PREFIX ex: <http://ex.org/> SELECT * { ex:a ex:p/ex:p ?o }"),
+            1
+        );
+        assert_eq!(
+            count("PREFIX ex: <http://ex.org/> SELECT * FROM ex:g1 FROM ex:g2 { ?s ?p ?o }"),
+            2
+        );
         assert_eq!(count("SELECT * { GRAPH ?g { ?s ?p ?o } }"), 3);
     }
 
@@ -896,9 +1182,28 @@ mod tests {
         update(&mut st, r#"PREFIX ex: <http://ex.org/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
             INSERT DATA { ex:a rdfs:label "Graph databases and linked data" . ex:b rdfs:label "Relational databases" . }"#, "", &pf).unwrap();
         st.set_fts(true); // indexes existing literals
-        update(&mut st, r#"PREFIX ex: <http://ex.org/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-            INSERT DATA { ex:c rdfs:label "A database of graphs, linked to the web of data" . }"#, "", &pf).unwrap();
-        let rows = |st: &Store, q: &str| match query(st, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }).unwrap() {
+        update(
+            &mut st,
+            r#"PREFIX ex: <http://ex.org/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            INSERT DATA { ex:c rdfs:label "A database of graphs, linked to the web of data" . }"#,
+            "",
+            &pf,
+        )
+        .unwrap();
+        let rows = |st: &Store, q: &str| match query(
+            st,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        )
+        .unwrap()
+        {
             QueryResult::Solutions { rows, .. } => rows,
             _ => panic!(),
         };
@@ -906,20 +1211,46 @@ mod tests {
             SELECT ?s ?score WHERE { ?l g:fts "database* linked" . ?s ?p ?l BIND(g:ftsScore(?l, "database* linked") AS ?score) } ORDER BY DESC(?score)"#;
         let r = rows(&st, q);
         assert_eq!(r.len(), 2, "{r:?}");
-        assert!(r.iter().all(|row| row[0] != Some(Term::iri("http://ex.org/b"))));
+        assert!(
+            r.iter()
+                .all(|row| row[0] != Some(Term::iri("http://ex.org/b")))
+        );
         assert_eq!(rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "\"relational databases\"" }"#).len(), 1);
         // "databases" also finds "database" (stemming)
         assert_eq!(rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "databases -relational" }"#).len(), 2);
         // a misspelled query finds what the right spelling would (typo-tolerant fallback)
-        assert_eq!(rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "relatonal databses" }"#).len(), 1);
+        assert_eq!(
+            rows(
+                &st,
+                r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "relatonal databses" }"#
+            )
+            .len(),
+            1
+        );
         assert_eq!(rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "relatonal~ databases" }"#).len(), 1);
-        let hl = rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> PREFIX ex: <http://ex.org/>
-            SELECT (g:ftsHighlight(?l, "relatonal", "[", "]") AS ?h) { ex:b ?p ?l }"#);
+        let hl = rows(
+            &st,
+            r#"PREFIX g: <http://graphrd.org/fn#> PREFIX ex: <http://ex.org/>
+            SELECT (g:ftsHighlight(?l, "relatonal", "[", "]") AS ?h) { ex:b ?p ?l }"#,
+        );
         assert_eq!(hl[0][0], Some(Term::string("[Relational] databases")));
         update(&mut st, r#"PREFIX ex: <http://ex.org/> INSERT DATA { ex:t <http://ex.org/title> "Kitaplarımızdan biri"@tr }"#, "", &pf).unwrap();
-        assert_eq!(rows(&st, r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "kitap" }"#).len(), 1);
+        assert_eq!(
+            rows(
+                &st,
+                r#"PREFIX g: <http://graphrd.org/fn#> SELECT ?l { ?l g:fts "kitap" }"#
+            )
+            .len(),
+            1
+        );
         // deleted statements disappear from results
-        update(&mut st, r#"PREFIX ex: <http://ex.org/> DELETE WHERE { ex:c ?p ?o }"#, "", &pf).unwrap();
+        update(
+            &mut st,
+            r#"PREFIX ex: <http://ex.org/> DELETE WHERE { ex:c ?p ?o }"#,
+            "",
+            &pf,
+        )
+        .unwrap();
         assert_eq!(rows(&st, q).len(), 1);
     }
 
@@ -932,15 +1263,18 @@ mod tests {
         let seen: Arc<Mutex<Vec<String>>> = Arc::default();
         let (serve_addr, log) = (addr.clone(), seen.clone());
         std::thread::spawn(move || {
-            let _ = crate::http::serve(&serve_addr, Arc::new(move |req: &crate::http::Request| {
-                let q = req.param("query").unwrap_or("").to_string();
-                log.lock().unwrap().push(q);
-                let body = r#"{"head":{"vars":["p","name","extra"]},"results":{"bindings":[
+            let _ = crate::http::serve(
+                &serve_addr,
+                Arc::new(move |req: &crate::http::Request| {
+                    let q = req.param("query").unwrap_or("").to_string();
+                    log.lock().unwrap().push(q);
+                    let body = r#"{"head":{"vars":["p","name","extra"]},"results":{"bindings":[
                     {"p":{"type":"uri","value":"http://ex.org/b"},"name":{"type":"literal","value":"Bob"}},
                     {"p":{"type":"uri","value":"http://ex.org/c"},"name":{"type":"literal","value":"Cleo","xml:lang":"en"}},
                     {"p":{"type":"uri","value":"http://ex.org/z"},"name":{"type":"literal","value":"9","datatype":"http://www.w3.org/2001/XMLSchema#integer"}}]}}"#;
-                crate::http::Response::new(200, "application/sparql-results+json", body)
-            }));
+                    crate::http::Response::new(200, "application/sparql-results+json", body)
+                }),
+            );
         });
         for _ in 0..100 {
             if std::net::TcpStream::connect(&addr).is_ok() {
@@ -950,22 +1284,62 @@ mod tests {
         }
         let mut st = Store::memory();
         let pf = HashMap::new();
-        update(&mut st, "PREFIX ex: <http://ex.org/> INSERT DATA { ex:a ex:knows ex:b , ex:c , ex:d }", "", &pf).unwrap();
-        let rows = |q: &str| match query(&st, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }) {
+        update(
+            &mut st,
+            "PREFIX ex: <http://ex.org/> INSERT DATA { ex:a ex:knows ex:b , ex:c , ex:d }",
+            "",
+            &pf,
+        )
+        .unwrap();
+        let rows = |q: &str| match query(
+            &st,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        ) {
             Ok(QueryResult::Solutions { rows, .. }) => Ok(rows),
             Ok(_) => panic!(),
             Err(e) => Err(e),
         };
-        let q = format!("PREFIX ex: <http://ex.org/> PREFIX unused: <http://u/> SELECT ?p ?name WHERE {{ ex:a ex:knows ?p SERVICE <http://{addr}/sparql> {{ ?p ex:name ?name }} }} ORDER BY ?p");
+        let q = format!(
+            "PREFIX ex: <http://ex.org/> PREFIX unused: <http://u/> SELECT ?p ?name WHERE {{ ex:a ex:knows ?p SERVICE <http://{addr}/sparql> {{ ?p ex:name ?name }} }} ORDER BY ?p"
+        );
         let r = rows(&q).unwrap();
-        assert_eq!(r.len(), 2, "joined on ?p: b and c, not d (no remote row) or z (no local row)");
+        assert_eq!(
+            r.len(),
+            2,
+            "joined on ?p: b and c, not d (no remote row) or z (no local row)"
+        );
         assert_eq!(r[1][1], Some(Term::lang("Cleo", "en")));
         let sent = seen.lock().unwrap().clone();
         assert_eq!(sent.len(), 1, "one call for all three local solutions");
-        assert!(sent[0].contains("PREFIX ex: <http://ex.org/>") && !sent[0].contains("unused:"), "{}", sent[0]);
-        assert!(sent[0].ends_with("SELECT * WHERE { ?p ex:name ?name }"), "{}", sent[0]);
-        assert!(rows("SELECT * WHERE { SERVICE <http://127.0.0.1:9/x> { ?s ?p ?o } }").unwrap_err().contains("SERVICE <http://127.0.0.1:9/x>"));
-        assert_eq!(rows("SELECT * WHERE { SERVICE SILENT <http://127.0.0.1:9/x> { ?s ?p ?o } }").unwrap().len(), 1);
+        assert!(
+            sent[0].contains("PREFIX ex: <http://ex.org/>") && !sent[0].contains("unused:"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            sent[0].ends_with("SELECT * WHERE { ?p ex:name ?name }"),
+            "{}",
+            sent[0]
+        );
+        assert!(
+            rows("SELECT * WHERE { SERVICE <http://127.0.0.1:9/x> { ?s ?p ?o } }")
+                .unwrap_err()
+                .contains("SERVICE <http://127.0.0.1:9/x>")
+        );
+        assert_eq!(
+            rows("SELECT * WHERE { SERVICE SILENT <http://127.0.0.1:9/x> { ?s ?p ?o } }")
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -978,19 +1352,50 @@ mod tests {
             ex:road geo:asWKT \"LINESTRING(-1 2, 5 2)\"^^geo:wktLiteral .
             ex:lake geo:asGeoJSON \"{\\\"type\\\":\\\"Polygon\\\",\\\"coordinates\\\":[[[10,10],[11,10],[11,11],[10,11],[10,10]]]}\"^^geo:geoJSONLiteral }";
         update(&mut st, ttl, "", &pf).unwrap();
-        let rows = |q: &str| match query(&st, &format!("PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> PREFIX geof: <http://www.opengis.net/def/function/geosparql/> PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/> {q}"), &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }) {
+        let rows = |q: &str| match query(
+            &st,
+            &format!(
+                "PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> PREFIX geof: <http://www.opengis.net/def/function/geosparql/> PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/> {q}"
+            ),
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            },
+        ) {
             Ok(QueryResult::Solutions { rows, .. }) => rows,
             other => panic!("{:?}", other.err()),
         };
-        let r = rows("SELECT ?x WHERE { ex:park geo:asWKT ?p . ?x geo:asWKT ?g FILTER(?x != ex:park && geof:sfIntersects(?p, ?g)) } ORDER BY ?x");
-        assert_eq!(r.iter().map(|r| r[0].clone().unwrap()).collect::<Vec<_>>(), vec![Term::iri("http://ex.org/kiosk"), Term::iri("http://ex.org/road")]);
-        let r = rows("SELECT (geof:sfWithin(?k, ?p) AS ?w) (geof:sfCrosses(?r, ?p) AS ?c) (geof:relate(?k, ?p, \"0FFFFF212\") AS ?m) (geof:envelope(?r) AS ?e) (geof:dimension(?p) AS ?d) WHERE { ex:park geo:asWKT ?p . ex:kiosk geo:asWKT ?k . ex:road geo:asWKT ?r }");
+        let r = rows(
+            "SELECT ?x WHERE { ex:park geo:asWKT ?p . ?x geo:asWKT ?g FILTER(?x != ex:park && geof:sfIntersects(?p, ?g)) } ORDER BY ?x",
+        );
+        assert_eq!(
+            r.iter().map(|r| r[0].clone().unwrap()).collect::<Vec<_>>(),
+            vec![
+                Term::iri("http://ex.org/kiosk"),
+                Term::iri("http://ex.org/road")
+            ]
+        );
+        let r = rows(
+            "SELECT (geof:sfWithin(?k, ?p) AS ?w) (geof:sfCrosses(?r, ?p) AS ?c) (geof:relate(?k, ?p, \"0FFFFF212\") AS ?m) (geof:envelope(?r) AS ?e) (geof:dimension(?p) AS ?d) WHERE { ex:park geo:asWKT ?p . ex:kiosk geo:asWKT ?k . ex:road geo:asWKT ?r }",
+        );
         assert_eq!(r[0][0], Some(Term::boolean(true)));
         assert_eq!(r[0][1], Some(Term::boolean(true)));
         assert_eq!(r[0][2], Some(Term::boolean(true)));
-        assert_eq!(r[0][3], Some(Term::typed("LINESTRING(-1 2, 5 2)", crate::geo::WKT_LITERAL)));
+        assert_eq!(
+            r[0][3],
+            Some(Term::typed(
+                "LINESTRING(-1 2, 5 2)",
+                crate::geo::WKT_LITERAL
+            ))
+        );
         assert_eq!(r[0][4], Some(Term::integer(2)));
-        let r = rows("SELECT (geof:distance(?p, ?l, uom:metre) AS ?d) (geof:sfDisjoint(?p, ?l) AS ?j) WHERE { ex:park geo:asWKT ?p . ex:lake geo:asGeoJSON ?l }");
+        let r = rows(
+            "SELECT (geof:distance(?p, ?l, uom:metre) AS ?d) (geof:sfDisjoint(?p, ?l) AS ?j) WHERE { ex:park geo:asWKT ?p . ex:lake geo:asGeoJSON ?l }",
+        );
         let d: f64 = r[0][0].as_ref().unwrap().value().parse().unwrap();
         assert!((d / 1000.0 - 943.0).abs() < 10.0, "{d}");
         assert_eq!(r[0][1], Some(Term::boolean(true)));
@@ -1002,27 +1407,56 @@ mod tests {
     fn spatial_index_matches_scan() {
         let mut st = Store::memory();
         let pf = HashMap::new();
-        let mut data = String::from("PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> INSERT DATA {\n");
+        let mut data = String::from(
+            "PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> INSERT DATA {\n",
+        );
         let mut seed = 7u64;
         let mut rnd = move || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 11) as f64 / (1u64 << 53) as f64
         };
         for i in 0..600 {
             let (x, y) = (28.0 + rnd() * 2.0, 40.0 + rnd() * 2.0);
             let wkt = match i % 4 {
                 0 | 1 => format!("POINT({x} {y})"),
-                2 => format!("POLYGON(({x} {y}, {} {y}, {} {}, {x} {}, {x} {y}))", x + 0.05, x + 0.05, y + 0.05, y + 0.05),
+                2 => format!(
+                    "POLYGON(({x} {y}, {} {y}, {} {}, {x} {}, {x} {y}))",
+                    x + 0.05,
+                    x + 0.05,
+                    y + 0.05,
+                    y + 0.05
+                ),
                 // the same kind of point, written in UTM zone 35N
-                _ => format!("<http://www.opengis.net/def/crs/EPSG/0/32635> POINT({} {})", 500000.0 + (x - 27.0) * 84000.0, 4430000.0 + (y - 40.0) * 111000.0),
+                _ => format!(
+                    "<http://www.opengis.net/def/crs/EPSG/0/32635> POINT({} {})",
+                    500000.0 + (x - 27.0) * 84000.0,
+                    4430000.0 + (y - 40.0) * 111000.0
+                ),
             };
-            data.push_str(&format!("ex:f{i} geo:hasGeometry ex:g{i} . ex:g{i} geo:asWKT \"{wkt}\"^^geo:wktLiteral .\n"));
+            data.push_str(&format!(
+                "ex:f{i} geo:hasGeometry ex:g{i} . ex:g{i} geo:asWKT \"{wkt}\"^^geo:wktLiteral .\n"
+            ));
         }
         data.push_str("ex:area geo:asWKT \"POLYGON((28.5 40.5, 29.2 40.5, 29.2 41.1, 28.5 41.1, 28.5 40.5))\"^^geo:wktLiteral }");
         update(&mut st, &data, "", &pf).unwrap();
         let rows = |q: &str| -> Vec<String> {
-            let text = format!("PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> PREFIX geof: <http://www.opengis.net/def/function/geosparql/> PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/> {q}");
-            match query(&st, &text, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false }) {
+            let text = format!(
+                "PREFIX ex: <http://ex.org/> PREFIX geo: <http://www.opengis.net/ont/geosparql#> PREFIX geof: <http://www.opengis.net/def/function/geosparql/> PREFIX uom: <http://www.opengis.net/def/uom/OGC/1.0/> {q}"
+            );
+            match query(
+                &st,
+                &text,
+                &QueryOptions {
+                    base: "",
+                    prefixes: &pf,
+                    dataset: None,
+                    timeout_secs: None,
+                    infer: true,
+                    at_query: false,
+                },
+            ) {
                 Ok(QueryResult::Solutions { rows, .. }) => {
                     let mut v: Vec<String> = rows.iter().map(|r| format!("{:?}", r)).collect();
                     v.sort();
@@ -1031,28 +1465,51 @@ mod tests {
                 other => panic!("{:?}", other.err()),
             }
         };
-        let area = "\"POLYGON((28.5 40.5, 29.2 40.5, 29.2 41.1, 28.5 41.1, 28.5 40.5))\"^^geo:wktLiteral";
+        let area =
+            "\"POLYGON((28.5 40.5, 29.2 40.5, 29.2 41.1, 28.5 41.1, 28.5 40.5))\"^^geo:wktLiteral";
         for (filter, at_least) in [
             (format!("geof:sfWithin(?w, {area})"), 40),
             (format!("geof:sfIntersects({area}, ?w)"), 40),
             (format!("geof:ehOverlap(?w, {area})"), 1),
-            ("geof:distance(?w, \"POINT(29 41)\"^^geo:wktLiteral, uom:kilometre) < 25".to_string(), 10),
-            ("30000 >= geof:distance(\"POINT(29 41)\"^^geo:wktLiteral, ?w)".to_string(), 10),
-            ("geof:sfContains(?w, \"POINT(29 41)\"^^geo:wktLiteral)".to_string(), 0),
+            (
+                "geof:distance(?w, \"POINT(29 41)\"^^geo:wktLiteral, uom:kilometre) < 25"
+                    .to_string(),
+                10,
+            ),
+            (
+                "30000 >= geof:distance(\"POINT(29 41)\"^^geo:wktLiteral, ?w)".to_string(),
+                10,
+            ),
+            (
+                "geof:sfContains(?w, \"POINT(29 41)\"^^geo:wktLiteral)".to_string(),
+                0,
+            ),
         ] {
-            let fast = rows(&format!("SELECT ?f WHERE {{ ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER({filter}) }}"));
-            let slow = rows(&format!("SELECT ?f WHERE {{ ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(({filter}) || false) }}"));
+            let fast = rows(&format!(
+                "SELECT ?f WHERE {{ ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER({filter}) }}"
+            ));
+            let slow = rows(&format!(
+                "SELECT ?f WHERE {{ ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(({filter}) || false) }}"
+            ));
             assert_eq!(fast, slow, "{filter}");
             assert!(fast.len() >= at_least, "{filter}: {}", fast.len());
         }
         // through a property path
-        let fast = rows(&format!("SELECT ?f WHERE {{ ?f geo:hasGeometry/geo:asWKT ?w FILTER(geof:sfWithin(?w, {area})) }}"));
-        let slow = rows(&format!("SELECT ?f WHERE {{ ?f geo:hasGeometry/geo:asWKT ?w FILTER(geof:sfWithin(?w, {area}) || false) }}"));
+        let fast = rows(&format!(
+            "SELECT ?f WHERE {{ ?f geo:hasGeometry/geo:asWKT ?w FILTER(geof:sfWithin(?w, {area})) }}"
+        ));
+        let slow = rows(&format!(
+            "SELECT ?f WHERE {{ ?f geo:hasGeometry/geo:asWKT ?w FILTER(geof:sfWithin(?w, {area}) || false) }}"
+        ));
         assert_eq!(fast, slow);
         assert!(fast.len() >= 40);
         // the region bound by another pattern of the same BGP
-        let fast = rows("SELECT ?f WHERE { ex:area geo:asWKT ?a . ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, ?a)) }");
-        let slow = rows("SELECT ?f WHERE { ex:area geo:asWKT ?a . ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, ?a) || false) }");
+        let fast = rows(
+            "SELECT ?f WHERE { ex:area geo:asWKT ?a . ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, ?a)) }",
+        );
+        let slow = rows(
+            "SELECT ?f WHERE { ex:area geo:asWKT ?a . ?f geo:hasGeometry ?g . ?g geo:asWKT ?w FILTER(geof:sfWithin(?w, ?a) || false) }",
+        );
         assert_eq!(fast, slow);
         assert!(fast.len() >= 40);
         // and the index is kept across a restart, and built for a store from before it
@@ -1067,7 +1524,12 @@ mod tests {
         let n = count(&Store::open(&dir).unwrap());
         assert!(n >= 40);
         let manifest = dir.join("MANIFEST");
-        let old: String = std::fs::read_to_string(&manifest).unwrap().lines().filter(|l| !l.starts_with("geo") && !l.starts_with("index geo")).map(|l| format!("{l}\n")).collect();
+        let old: String = std::fs::read_to_string(&manifest)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with("geo") && !l.starts_with("index geo"))
+            .map(|l| format!("{l}\n"))
+            .collect();
         std::fs::write(&manifest, old).unwrap();
         assert_eq!(count(&Store::open(&dir).unwrap()), n);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1081,11 +1543,20 @@ mod tests {
         let addr = format!("127.0.0.1:{port}");
         let serve_addr = addr.clone();
         std::thread::spawn(move || {
-            let _ = crate::http::serve(&serve_addr, std::sync::Arc::new(|req: &crate::http::Request| match req.path.as_str() {
-                "/old.ttl" => crate::http::Response::empty(301).with_header("Location", "/data.ttl"),
-                "/data.ttl" => crate::http::Response::new(200, "text/turtle", "@prefix ex: <http://ex.org/> . ex:a ex:b ex:c , [ ex:d 1 ] ."),
-                _ => crate::http::Response::text(404, "no"),
-            }));
+            let _ = crate::http::serve(
+                &serve_addr,
+                std::sync::Arc::new(|req: &crate::http::Request| match req.path.as_str() {
+                    "/old.ttl" => {
+                        crate::http::Response::empty(301).with_header("Location", "/data.ttl")
+                    }
+                    "/data.ttl" => crate::http::Response::new(
+                        200,
+                        "text/turtle",
+                        "@prefix ex: <http://ex.org/> . ex:a ex:b ex:c , [ ex:d 1 ] .",
+                    ),
+                    _ => crate::http::Response::text(404, "no"),
+                }),
+            );
         });
         for _ in 0..100 {
             if std::net::TcpStream::connect(&addr).is_ok() {
@@ -1095,12 +1566,33 @@ mod tests {
         }
         let mut st = Store::memory();
         let pf = HashMap::new();
-        update(&mut st, &format!("LOAD <http://{addr}/old.ttl> INTO GRAPH <http://g>"), "", &pf).unwrap();
+        update(
+            &mut st,
+            &format!("LOAD <http://{addr}/old.ttl> INTO GRAPH <http://g>"),
+            "",
+            &pf,
+        )
+        .unwrap();
         assert_eq!(st.len(), 3);
         let g = st.dict.lookup(&Term::iri("http://g"));
         assert_eq!(st.count_graph(g), 3);
-        assert!(update(&mut st, &format!("LOAD <http://{addr}/missing.ttl>"), "", &pf).unwrap_err().contains("404"));
-        update(&mut st, &format!("LOAD SILENT <http://{addr}/missing.ttl>"), "", &pf).unwrap();
+        assert!(
+            update(
+                &mut st,
+                &format!("LOAD <http://{addr}/missing.ttl>"),
+                "",
+                &pf
+            )
+            .unwrap_err()
+            .contains("404")
+        );
+        update(
+            &mut st,
+            &format!("LOAD SILENT <http://{addr}/missing.ttl>"),
+            "",
+            &pf,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -1110,17 +1602,50 @@ mod tests {
         let pf = HashMap::new();
         update(&mut st, "PREFIX ex: <http://ex.org/> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> \
             INSERT DATA { ex:Dog rdfs:subClassOf ex:Animal . ex:rex a ex:Dog . ex:owns rdfs:range ex:Pet . ex:ann ex:owns ex:rex }", "", &pf).unwrap();
-        let count = |st: &Store, q: &str, infer: bool| match query(st, q, &QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer, at_query: false }).unwrap() {
+        let count = |st: &Store, q: &str, infer: bool| match query(
+            st,
+            q,
+            &QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer,
+                at_query: false,
+            },
+        )
+        .unwrap()
+        {
             QueryResult::Solutions { rows, .. } => rows.len(),
             _ => panic!(),
         };
         let q = "PREFIX ex: <http://ex.org/> SELECT ?t WHERE { ex:rex a ?t }";
         assert_eq!(count(&st, q, true), 3); // Dog, Animal, Pet
         assert_eq!(count(&st, q, false), 1);
-        assert_eq!(count(&st, "PREFIX ex: <http://ex.org/> SELECT ?t FROM <http://graphrd.org/graph#explicit> WHERE { ex:rex a ?t }", true), 1);
-        assert_eq!(count(&st, "PREFIX ex: <http://ex.org/> SELECT ?t FROM <http://graphrd.org/graph#implicit> WHERE { ex:rex a ?t }", true), 2);
+        assert_eq!(
+            count(
+                &st,
+                "PREFIX ex: <http://ex.org/> SELECT ?t FROM <http://graphrd.org/graph#explicit> WHERE { ex:rex a ?t }",
+                true
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &st,
+                "PREFIX ex: <http://ex.org/> SELECT ?t FROM <http://graphrd.org/graph#implicit> WHERE { ex:rex a ?t }",
+                true
+            ),
+            2
+        );
         // deleting the explicit fact retracts what was derived from it
-        update(&mut st, "PREFIX ex: <http://ex.org/> DELETE DATA { ex:ann ex:owns ex:rex }", "", &pf).unwrap();
+        update(
+            &mut st,
+            "PREFIX ex: <http://ex.org/> DELETE DATA { ex:ann ex:owns ex:rex }",
+            "",
+            &pf,
+        )
+        .unwrap();
         assert_eq!(count(&st, q, true), 2);
     }
 
@@ -1143,42 +1668,91 @@ mod tests {
         .unwrap();
         assert_eq!(st.len(), 13);
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?n WHERE { ?p ex:name ?n ; ex:age ?a FILTER(?a > 26) } ORDER BY ?n");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?n WHERE { ?p ex:name ?n ; ex:age ?a FILTER(?a > 26) } ORDER BY ?n",
+        );
         assert_eq!(r.len(), 2);
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT (COUNT(*) AS ?c) (AVG(?a) AS ?avg) WHERE { ?p ex:age ?a }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT (COUNT(*) AS ?c) (AVG(?a) AS ?avg) WHERE { ?p ex:age ?a }",
+        );
         assert_eq!(r[0][0], Some(Term::integer(4)));
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?x WHERE { ex:alice ex:knows+ ?x }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?x WHERE { ex:alice ex:knows+ ?x }",
+        );
         assert_eq!(r.len(), 2);
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?p ?n WHERE { ?p a ex:Person OPTIONAL { ?p ex:name ?n } } ORDER BY ?p");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?p ?n WHERE { ?p a ex:Person OPTIONAL { ?p ex:name ?n } } ORDER BY ?p",
+        );
         assert_eq!(r.len(), 4);
         assert_eq!(r.iter().filter(|row| row[1].is_none()).count(), 1);
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?g ?s WHERE { GRAPH ?g { ?s ?p ?o } }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?g ?s WHERE { GRAPH ?g { ?s ?p ?o } }",
+        );
         assert_eq!(r.len(), 2);
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?p (UCASE(STR(?n)) AS ?u) WHERE { ?p ex:name ?n FILTER(REGEX(?n, \"^b\", \"i\")) }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?p (UCASE(STR(?n)) AS ?u) WHERE { ?p ex:name ?n FILTER(REGEX(?n, \"^b\", \"i\")) }",
+        );
         assert_eq!(r[0][1], Some(Term::string("BOB")));
 
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT ?p WHERE { ?p a ex:Person MINUS { ?p ex:knows ?x } }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT ?p WHERE { ?p a ex:Person MINUS { ?p ex:knows ?x } }",
+        );
         assert_eq!(r.len(), 2);
 
         update(&mut st, "PREFIX ex: <http://ex.org/> DELETE { ?p ex:age ?a } INSERT { ?p ex:age ?b } WHERE { ?p ex:age ?a BIND(?a + 1 AS ?b) }", "", &pf).unwrap();
-        let r = run(&st, "PREFIX ex: <http://ex.org/> SELECT (SUM(?a) AS ?s) WHERE { ?p ex:age ?a }");
+        let r = run(
+            &st,
+            "PREFIX ex: <http://ex.org/> SELECT (SUM(?a) AS ?s) WHERE { ?p ex:age ?a }",
+        );
         assert_eq!(r[0][0], Some(Term::integer(134)));
 
         // dave's re-inserted age went to the default graph, so only his type is dropped
-        update(&mut st, "PREFIX ex: <http://ex.org/> DROP GRAPH ex:g", "", &pf).unwrap();
+        update(
+            &mut st,
+            "PREFIX ex: <http://ex.org/> DROP GRAPH ex:g",
+            "",
+            &pf,
+        )
+        .unwrap();
         assert_eq!(st.len(), 12);
 
-        let opts = QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false };
-        match query(&st, "PREFIX ex: <http://ex.org/> CONSTRUCT { ?a ex:friendOf ?b } WHERE { ?b ex:knows ?a }", &opts).unwrap() {
+        let opts = QueryOptions {
+            base: "",
+            prefixes: &pf,
+            dataset: None,
+            timeout_secs: None,
+            infer: true,
+            at_query: false,
+        };
+        match query(
+            &st,
+            "PREFIX ex: <http://ex.org/> CONSTRUCT { ?a ex:friendOf ?b } WHERE { ?b ex:knows ?a }",
+            &opts,
+        )
+        .unwrap()
+        {
             QueryResult::Graph(g) => assert_eq!(g.len(), 2),
             _ => panic!(),
         }
-        match query(&st, "PREFIX ex: <http://ex.org/> ASK { ex:alice ex:knows ex:bob }", &opts).unwrap() {
+        match query(
+            &st,
+            "PREFIX ex: <http://ex.org/> ASK { ex:alice ex:knows ex:bob }",
+            &opts,
+        )
+        .unwrap()
+        {
             QueryResult::Boolean(b) => assert!(b),
             _ => panic!(),
         }

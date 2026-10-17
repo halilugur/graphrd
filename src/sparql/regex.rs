@@ -105,9 +105,16 @@ struct P<'a> {
 }
 
 impl Regex {
-/// Compile a pattern with SPARQL's flags (`i s m x q`).
+    /// Compile a pattern with SPARQL's flags (`i s m x q`).
     pub fn new(pattern: &str, flags: &str) -> Result<Regex, String> {
-        let mut p = P { c: pattern.chars().collect(), i: 0, depth: 0, groups: 0, extended: flags.contains('x'), _s: pattern };
+        let mut p = P {
+            c: pattern.chars().collect(),
+            i: 0,
+            depth: 0,
+            groups: 0,
+            extended: flags.contains('x'),
+            _s: pattern,
+        };
         let node = if flags.contains('q') {
             Node::Concat(pattern.chars().map(Node::Char).collect()) // literal pattern
         } else {
@@ -129,28 +136,61 @@ impl Regex {
         let icase = flags.contains('i');
         let multiline = flags.contains('m');
         // case-insensitive matching would need case folding: no prefilter then
-        let (anchored, runs) = if icase { (false, Vec::new()) } else { literals(&node) };
-        let prefix = if anchored && !multiline { runs.first().cloned() } else { None };
-        Ok(Regex { node, prog, groups: p.groups, icase, dotall: flags.contains('s'), multiline, prefix, required: runs })
+        let (anchored, runs) = if icase {
+            (false, Vec::new())
+        } else {
+            literals(&node)
+        };
+        let prefix = if anchored && !multiline {
+            runs.first().cloned()
+        } else {
+            None
+        };
+        Ok(Regex {
+            node,
+            prog,
+            groups: p.groups,
+            icase,
+            dotall: flags.contains('s'),
+            multiline,
+            prefix,
+            required: runs,
+        })
     }
 
-/// Whether the text matches somewhere.
+    /// Whether the text matches somewhere.
     pub fn is_match(&self, text: &str) -> bool {
-        if self.prefix.as_ref().is_some_and(|p| !text.starts_with(p.as_str())) || self.required.iter().any(|r| !text.contains(r.as_str())) {
+        if self
+            .prefix
+            .as_ref()
+            .is_some_and(|p| !text.starts_with(p.as_str()))
+            || self.required.iter().any(|r| !text.contains(r.as_str()))
+        {
             return false;
         }
         self.find_at(&text.chars().collect::<Vec<_>>(), 0).is_some()
     }
 
     /// Returns (start, end, captures) in char indices.
-    fn find_at(&self, t: &[char], from: usize) -> Option<(usize, usize, Vec<Option<(usize, usize)>>)> {
+    fn find_at(
+        &self,
+        t: &[char],
+        from: usize,
+    ) -> Option<(usize, usize, Vec<Option<(usize, usize)>>)> {
         if let Some(prog) = &self.prog {
             return self.pike(prog, t, from);
         }
         let mut steps = 0usize;
         for start in from..=t.len() {
             let mut caps = vec![None; self.groups + 1];
-            if let Some(end) = self.m(&self.node, t, start, &mut caps, &mut steps, &mut |_, e, _| Some(e)) {
+            if let Some(end) = self.m(
+                &self.node,
+                t,
+                start,
+                &mut caps,
+                &mut steps,
+                &mut |_, e, _| Some(e),
+            ) {
                 return Some((start, end, caps));
             }
             if steps > BACKTRACK_STEPS {
@@ -172,7 +212,17 @@ impl Regex {
     /// Follow empty transitions from `pc` at position `i`, appending the threads that wait
     /// on a character (or match) to `list` in priority order. Iterative: the explicit stack
     /// restores capture slots on the way back, like the recursive formulation.
-    fn add_thread(&self, prog: &[Inst], list: &mut Vec<(usize, Vec<usize>)>, seen: &mut [usize], epoch: usize, pc: usize, caps: &mut Vec<usize>, t: &[char], i: usize) {
+    fn add_thread(
+        &self,
+        prog: &[Inst],
+        list: &mut Vec<(usize, Vec<usize>)>,
+        seen: &mut [usize],
+        epoch: usize,
+        pc: usize,
+        caps: &mut Vec<usize>,
+        t: &[char],
+        i: usize,
+    ) {
         enum Job {
             Visit(usize),
             Restore(usize, usize),
@@ -216,7 +266,12 @@ impl Regex {
         }
     }
 
-    fn pike(&self, prog: &[Inst], t: &[char], from: usize) -> Option<(usize, usize, Vec<Option<(usize, usize)>>)> {
+    fn pike(
+        &self,
+        prog: &[Inst],
+        t: &[char],
+        from: usize,
+    ) -> Option<(usize, usize, Vec<Option<(usize, usize)>>)> {
         const UNSET: usize = usize::MAX;
         let slots = 2 * (self.groups + 1);
         let mut seen = vec![0usize; prog.len()];
@@ -246,7 +301,9 @@ impl Regex {
                         matched = Some(caps.clone());
                         break; // lower-priority threads can no longer win
                     }
-                    inst if self.step_ok(inst, t, i) => self.add_thread(prog, &mut nlist, &mut seen, epoch, *pc + 1, caps, t, i + 1),
+                    inst if self.step_ok(inst, t, i) => {
+                        self.add_thread(prog, &mut nlist, &mut seen, epoch, *pc + 1, caps, t, i + 1)
+                    }
                     _ => {}
                 }
             }
@@ -258,19 +315,30 @@ impl Regex {
             i += 1;
         }
         let caps = matched?;
-        let pair = |g: usize| (caps[2 * g] != UNSET && caps[2 * g + 1] != UNSET).then(|| (caps[2 * g], caps[2 * g + 1]));
+        let pair = |g: usize| {
+            (caps[2 * g] != UNSET && caps[2 * g + 1] != UNSET)
+                .then(|| (caps[2 * g], caps[2 * g + 1]))
+        };
         let (s, e) = pair(0)?;
-        Some((s, e, (0..=self.groups).map(|g| if g == 0 { None } else { pair(g) }).collect()))
+        Some((
+            s,
+            e,
+            (0..=self.groups)
+                .map(|g| if g == 0 { None } else { pair(g) })
+                .collect(),
+        ))
     }
 
-/// REPLACE: every match substituted (with `$1` group references).
+    /// REPLACE: every match substituted (with `$1` group references).
     pub fn replace_all(&self, text: &str, replacement: &str) -> String {
         let t: Vec<char> = text.chars().collect();
         let rep: Vec<char> = replacement.chars().collect();
         let mut out = String::new();
         let mut pos = 0;
         while pos <= t.len() {
-            let Some((s, e, caps)) = self.find_at(&t, pos) else { break };
+            let Some((s, e, caps)) = self.find_at(&t, pos) else {
+                break;
+            };
             out.extend(&t[pos..s]);
             let mut k = 0;
             while k < rep.len() {
@@ -313,7 +381,10 @@ impl Regex {
         let hit = items.iter().any(|it| match it {
             ClassItem::Range(a, b) => {
                 (*a <= c && c <= *b)
-                    || (self.icase && c.to_lowercase().chain(c.to_uppercase()).any(|x| *a <= x && x <= *b))
+                    || (self.icase
+                        && c.to_lowercase()
+                            .chain(c.to_uppercase())
+                            .any(|x| *a <= x && x <= *b))
             }
             ClassItem::Digit(n) => c.is_ascii_digit() != *n,
             ClassItem::Word(n) => (c.is_alphanumeric() || c == '_') != *n,
@@ -337,11 +408,21 @@ impl Regex {
             return None; // pathological backtracking guard
         }
         match n {
-            Node::Char(c) => (i < t.len() && self.eq(t[i], *c)).then(|| k(self, i + 1, caps)).flatten(),
-            Node::Any => (i < t.len() && (self.dotall || t[i] != '\n')).then(|| k(self, i + 1, caps)).flatten(),
-            Node::Class(items, neg) => (i < t.len() && self.class_match(items, *neg, t[i])).then(|| k(self, i + 1, caps)).flatten(),
-            Node::Start => (i == 0 || (self.multiline && t[i - 1] == '\n')).then(|| k(self, i, caps)).flatten(),
-            Node::End => (i == t.len() || (self.multiline && t[i] == '\n')).then(|| k(self, i, caps)).flatten(),
+            Node::Char(c) => (i < t.len() && self.eq(t[i], *c))
+                .then(|| k(self, i + 1, caps))
+                .flatten(),
+            Node::Any => (i < t.len() && (self.dotall || t[i] != '\n'))
+                .then(|| k(self, i + 1, caps))
+                .flatten(),
+            Node::Class(items, neg) => (i < t.len() && self.class_match(items, *neg, t[i]))
+                .then(|| k(self, i + 1, caps))
+                .flatten(),
+            Node::Start => (i == 0 || (self.multiline && t[i - 1] == '\n'))
+                .then(|| k(self, i, caps))
+                .flatten(),
+            Node::End => (i == t.len() || (self.multiline && t[i] == '\n'))
+                .then(|| k(self, i, caps))
+                .flatten(),
             Node::Backref(g) => {
                 let (a, b) = caps.get(*g).copied().flatten()?;
                 let len = b - a;
@@ -353,7 +434,11 @@ impl Regex {
             }
             Node::Group(inner, idx) => {
                 let idx = *idx;
-                self.m(inner, t, i, caps, steps, &mut |s: &Self, e, caps: &mut Vec<Option<(usize, usize)>>| {
+                self.m(inner, t, i, caps, steps, &mut |s: &Self,
+                                                       e,
+                                                       caps: &mut Vec<
+                    Option<(usize, usize)>,
+                >| {
                     if let Some(g) = idx {
                         let saved = caps[g];
                         caps[g] = Some((i, e));
@@ -376,7 +461,19 @@ impl Regex {
                 None
             }
             Node::Concat(items) => self.concat(items, t, i, caps, steps, k),
-            Node::Repeat(inner, min, max, greedy) => self.repeat(inner, *min, *max, *greedy, 0, t, i, usize::MAX, caps, steps, k),
+            Node::Repeat(inner, min, max, greedy) => self.repeat(
+                inner,
+                *min,
+                *max,
+                *greedy,
+                0,
+                t,
+                i,
+                usize::MAX,
+                caps,
+                steps,
+                k,
+            ),
         }
     }
 
@@ -393,7 +490,11 @@ impl Regex {
             None => k(self, i, caps),
             Some((first, rest)) => {
                 let budget = std::cell::Cell::new(*steps);
-                let r = self.m(first, t, i, caps, steps, &mut |s: &Self, e, caps: &mut Vec<Option<(usize, usize)>>| {
+                let r = self.m(first, t, i, caps, steps, &mut |s: &Self,
+                                                               e,
+                                                               caps: &mut Vec<
+                    Option<(usize, usize)>,
+                >| {
                     let mut st = budget.get();
                     let r = s.concat(rest, t, e, caps, &mut st, k);
                     budget.set(st);
@@ -421,11 +522,34 @@ impl Regex {
         k: &mut dyn FnMut(&Self, usize, &mut Vec<Option<(usize, usize)>>) -> Option<usize>,
     ) -> Option<usize> {
         let can_more = max.is_none_or(|m| count < m) && last != i; // stop on empty iterations
-        let more = |s: &Self, caps: &mut Vec<Option<(usize, usize)>>, steps: &mut usize, k: &mut dyn FnMut(&Self, usize, &mut Vec<Option<(usize, usize)>>) -> Option<usize>| {
+        let more = |s: &Self,
+                    caps: &mut Vec<Option<(usize, usize)>>,
+                    steps: &mut usize,
+                    k: &mut dyn FnMut(
+            &Self,
+            usize,
+            &mut Vec<Option<(usize, usize)>>,
+        ) -> Option<usize>| {
             let budget = std::cell::Cell::new(*steps);
-            let r = s.m(inner, t, i, caps, steps, &mut |s2: &Self, e, caps: &mut Vec<Option<(usize, usize)>>| {
+            let r = s.m(inner, t, i, caps, steps, &mut |s2: &Self,
+                                                        e,
+                                                        caps: &mut Vec<
+                Option<(usize, usize)>,
+            >| {
                 let mut st = budget.get();
-                let r = s2.repeat(inner, min, max, greedy, count + 1, t, e, i, caps, &mut st, k);
+                let r = s2.repeat(
+                    inner,
+                    min,
+                    max,
+                    greedy,
+                    count + 1,
+                    t,
+                    e,
+                    i,
+                    caps,
+                    &mut st,
+                    k,
+                );
                 budget.set(st);
                 r
             });
@@ -446,7 +570,11 @@ impl Regex {
             if let Some(r) = k(self, i, caps) {
                 return Some(r);
             }
-            if can_more { more(self, caps, steps, k) } else { None }
+            if can_more {
+                more(self, caps, steps, k)
+            } else {
+                None
+            }
         }
     }
 }
@@ -503,7 +631,13 @@ fn compile(n: &Node, prog: &mut Vec<Inst>) -> Result<(), String> {
             }
         }
         Node::Repeat(inner, min, max, greedy) => {
-            let split = |body: usize, out: usize| if *greedy { Inst::Split(body, out) } else { Inst::Split(out, body) };
+            let split = |body: usize, out: usize| {
+                if *greedy {
+                    Inst::Split(body, out)
+                } else {
+                    Inst::Split(out, body)
+                }
+            };
             for _ in 0..*min {
                 compile(inner, prog)?;
             }
@@ -558,7 +692,11 @@ impl P<'_> {
             self.i += 1;
             alts.push(self.concat()?);
         }
-        Ok(if alts.len() == 1 { alts.pop().unwrap() } else { Node::Alt(alts) })
+        Ok(if alts.len() == 1 {
+            alts.pop().unwrap()
+        } else {
+            Node::Alt(alts)
+        })
     }
 
     fn concat(&mut self) -> Result<Node, String> {
@@ -647,13 +785,14 @@ impl P<'_> {
             '^' => Node::Start,
             '$' => Node::End,
             '(' => {
-                let idx = if self.c.get(self.i) == Some(&'?') && self.c.get(self.i + 1) == Some(&':') {
-                    self.i += 2;
-                    None
-                } else {
-                    self.groups += 1;
-                    Some(self.groups)
-                };
+                let idx =
+                    if self.c.get(self.i) == Some(&'?') && self.c.get(self.i + 1) == Some(&':') {
+                        self.i += 2;
+                        None
+                    } else {
+                        self.groups += 1;
+                        Some(self.groups)
+                    };
                 self.depth += 1;
                 if self.depth > MAX_DEPTH {
                     return Err("regex: groups nested too deeply".into());
@@ -708,7 +847,8 @@ impl P<'_> {
             } else {
                 c
             };
-            if self.c.get(self.i) == Some(&'-') && self.c.get(self.i + 1).is_some_and(|&n| n != ']') {
+            if self.c.get(self.i) == Some(&'-') && self.c.get(self.i + 1).is_some_and(|&n| n != ']')
+            {
                 self.i += 1;
                 let mut hi = *self.c.get(self.i).ok_or("regex: unterminated class")?;
                 self.i += 1;
@@ -736,7 +876,12 @@ mod tests {
         assert!(Regex::new("HELLO", "i").unwrap().is_match("say hello"));
         assert!(Regex::new("[a-c]{2,3}\\d", "").unwrap().is_match("xxbca7"));
         assert!(Regex::new("(foo|bar)baz", "").unwrap().is_match("barbaz"));
-        assert_eq!(Regex::new("(\\w+)@(\\w+)", "").unwrap().replace_all("me@host", "$2 at $1"), "host at me");
+        assert_eq!(
+            Regex::new("(\\w+)@(\\w+)", "")
+                .unwrap()
+                .replace_all("me@host", "$2 at $1"),
+            "host at me"
+        );
     }
 
     #[test]
@@ -749,7 +894,10 @@ mod tests {
         assert_eq!(r("$", "ab"), "ab<>");
         assert!(Regex::new("^b", "m").unwrap().is_match("a\nb"));
         assert!(Regex::new("(a)\\1", "").unwrap().is_match("xaa")); // back-reference
-        assert_eq!(Regex::new("a.c", "q").unwrap().replace_all("abc a.c", "_"), "abc _");
+        assert_eq!(
+            Regex::new("a.c", "q").unwrap().replace_all("abc a.c", "_"),
+            "abc _"
+        );
     }
 
     #[test]
@@ -758,7 +906,11 @@ mod tests {
         let text = "a".repeat(20_000) + "!";
         assert!(!Regex::new("^(a+)+$", "").unwrap().is_match(&text));
         assert!(!Regex::new("(a|aa)*c", "").unwrap().is_match(&text));
-        assert!(Regex::new("x.*y", "").unwrap().is_match(&("x".repeat(200_000) + "y")));
+        assert!(
+            Regex::new("x.*y", "")
+                .unwrap()
+                .is_match(&("x".repeat(200_000) + "y"))
+        );
         assert!(t.elapsed().as_secs() < 2);
         assert!(Regex::new(&"(".repeat(1000), "").is_err());
         assert!(Regex::new("a{100000}", "").is_err());

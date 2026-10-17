@@ -20,12 +20,19 @@ pub fn parse(text: &str) -> Result<Json, String> {
         }
         let trimmed = t.trim_end();
         if trimmed.starts_with('\t') {
-            return Err(format!("YAML error on line {}: tab indentation is not allowed", i + 1));
+            return Err(format!(
+                "YAML error on line {}: tab indentation is not allowed",
+                i + 1
+            ));
         }
         if trimmed.is_empty() || trimmed.starts_with('#') || trimmed == "---" || trimmed == "..." {
             continue;
         }
-        lines.push(Line { no: i + 1, indent, text: trimmed.to_string() });
+        lines.push(Line {
+            no: i + 1,
+            indent,
+            text: trimmed.to_string(),
+        });
     }
     if lines.is_empty() {
         return Ok(Json::Null);
@@ -113,7 +120,10 @@ impl P {
         if rest.is_empty() {
             return match self.lines.get(self.at) {
                 Some(next) if next.indent > indent => self.value(indent + 1),
-                Some(next) if next.indent == indent && (next.text.starts_with("- ") || next.text == "-") => {
+                Some(next)
+                    if next.indent == indent
+                        && (next.text.starts_with("- ") || next.text == "-") =>
+                {
                     self.sequence(indent, "")
                 }
                 _ => Ok(Json::Null),
@@ -213,7 +223,13 @@ impl P {
 
 /// `key: value` on one line; the key may be quoted. Returns (key, rest).
 fn split_key(t: &str) -> Option<(String, &str)> {
-    if t.starts_with('[') || t.starts_with('{') || t.starts_with("- ") || t == "-" || t.starts_with('|') || t.starts_with('>') {
+    if t.starts_with('[')
+        || t.starts_with('{')
+        || t.starts_with("- ")
+        || t == "-"
+        || t.starts_with('|')
+        || t.starts_with('>')
+    {
         return None;
     }
     if t.starts_with("? ") || t.starts_with('&') || t.starts_with('*') || t.starts_with('!') {
@@ -345,7 +361,11 @@ impl Chars<'_> {
                 }
                 let inner = &self.s[start..self.at];
                 self.at += 1;
-                Ok(Json::Str(if quote == '"' { unescape_double(inner)? } else { inner.replace("''", "'") }))
+                Ok(Json::Str(if quote == '"' {
+                    unescape_double(inner)?
+                } else {
+                    inner.replace("''", "'")
+                }))
             }
             _ => {
                 let start = self.at;
@@ -387,7 +407,10 @@ fn scalar(t: &str) -> Option<Json> {
         return Some(Json::Bool(false));
     }
     let c0 = t.as_bytes()[0];
-    if (c0.is_ascii_digit() || c0 == b'-') && t.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-')) {
+    if (c0.is_ascii_digit() || c0 == b'-')
+        && t.chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+    {
         if let Ok(n) = t.parse::<f64>() {
             if n.is_finite() {
                 return Some(Json::Num(n));
@@ -416,7 +439,8 @@ fn unescape_double(s: &str) -> Result<String, String> {
             Some('f') => out.push('\u{c}'),
             Some('u') => {
                 let hex: String = chars.by_ref().take(4).collect();
-                let cp = u32::from_str_radix(&hex, 16).map_err(|_| "YAML error: bad \\u escape".to_string())?;
+                let cp = u32::from_str_radix(&hex, 16)
+                    .map_err(|_| "YAML error: bad \\u escape".to_string())?;
                 out.push(char::from_u32(cp).ok_or("YAML error: bad \\u escape")?);
             }
             _ => return Err("YAML error: bad escape".into()),
@@ -501,7 +525,13 @@ meta: {pages: 200, tags: [roman, siir]}
         assert_eq!(v.str_at(&["@id"]), "ex:book/1");
         assert_eq!(v.str_at(&["name"]), "Safahat");
         assert_eq!(v.get("authors").unwrap().as_array().unwrap().len(), 2);
-        let tags = v.get("meta").unwrap().get("tags").unwrap().as_array().unwrap();
+        let tags = v
+            .get("meta")
+            .unwrap()
+            .get("tags")
+            .unwrap()
+            .as_array()
+            .unwrap();
         assert_eq!(tags.len(), 2);
         assert_eq!(tags[0].str_at(&[]), "roman");
     }

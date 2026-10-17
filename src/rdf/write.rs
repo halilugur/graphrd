@@ -7,7 +7,11 @@ use super::*;
 use crate::json::Json;
 
 /// Quads as a serialization (the prefixes abbreviate Turtle and RDF/XML).
-pub fn serialize(quads: &[Quad], format: Format, prefixes: &[(String, String)]) -> Result<String, String> {
+pub fn serialize(
+    quads: &[Quad],
+    format: Format,
+    prefixes: &[(String, String)],
+) -> Result<String, String> {
     Ok(match format {
         Format::NTriples => {
             let mut out = String::new();
@@ -46,7 +50,8 @@ fn is_pn_local(s: &str) -> bool {
         && !s.ends_with('.')
         && !s.starts_with('.')
         && !s.starts_with('-')
-        && s.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
+        && s.chars()
+            .all(|c| c.is_alphanumeric() || c == '_' || c == '-' || c == '.')
 }
 
 struct Abbrev<'a> {
@@ -115,11 +120,15 @@ impl Abbrev<'_> {
 }
 
 fn turtle(quads: &[Quad], prefixes: &[(String, String)], graphs: bool) -> String {
-    let ab = Abbrev { prefixes, used: Default::default() };
+    let ab = Abbrev {
+        prefixes,
+        used: Default::default(),
+    };
     let mut out = String::new();
     // graph -> subject -> [(p, o)], keeping first-seen order
     let mut order: Vec<Option<&Term>> = Vec::new();
-    let mut by_graph: HashMap<Option<&Term>, (Vec<&Term>, HashMap<&Term, Vec<(&Term, &Term)>>)> = HashMap::new();
+    let mut by_graph: HashMap<Option<&Term>, (Vec<&Term>, HashMap<&Term, Vec<(&Term, &Term)>>)> =
+        HashMap::new();
     for q in quads {
         let g = if graphs { q.g.as_ref() } else { None };
         let entry = by_graph.entry(g).or_insert_with(|| {
@@ -180,7 +189,9 @@ fn jsonld_object(t: &Term) -> Json {
         // JSON-LD-star embedded node
         Term::Triple(q) => Json::obj().with(
             "@id",
-            Json::obj().with("@id", id_of(&q[0])).with(q[1].value(), Json::Arr(vec![jsonld_object(&q[2])])),
+            Json::obj()
+                .with("@id", id_of(&q[0]))
+                .with(q[1].value(), Json::Arr(vec![jsonld_object(&q[2])])),
         ),
         Term::Iri(i) => Json::obj().with("@id", i.as_str()),
         Term::Blank(b) => Json::obj().with("@id", format!("_:{b}")),
@@ -227,7 +238,8 @@ fn star_id(t: &Term) -> Json {
 
 /// The JSON-LD document of `quads`, as a `Json` value (also the YAML-LD writer's input).
 fn jsonld_json(quads: &[Quad]) -> Json {
-    let mut graphs: BTreeMap<Option<String>, BTreeMap<String, Vec<(String, Json)>>> = BTreeMap::new();
+    let mut graphs: BTreeMap<Option<String>, BTreeMap<String, Vec<(String, Json)>>> =
+        BTreeMap::new();
     let mut star_ids: BTreeMap<String, Json> = BTreeMap::new();
     for q in quads {
         let g = q.g.as_ref().map(id_of);
@@ -246,7 +258,10 @@ fn jsonld_json(quads: &[Quad]) -> Json {
         nodes
             .iter()
             .map(|(id, props)| {
-                let id_value = star_ids.get(id).cloned().unwrap_or_else(|| Json::Str(id.clone()));
+                let id_value = star_ids
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| Json::Str(id.clone()));
                 let mut obj = Json::obj().with("@id", id_value);
                 let mut grouped: Vec<(String, Vec<Json>)> = Vec::new();
                 for (k, v) in props {
@@ -266,7 +281,11 @@ fn jsonld_json(quads: &[Quad]) -> Json {
     for (g, nodes) in &graphs {
         match g {
             None => top.extend(render(nodes)),
-            Some(g) => top.push(Json::obj().with("@id", g.as_str()).with("@graph", Json::Arr(render(nodes)))),
+            Some(g) => top.push(
+                Json::obj()
+                    .with("@id", g.as_str())
+                    .with("@graph", Json::Arr(render(nodes))),
+            ),
         }
     }
     Json::Arr(top)
@@ -306,7 +325,12 @@ mod tests {
     fn turtle_roundtrip() {
         let ttl = "@prefix ex: <http://ex.org/> . ex:a ex:p 1, \"x\"@en ; a ex:C .";
         let q = turtle::parse(ttl, "", turtle::Mode::Turtle).unwrap();
-        let out = serialize(&q, Format::Turtle, &[("ex".into(), "http://ex.org/".into())]).unwrap();
+        let out = serialize(
+            &q,
+            Format::Turtle,
+            &[("ex".into(), "http://ex.org/".into())],
+        )
+        .unwrap();
         let q2 = turtle::parse(&out, "", turtle::Mode::Turtle).unwrap();
         assert_eq!(q.len(), q2.len());
     }

@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use super::ast::*;
 use super::func::{self, Num};
 use crate::rdf::{Quad, Term};
-use crate::store::{Id, Store, DEFAULT_GRAPH, INFERRED};
+use crate::store::{DEFAULT_GRAPH, INFERRED, Id, Store};
 
 /// The full-text search predicate: `?literal g:fts "query"`.
 pub const ONTO_FTS: &str = "http://graphrd.org/fn#fts";
@@ -89,7 +89,10 @@ impl Edges {
             _ => &[][..],
         };
         let at = range.partition_point(|&x| ((x >> 32) as Id) < n);
-        range[at..].iter().take_while(move |&&x| (x >> 32) as Id == n).map(|&x| x as Id)
+        range[at..]
+            .iter()
+            .take_while(move |&&x| (x >> 32) as Id == n)
+            .map(|&x| x as Id)
     }
 }
 
@@ -104,7 +107,12 @@ struct Reached {
 
 impl Reached {
     fn new(limit: Id) -> Reached {
-        Reached { list: Vec::new(), small: HashSet::new(), bits: Vec::new(), limit }
+        Reached {
+            list: Vec::new(),
+            small: HashSet::new(),
+            bits: Vec::new(),
+            limit,
+        }
     }
 
     /// Whether `id` is new.
@@ -134,7 +142,10 @@ impl Reached {
 }
 
 /// `rows` in chunks of `PREFETCH`, `ahead` called on each chunk before its rows are handed on.
-fn prefetched<'a, T: 'a>(mut rows: impl Iterator<Item = T> + 'a, mut ahead: impl FnMut(&[T]) + 'a) -> impl Iterator<Item = T> + 'a {
+fn prefetched<'a, T: 'a>(
+    mut rows: impl Iterator<Item = T> + 'a,
+    mut ahead: impl FnMut(&[T]) + 'a,
+) -> impl Iterator<Item = T> + 'a {
     let mut chunk: std::collections::VecDeque<T> = std::collections::VecDeque::new();
     std::iter::from_fn(move || {
         if chunk.is_empty() {
@@ -169,7 +180,7 @@ pub enum QueryResult {
 
 /// The store, variables and settings one query runs with.
 pub struct Ctx<'a> {
-/// The store to read.
+    /// The store to read.
     pub store: &'a Store,
     nvars: usize,
     vars: &'a VarTable,
@@ -181,7 +192,7 @@ pub struct Ctx<'a> {
     default_graphs: Option<Vec<Id>>,
     /// FROM NAMED graphs; None = all named graphs.
     named_graphs: Option<Vec<Id>>,
-/// The query's base IRI.
+    /// The query's base IRI.
     pub base: String,
     deadline: Option<std::time::Instant>,
     /// Include inferred statements in default-graph matches (`infer=true`).
@@ -213,8 +224,13 @@ pub struct Ctx<'a> {
 type R<T> = Result<T, String>;
 
 impl<'a> Ctx<'a> {
-/// A fresh evaluation context with a time limit.
-    pub fn new(store: &'a Store, vars: &'a VarTable, base: &str, timeout_secs: Option<u64>) -> Self {
+    /// A fresh evaluation context with a time limit.
+    pub fn new(
+        store: &'a Store,
+        vars: &'a VarTable,
+        base: &str,
+        timeout_secs: Option<u64>,
+    ) -> Self {
         Ctx {
             store,
             nvars: vars.len(),
@@ -225,7 +241,9 @@ impl<'a> Ctx<'a> {
             default_graphs: None,
             named_graphs: None,
             base: base.to_string(),
-            deadline: timeout_secs.filter(|&s| s > 0).map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s)),
+            deadline: timeout_secs
+                .filter(|&s| s > 0)
+                .map(|s| std::time::Instant::now() + std::time::Duration::from_secs(s)),
             include_inferred: true,
             services: RefCell::new(HashMap::new()),
             prefetched: RefCell::new(HashMap::new()),
@@ -251,18 +269,29 @@ impl<'a> Ctx<'a> {
 
     /// Answer patterns of the default graph with query-time inference (`reasoning`).
     pub fn set_at_query(&mut self) {
-        self.at_query = super::reasoning::AtQuery::build(self.store).map(|q| (q, self.graphs_for(Active::Default)));
+        self.at_query = super::reasoning::AtQuery::build(self.store)
+            .map(|q| (q, self.graphs_for(Active::Default)));
     }
 
     /// A triple pattern under query-time inference; None when inference adds nothing to it.
-    fn match_reasoned(&self, tp: &TriplePattern, s: &Sol, graphs: &Option<Vec<Id>>, out: &mut Vec<Sol>) -> Option<R<()>> {
+    fn match_reasoned(
+        &self,
+        tp: &TriplePattern,
+        s: &Sol,
+        graphs: &Option<Vec<Id>>,
+        out: &mut Vec<Sol>,
+    ) -> Option<R<()>> {
         let (aq, scope) = self.at_query.as_ref()?;
         if graphs != scope {
             return None; // inside GRAPH: as stated
         }
-        let Predicate::Path(Path::Iri(i)) = &tp.p else { return None };
+        let Predicate::Path(Path::Iri(i)) = &tp.p else {
+            return None;
+        };
         let pid = self.lookup_iri(i)?;
-        let (Ok(sid), Ok(oid)) = (self.resolve(&tp.s, s), self.resolve(&tp.o, s)) else { return Some(Ok(())) };
+        let (Ok(sid), Ok(oid)) = (self.resolve(&tp.s, s), self.resolve(&tp.o, s)) else {
+            return Some(Ok(()));
+        };
         let mut emit = |a: Id, b: Id| {
             let mut n = s.clone();
             if self.bind(&mut n, &tp.s, a) && self.bind(&mut n, &tp.o, b) {
@@ -274,13 +303,20 @@ impl<'a> Ctx<'a> {
             match oid {
                 Some(c) => {
                     for sub in aq.subclasses(c) {
-                        pairs.extend(self.scan(sid, Some(aq.ty), Some(sub), None).map(|q| (q[0], c)));
+                        pairs.extend(
+                            self.scan(sid, Some(aq.ty), Some(sub), None)
+                                .map(|q| (q[0], c)),
+                        );
                     }
                     for p in aq.typing_properties(c, false) {
                         pairs.extend(self.scan(sid, Some(p), None, None).map(|q| (q[0], c)));
                     }
                     for p in aq.typing_properties(c, true) {
-                        pairs.extend(self.scan(None, Some(p), sid, None).filter(|q| !self.term(q[2]).is_literal()).map(|q| (q[2], c)));
+                        pairs.extend(
+                            self.scan(None, Some(p), sid, None)
+                                .filter(|q| !self.term(q[2]).is_literal())
+                                .map(|q| (q[2], c)),
+                        );
                     }
                 }
                 None => {
@@ -292,7 +328,10 @@ impl<'a> Ctx<'a> {
                         // the ranges
                         let literal = |id: Id| self.term(id).is_literal();
                         let (as_subject, as_object) = match sid {
-                            Some(x) => (self.scan(Some(x), None, None, None).collect::<Vec<_>>(), self.scan(None, None, Some(x), None).collect::<Vec<_>>()),
+                            Some(x) => (
+                                self.scan(Some(x), None, None, None).collect::<Vec<_>>(),
+                                self.scan(None, None, Some(x), None).collect::<Vec<_>>(),
+                            ),
                             None => {
                                 let all: Vec<[Id; 4]> = self.scan(None, None, None, None).collect();
                                 (all.clone(), all)
@@ -324,7 +363,7 @@ impl<'a> Ctx<'a> {
         }))
     }
 
-/// Let inferred statements take part in matches, or not.
+    /// Let inferred statements take part in matches, or not.
     pub fn set_infer(&mut self, infer: bool) {
         self.include_inferred = infer;
         if !infer {
@@ -337,11 +376,21 @@ impl<'a> Ctx<'a> {
     /// Store scan honouring the inference setting. Without a graph the scan reads the default
     /// graph, the RDF merge of all graphs: a triple stored in several graphs appears once. Every
     /// index used for such a scan keeps the graph last, so copies of a triple are adjacent.
-    fn scan(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>, g: Option<Id>) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
+    fn scan(
+        &self,
+        s: Option<Id>,
+        p: Option<Id>,
+        o: Option<Id>,
+        g: Option<Id>,
+    ) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
         if g.is_some() {
             return self.store.quads_matching(s, p, o, g);
         }
-        let it = if self.include_inferred { self.store.quads_matching(s, p, o, g) } else { self.store.explicit_matching(s, p, o, g) };
+        let it = if self.include_inferred {
+            self.store.quads_matching(s, p, o, g)
+        } else {
+            self.store.explicit_matching(s, p, o, g)
+        };
         let mut last: Option<[Id; 3]> = None;
         Box::new(it.filter(move |q| {
             let t = [q[0], q[1], q[2]];
@@ -350,22 +399,33 @@ impl<'a> Ctx<'a> {
     }
 
     /// Scan over a list of default graphs (FROM): their merge, so each triple once.
-    fn scan_graphs(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>, graphs: &Option<Vec<Id>>) -> Vec<[Id; 4]> {
+    fn scan_graphs(
+        &self,
+        s: Option<Id>,
+        p: Option<Id>,
+        o: Option<Id>,
+        graphs: &Option<Vec<Id>>,
+    ) -> Vec<[Id; 4]> {
         match graphs {
             None => self.scan(s, p, o, None).collect(),
             Some(gs) if gs.len() == 1 => self.scan(s, p, o, Some(gs[0])).collect(),
             Some(gs) => {
                 let mut seen = HashSet::new();
-                gs.iter().flat_map(|&g| self.scan(s, p, o, Some(g)).collect::<Vec<_>>()).filter(|q| seen.insert([q[0], q[1], q[2]])).collect()
+                gs.iter()
+                    .flat_map(|&g| self.scan(s, p, o, Some(g)).collect::<Vec<_>>())
+                    .filter(|q| seen.insert([q[0], q[1], q[2]]))
+                    .collect()
             }
         }
     }
 
-/// Restrict the query to a dataset (FROM/FROM NAMED or the protocol's parameters).
+    /// Restrict the query to a dataset (FROM/FROM NAMED or the protocol's parameters).
     pub fn set_dataset(&mut self, ds: Option<&Dataset>) {
         let Some(ds) = ds else { return };
         let ids = |list: &[String]| -> Vec<Id> {
-            list.iter().filter_map(|i| self.store.dict.lookup(&Term::Iri(i.clone()))).collect()
+            list.iter()
+                .filter_map(|i| self.store.dict.lookup(&Term::Iri(i.clone())))
+                .collect()
         };
         // pseudo-graphs: graph:explicit / graph:implicit
         if ds.default.len() == 1 && ds.default[0] == "http://graphrd.org/graph#explicit" {
@@ -381,17 +441,22 @@ impl<'a> Ctx<'a> {
             self.default_graphs = Some(Vec::new());
         }
         if !ds.default.is_empty() {
-            self.default_graphs = Some(ds.default.iter().flat_map(|g| {
-                // these IRIs name the real default graph: ours, and the compatibility spellings
-                if g == "urn:graphrd:default"
-                    || g == "http://rdf4j.org/schema/rdf4j#nil"
-                    || g == "http://www.openrdf.org/schema/sesame#nil"
-                {
-                    vec![DEFAULT_GRAPH]
-                } else {
-                    ids(std::slice::from_ref(g))
-                }
-            }).collect());
+            self.default_graphs = Some(
+                ds.default
+                    .iter()
+                    .flat_map(|g| {
+                        // these IRIs name the real default graph: ours, and the compatibility spellings
+                        if g == "urn:graphrd:default"
+                            || g == "http://rdf4j.org/schema/rdf4j#nil"
+                            || g == "http://www.openrdf.org/schema/sesame#nil"
+                        {
+                            vec![DEFAULT_GRAPH]
+                        } else {
+                            ids(std::slice::from_ref(g))
+                        }
+                    })
+                    .collect(),
+            );
         }
         if !ds.named.is_empty() || !ds.default.is_empty() {
             self.named_graphs = Some(ids(&ds.named));
@@ -411,7 +476,10 @@ impl<'a> Ctx<'a> {
             None => fetch_service(endpoint, text, self.service_timeout())?,
         };
         let (vars, rows) = &*rows;
-        let slots: Vec<Option<Var>> = vars.iter().map(|v| self.vars.names.iter().position(|n| n == v)).collect();
+        let slots: Vec<Option<Var>> = vars
+            .iter()
+            .map(|v| self.vars.names.iter().position(|n| n == v))
+            .collect();
         let sols: Vec<Sol> = rows
             .iter()
             .map(|row| {
@@ -436,7 +504,9 @@ impl<'a> Ctx<'a> {
             s => std::time::Duration::from_secs(s),
         };
         match self.deadline {
-            Some(d) => d.saturating_duration_since(std::time::Instant::now()).min(own),
+            Some(d) => d
+                .saturating_duration_since(std::time::Instant::now())
+                .min(own),
             None => own,
         }
     }
@@ -453,11 +523,16 @@ impl<'a> Ctx<'a> {
                         out.push(k);
                     }
                 }
-                Pattern::Join(a, b) | Pattern::LeftJoin(a, b, _) | Pattern::Union(a, b) | Pattern::Minus(a, b) => {
+                Pattern::Join(a, b)
+                | Pattern::LeftJoin(a, b, _)
+                | Pattern::Union(a, b)
+                | Pattern::Minus(a, b) => {
                     collect(a, out);
                     collect(b, out);
                 }
-                Pattern::Filter(_, inner) | Pattern::Extend(inner, ..) | Pattern::Graph(_, inner) => collect(inner, out),
+                Pattern::Filter(_, inner)
+                | Pattern::Extend(inner, ..)
+                | Pattern::Graph(_, inner) => collect(inner, out),
                 Pattern::SubSelect(q) => collect(&q.pattern, out),
                 _ => {}
             }
@@ -469,10 +544,21 @@ impl<'a> Ctx<'a> {
         }
         let timeout = self.service_timeout();
         let fetched: Vec<_> = std::thread::scope(|sc| {
-            let handles: Vec<_> = wanted.iter().map(|(e, t)| sc.spawn(move || fetch_service(e, t, timeout))).collect();
-            handles.into_iter().map(|h| h.join().unwrap_or_else(|_| Err("SERVICE call failed".into()))).collect()
+            let handles: Vec<_> = wanted
+                .iter()
+                .map(|(e, t)| sc.spawn(move || fetch_service(e, t, timeout)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| Err("SERVICE call failed".into()))
+                })
+                .collect()
         });
-        self.prefetched.borrow_mut().extend(wanted.into_iter().zip(fetched));
+        self.prefetched
+            .borrow_mut()
+            .extend(wanted.into_iter().zip(fetched));
     }
 
     fn check_time(&self) -> R<()> {
@@ -491,7 +577,7 @@ impl<'a> Ctx<'a> {
         self.store.dict.read_many(&mut ids, &mut bulk);
     }
 
-/// The term an id stands for (query-local terms included).
+    /// The term an id stands for (query-local terms included).
     pub fn term(&self, id: Id) -> Term {
         if id >= LOCAL {
             self.local.borrow()[(id - LOCAL) as usize].clone()
@@ -502,7 +588,7 @@ impl<'a> Ctx<'a> {
         }
     }
 
-/// The id of a term, interning it locally when the store does not know it.
+    /// The id of a term, interning it locally when the store does not know it.
     pub fn intern(&self, t: &Term) -> Id {
         if let Some(id) = self.lookup(t) {
             return id;
@@ -643,7 +729,9 @@ impl<'a> Ctx<'a> {
                             if !use_memo && seen % PREFETCH == 0 {
                                 // the terms of the next rows, read from the dictionary in bulk
                                 // (with the memo on, values repeat and are mostly cached)
-                                self.prefetch(ids[seen..ids.len().min(seen + PREFETCH)].iter().copied());
+                                self.prefetch(
+                                    ids[seen..ids.len().min(seen + PREFETCH)].iter().copied(),
+                                );
                             }
                             seen += 1;
                             if seen == 512 && memo.len() * 4 > seen * 3 {
@@ -696,7 +784,9 @@ impl<'a> Ctx<'a> {
             Pattern::Graph(name, inner) => match name {
                 VarOrTerm::Triple(_) => Vec::new(), // a quoted triple never names a graph
                 VarOrTerm::Term(t) => {
-                    let Some(id) = self.lookup(t) else { return Ok(Vec::new()) };
+                    let Some(id) = self.lookup(t) else {
+                        return Ok(Vec::new());
+                    };
                     if !self.named().contains(&id) {
                         return Ok(Vec::new());
                     }
@@ -752,7 +842,13 @@ impl<'a> Ctx<'a> {
     /// bound up front to the index's candidates instead of every geometry being tried. The
     /// rows are a superset of those passing the filter; the caller still applies it. None when
     /// nothing applies.
-    fn spatial_bgp(&self, e: &Expr, tps: &[TriplePattern], seed: &Sol, g: Active) -> R<Option<Vec<Sol>>> {
+    fn spatial_bgp(
+        &self,
+        e: &Expr,
+        tps: &[TriplePattern],
+        seed: &Sol,
+        g: Active,
+    ) -> R<Option<Vec<Sol>>> {
         let mut calls = Vec::new();
         spatial_calls(e, &mut calls);
         // too large a box finds nearly everything: then the plain plan is as good
@@ -773,7 +869,10 @@ impl<'a> Ctx<'a> {
                         })
                         .collect()
                 };
-                let bbox = |other: Term| crate::geo::filter_box(name, &terms(Some(other)), &|i| i == vi, radius).filter(|b| narrow(*b));
+                let bbox = |other: Term| {
+                    crate::geo::filter_box(name, &terms(Some(other)), &|i| i == vi, radius)
+                        .filter(|b| narrow(*b))
+                };
                 let seeded = |base: &Sol, b: crate::geo::Bbox| -> Vec<Sol> {
                     self.store
                         .geo_candidates(b)
@@ -798,7 +897,8 @@ impl<'a> Ctx<'a> {
                         loop {
                             let before = rest_idx.len();
                             for (i, tp) in tps.iter().enumerate() {
-                                if !rest_idx.contains(&i) && joined.iter().any(|&x| mentions(tp, x)) {
+                                if !rest_idx.contains(&i) && joined.iter().any(|&x| mentions(tp, x))
+                                {
                                     rest_idx.push(i);
                                     let mut vars = Vec::new();
                                     tp.s.vars(&mut vars);
@@ -818,10 +918,16 @@ impl<'a> Ctx<'a> {
                             }
                         }
                         let (first, rest): (Vec<TriplePattern>, Vec<TriplePattern>) = (
-                            tps.iter().enumerate().filter(|(i, _)| !rest_idx.contains(i)).map(|(_, tp)| tp.clone()).collect(),
+                            tps.iter()
+                                .enumerate()
+                                .filter(|(i, _)| !rest_idx.contains(i))
+                                .map(|(_, tp)| tp.clone())
+                                .collect(),
                             rest_idx.iter().map(|&i| tps[i].clone()).collect(),
                         );
-                        if first.is_empty() || !(seed[w].is_some() || first.iter().any(|tp| mentions(tp, w))) {
+                        if first.is_empty()
+                            || !(seed[w].is_some() || first.iter().any(|tp| mentions(tp, w)))
+                        {
                             continue;
                         }
                         let mut boxes: HashMap<Id, Option<crate::geo::Bbox>> = HashMap::new();
@@ -856,7 +962,9 @@ impl<'a> Ctx<'a> {
         Ok(match p {
             Pattern::Bgp(tps) => self.bgp_capped(tps, vec![seed.clone()], g, cap)?,
             Pattern::Join(a, b) if matches!(&**b, Pattern::Bgp(_)) => {
-                let Pattern::Bgp(tps) = &**b else { unreachable!() };
+                let Pattern::Bgp(tps) = &**b else {
+                    unreachable!()
+                };
                 let left = self.eval(a, g, seed)?;
                 self.bgp_capped(tps, left, g, cap)?
             }
@@ -896,7 +1004,9 @@ impl<'a> Ctx<'a> {
                 return self.extend_all(p, sols, g);
             }
             Pattern::Graph(VarOrTerm::Term(t), inner) => {
-                let Some(id) = self.lookup(t) else { return Ok(Vec::new()) };
+                let Some(id) = self.lookup(t) else {
+                    return Ok(Vec::new());
+                };
                 if !self.named().contains(&id) {
                     return Ok(Vec::new());
                 }
@@ -907,7 +1017,9 @@ impl<'a> Ctx<'a> {
     }
 
     fn extend_all(&self, p: &Pattern, sols: Vec<Sol>, g: Active) -> R<Vec<Sol>> {
-        let Pattern::Extend(_, v, e) = p else { return Ok(sols) };
+        let Pattern::Extend(_, v, e) = p else {
+            return Ok(sols);
+        };
         let mut out = Vec::with_capacity(sols.len());
         for mut s in sols {
             if s[*v].is_none() {
@@ -922,11 +1034,22 @@ impl<'a> Ctx<'a> {
 
     /// A basic graph pattern that may stop after `cap` solutions: the input is joined in
     /// growing chunks, and the last pattern's scan stops at the cap.
-    fn bgp_capped(&self, tps: &[TriplePattern], input: Vec<Sol>, g: Active, cap: usize) -> R<Vec<Sol>> {
+    fn bgp_capped(
+        &self,
+        tps: &[TriplePattern],
+        input: Vec<Sol>,
+        g: Active,
+        cap: usize,
+    ) -> R<Vec<Sol>> {
         if tps.is_empty() || input.is_empty() {
             return Ok(input);
         }
-        let bound: HashSet<Var> = input[0].iter().enumerate().filter(|(_, v)| v.is_some()).map(|(i, _)| i).collect();
+        let bound: HashSet<Var> = input[0]
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_some())
+            .map(|(i, _)| i)
+            .collect();
         let order = self.order_bgp(tps, &bound);
         let graphs = self.graphs_for(g);
         // all but the last pattern run on chunks of the solutions so far
@@ -949,7 +1072,11 @@ impl<'a> Ctx<'a> {
             let mut sols: Vec<Sol> = it.by_ref().take(chunk).collect();
             for tp in rest {
                 // large chunks (a pattern that rarely matches) keep the hash join
-                let joined = if sols.len() >= HASH_JOIN_MIN { self.hash_join(tp, &sols, &graphs)? } else { None };
+                let joined = if sols.len() >= HASH_JOIN_MIN {
+                    self.hash_join(tp, &sols, &graphs)?
+                } else {
+                    None
+                };
                 sols = match joined {
                     Some(j) => j,
                     None => {
@@ -972,7 +1099,13 @@ impl<'a> Ctx<'a> {
                 }
             }
             self.match_cap.set(cap);
-            let r = sols.iter().try_for_each(|s| if out.len() >= cap { Ok(()) } else { self.match_triple(last, s, &graphs, &mut out) });
+            let r = sols.iter().try_for_each(|s| {
+                if out.len() >= cap {
+                    Ok(())
+                } else {
+                    self.match_triple(last, s, &graphs, &mut out)
+                }
+            });
             self.match_cap.set(usize::MAX);
             r?;
             chunk = (chunk * 2).min(1 << 14);
@@ -982,7 +1115,10 @@ impl<'a> Ctx<'a> {
     }
 
     fn filter(&self, e: &Expr, s: &Sol, g: Active) -> bool {
-        self.expr(e, s, g).as_ref().and_then(func::ebv).unwrap_or(false)
+        self.expr(e, s, g)
+            .as_ref()
+            .and_then(func::ebv)
+            .unwrap_or(false)
     }
 
     /// The store id of a constant, memoized for this query.
@@ -1024,7 +1160,11 @@ impl<'a> Ctx<'a> {
         match vt {
             VarOrTerm::Var(v) => s[*v].map(|id| self.term(id)),
             VarOrTerm::Term(t) => Some(t.clone()),
-            VarOrTerm::Triple(p) => Some(Term::triple(self.ground(&p[0], s)?, self.ground(&p[1], s)?, self.ground(&p[2], s)?)),
+            VarOrTerm::Triple(p) => Some(Term::triple(
+                self.ground(&p[0], s)?,
+                self.ground(&p[1], s)?,
+                self.ground(&p[2], s)?,
+            )),
         }
     }
 
@@ -1045,7 +1185,9 @@ impl<'a> Ctx<'a> {
             },
             VarOrTerm::Term(t) => !nested || self.term(id) == *t,
             VarOrTerm::Triple(pat) => {
-                let Term::Triple(t) = self.term(id) else { return false };
+                let Term::Triple(t) = self.term(id) else {
+                    return false;
+                };
                 (0..3).all(|k| {
                     let cid = self.intern(&t[k]);
                     self.bind_at(s, &pat[k], cid, true)
@@ -1058,11 +1200,20 @@ impl<'a> Ctx<'a> {
     fn inst(&self, vt: &VarOrTerm, s: &Sol, bnodes: &mut HashMap<String, Term>) -> Option<Term> {
         match vt {
             // a blank node of the pattern used as a template (CONSTRUCT WHERE): fresh per solution
-            VarOrTerm::Var(v) if self.vars.is_hidden(*v) => Some(bnodes.entry(format!("?{v}")).or_insert_with(Term::fresh_blank).clone()),
+            VarOrTerm::Var(v) if self.vars.is_hidden(*v) => Some(
+                bnodes
+                    .entry(format!("?{v}"))
+                    .or_insert_with(Term::fresh_blank)
+                    .clone(),
+            ),
             VarOrTerm::Var(v) => s[*v].map(|id| self.term(id)),
             VarOrTerm::Term(t) => Some(self.inst_term(t, bnodes)),
             VarOrTerm::Triple(p) => {
-                let (a, b, c) = (self.inst(&p[0], s, bnodes)?, self.inst(&p[1], s, bnodes)?, self.inst(&p[2], s, bnodes)?);
+                let (a, b, c) = (
+                    self.inst(&p[0], s, bnodes)?,
+                    self.inst(&p[1], s, bnodes)?,
+                    self.inst(&p[2], s, bnodes)?,
+                );
                 (!a.is_literal() && b.is_iri()).then(|| Term::triple(a, b, c))
             }
         }
@@ -1070,8 +1221,15 @@ impl<'a> Ctx<'a> {
 
     fn inst_term(&self, t: &Term, bnodes: &mut HashMap<String, Term>) -> Term {
         match t {
-            Term::Blank(b) => bnodes.entry(b.clone()).or_insert_with(Term::fresh_blank).clone(),
-            Term::Triple(q) => Term::triple(self.inst_term(&q[0], bnodes), self.inst_term(&q[1], bnodes), self.inst_term(&q[2], bnodes)),
+            Term::Blank(b) => bnodes
+                .entry(b.clone())
+                .or_insert_with(Term::fresh_blank)
+                .clone(),
+            Term::Triple(q) => Term::triple(
+                self.inst_term(&q[0], bnodes),
+                self.inst_term(&q[1], bnodes),
+                self.inst_term(&q[2], bnodes),
+            ),
             other => other.clone(),
         }
     }
@@ -1084,7 +1242,11 @@ impl<'a> Ctx<'a> {
     }
 
     /// Order triple patterns greedily by how many positions are bound.
-    fn order_bgp<'p>(&self, tps: &'p [TriplePattern], bound: &HashSet<Var>) -> Vec<&'p TriplePattern> {
+    fn order_bgp<'p>(
+        &self,
+        tps: &'p [TriplePattern],
+        bound: &HashSet<Var>,
+    ) -> Vec<&'p TriplePattern> {
         let mut bound = bound.clone();
         let mut left: Vec<&TriplePattern> = tps.iter().collect();
         let mut out = Vec::new();
@@ -1104,8 +1266,10 @@ impl<'a> Ctx<'a> {
                     Predicate::Path(Path::Iri(_)) => true,
                     Predicate::Path(_) => false,
                 };
-                let path_penalty = matches!(&tp.p, Predicate::Path(p) if !matches!(p, Path::Iri(_)));
-                (b(&tp.s) as i32) * 4 + (b(&tp.o) as i32) * 3 + (p_bound as i32) * 2 - (path_penalty as i32) * 3
+                let path_penalty =
+                    matches!(&tp.p, Predicate::Path(p) if !matches!(p, Path::Iri(_)));
+                (b(&tp.s) as i32) * 4 + (b(&tp.o) as i32) * 3 + (p_bound as i32) * 2
+                    - (path_penalty as i32) * 3
             };
             // equally bound patterns go smallest first, by the indexes' estimate of how many
             // statements match their constants
@@ -1115,16 +1279,29 @@ impl<'a> Ctx<'a> {
                     _ => None,
                 };
                 let p = match &tp.p {
-                    Predicate::Path(Path::Iri(i)) if i != ONTO_FTS && !i.starts_with(RDF_RANK) && !i.starts_with(KNN) && !i.starts_with(crate::connector::NAMESPACE) => Some(self.lookup_iri(i)),
+                    Predicate::Path(Path::Iri(i))
+                        if i != ONTO_FTS
+                            && !i.starts_with(RDF_RANK)
+                            && !i.starts_with(KNN)
+                            && !i.starts_with(crate::connector::NAMESPACE) =>
+                    {
+                        Some(self.lookup_iri(i))
+                    }
                     Predicate::Path(Path::Iri(_)) => return 0, // special predicates: few results
                     _ => None,
                 };
                 match (c(&tp.s), p, c(&tp.o)) {
                     (Some(None), _, _) | (_, Some(None), _) | (_, _, Some(None)) => 0, // a constant not in the store: nothing
-                    (s, p, o) => self.store.estimate(s.flatten(), p.flatten(), o.flatten(), None),
+                    (s, p, o) => self
+                        .store
+                        .estimate(s.flatten(), p.flatten(), o.flatten(), None),
                 }
             };
-            let (idx, _) = left.iter().enumerate().max_by_key(|(i, tp)| (score(tp), std::cmp::Reverse(size(tp)), -(*i as i32))).unwrap();
+            let (idx, _) = left
+                .iter()
+                .enumerate()
+                .max_by_key(|(i, tp)| (score(tp), std::cmp::Reverse(size(tp)), -(*i as i32)))
+                .unwrap();
             let tp = left.remove(idx);
             let mut vs = Vec::new();
             tp.s.vars(&mut vs);
@@ -1142,7 +1319,12 @@ impl<'a> Ctx<'a> {
         if tps.is_empty() || input.is_empty() {
             return Ok(input);
         }
-        let bound: HashSet<Var> = input[0].iter().enumerate().filter(|(_, v)| v.is_some()).map(|(i, _)| i).collect();
+        let bound: HashSet<Var> = input[0]
+            .iter()
+            .enumerate()
+            .filter(|(_, v)| v.is_some())
+            .map(|(i, _)| i)
+            .collect();
         let order = self.order_bgp(tps, &bound);
         let graphs = self.graphs_for(g);
         let mut sols = input;
@@ -1172,7 +1354,12 @@ impl<'a> Ctx<'a> {
     /// Join many solutions with a plain triple pattern by scanning the pattern once and
     /// probing a hash table on the shared variables, instead of one index lookup per solution.
     /// None when the pattern or the solutions do not suit it (the caller then loops).
-    fn hash_join(&self, tp: &TriplePattern, sols: &[Sol], graphs: &Option<Vec<Id>>) -> R<Option<Vec<Sol>>> {
+    fn hash_join(
+        &self,
+        tp: &TriplePattern,
+        sols: &[Sol],
+        graphs: &Option<Vec<Id>>,
+    ) -> R<Option<Vec<Sol>>> {
         enum Pos {
             Const(Option<Id>),
             Var(Var),
@@ -1184,10 +1371,19 @@ impl<'a> Ctx<'a> {
         };
         let p = match &tp.p {
             Predicate::Var(v) => Pos::Var(*v),
-            Predicate::Path(Path::Iri(i)) if i != ONTO_FTS && !i.starts_with(RDF_RANK) && !i.starts_with(KNN) && !i.starts_with(crate::connector::NAMESPACE) => Pos::Const(self.lookup_iri(i)),
+            Predicate::Path(Path::Iri(i))
+                if i != ONTO_FTS
+                    && !i.starts_with(RDF_RANK)
+                    && !i.starts_with(KNN)
+                    && !i.starts_with(crate::connector::NAMESPACE) =>
+            {
+                Pos::Const(self.lookup_iri(i))
+            }
             _ => return Ok(None),
         };
-        let (Some(s), Some(o)) = (pos(&tp.s), pos(&tp.o)) else { return Ok(None) };
+        let (Some(s), Some(o)) = (pos(&tp.s), pos(&tp.o)) else {
+            return Ok(None);
+        };
         let positions = [s, p, o];
         if positions.iter().any(|x| matches!(x, Pos::Const(None))) {
             return Ok(Some(Vec::new()));
@@ -1209,7 +1405,13 @@ impl<'a> Ctx<'a> {
         if !vars.iter().any(|v| v.2) {
             return Ok(None); // nothing shared: a cross product either way
         }
-        let constant = |i: usize| if let Pos::Const(c) = positions[i] { c } else { None };
+        let constant = |i: usize| {
+            if let Pos::Const(c) = positions[i] {
+                c
+            } else {
+                None
+            }
+        };
         // scanning a row costs a small fraction of an index lookup, but a pattern far larger
         // than the solutions is better probed per solution: give up early
         let limit = sols.len() * 16;
@@ -1248,7 +1450,9 @@ impl<'a> Ctx<'a> {
         let probe = |part: &[Sol]| -> Vec<Sol> {
             let mut out = Vec::new();
             for s in part {
-                let Some(matches) = table.get(&key_of(&|_, v| s[v].unwrap_or(0))) else { continue };
+                let Some(matches) = table.get(&key_of(&|_, v| s[v].unwrap_or(0))) else {
+                    continue;
+                };
                 for &r in matches {
                     let mut next = s.clone();
                     for &(i, v, bound) in &vars {
@@ -1263,13 +1467,21 @@ impl<'a> Ctx<'a> {
         };
         self.check_time()?;
         // large probes are split over the cores (the table is shared, read only)
-        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(8);
         if sols.len() < PARALLEL_PROBE || threads < 2 {
             return Ok(Some(probe(sols)));
         }
         let parts: Vec<Vec<Sol>> = std::thread::scope(|sc| {
-            let handles: Vec<_> = sols.chunks(sols.len().div_ceil(threads)).map(|part| sc.spawn(|| probe(part))).collect();
-            handles.into_iter().map(|h| h.join().expect("probe thread")).collect()
+            let handles: Vec<_> = sols
+                .chunks(sols.len().div_ceil(threads))
+                .map(|part| sc.spawn(|| probe(part)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("probe thread"))
+                .collect()
         });
         let mut out = Vec::with_capacity(parts.iter().map(Vec::len).sum());
         for p in parts {
@@ -1279,7 +1491,11 @@ impl<'a> Ctx<'a> {
     }
 
     fn fts_prepared(&self, query: &str) -> std::rc::Rc<crate::store::FtsPrepared> {
-        self.fts.borrow_mut().entry(query.to_string()).or_insert_with(|| std::rc::Rc::new(self.store.fts_prepare(query))).clone()
+        self.fts
+            .borrow_mut()
+            .entry(query.to_string())
+            .or_insert_with(|| std::rc::Rc::new(self.store.fts_prepare(query)))
+            .clone()
     }
 
     /// `g:ftsScore(?literal, "query")` (BM25) and `g:ftsHighlight(?literal, "query" [, pre, post])`.
@@ -1290,7 +1506,11 @@ impl<'a> Ctx<'a> {
         if name.ends_with("ftsScore") {
             return Some(func::Num::Double(self.store.fts_score(&p, l)?).to_term());
         }
-        let arg = |i: usize, default: &str| args.get(i).and_then(|a| a.as_ref()).map_or(default.to_string(), |t| t.value().to_string());
+        let arg = |i: usize, default: &str| {
+            args.get(i)
+                .and_then(|a| a.as_ref())
+                .map_or(default.to_string(), |t| t.value().to_string())
+        };
         let lang = crate::fts::lang_of(l.lang.as_deref());
         // the words of whichever form of the query matched (the typo-tolerant one as a fallback)
         let query = p.matching(&crate::fts::Doc::new(&l.value, lang));
@@ -1307,17 +1527,26 @@ impl<'a> Ctx<'a> {
             return Err("g:fts needs a literal query string as its object".into());
         };
         if !self.store.fts_enabled() {
-            return Err("Full-text search is not enabled for this repository (set enableFtsIndex)".into());
+            return Err(
+                "Full-text search is not enabled for this repository (set enableFtsIndex)".into(),
+            );
         }
         match self.ground(&tp.s, s) {
             Some(Term::Literal(l)) => {
-                if self.store.fts_score(&self.fts_prepared(&q.value), &l).is_some() {
+                if self
+                    .store
+                    .fts_score(&self.fts_prepared(&q.value), &l)
+                    .is_some()
+                {
                     out.push(s.clone());
                 }
             }
             Some(_) => {}
             None => {
-                for (id, _) in self.store.search_prepared(&self.fts_prepared(&q.value), usize::MAX) {
+                for (id, _) in self
+                    .store
+                    .search_prepared(&self.fts_prepared(&q.value), usize::MAX)
+                {
                     let mut n = s.clone();
                     if self.bind(&mut n, &tp.s, id) {
                         out.push(n);
@@ -1331,13 +1560,31 @@ impl<'a> Ctx<'a> {
     /// `?node rank:score ?rank` (optionally with N decimal digits).
     /// `?e <http://graphrd.org/connector/NAME> "query"`: the entities the search engine behind
     /// connector NAME finds, best first (see `connector`).
-    fn match_connector(&self, tp: &TriplePattern, s: &Sol, name: &str, out: &mut Vec<Sol>) -> R<()> {
-        let conn = self.store.connectors.read().unwrap_or_else(|e| e.into_inner()).get(name).cloned().ok_or_else(|| format!("No search connector {name} in this repository"))?;
+    fn match_connector(
+        &self,
+        tp: &TriplePattern,
+        s: &Sol,
+        name: &str,
+        out: &mut Vec<Sol>,
+    ) -> R<()> {
+        let conn = self
+            .store
+            .connectors
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("No search connector {name} in this repository"))?;
         let Some(Term::Literal(q)) = self.ground(&tp.o, s) else {
-            return Err(format!("connector {name} needs a query string as its object"));
+            return Err(format!(
+                "connector {name} needs a query string as its object"
+            ));
         };
         let hits = conn.def.search(&q.value, 1000)?;
-        let ids: Vec<Id> = hits.iter().filter_map(|(iri, _)| self.lookup(&Term::Iri(iri.clone()))).collect();
+        let ids: Vec<Id> = hits
+            .iter()
+            .filter_map(|(iri, _)| self.lookup(&Term::Iri(iri.clone())))
+            .collect();
         match self.resolve(&tp.s, s) {
             Ok(Some(id)) => {
                 if ids.contains(&id) {
@@ -1359,7 +1606,10 @@ impl<'a> Ctx<'a> {
 
     /// `?v g:knnN ?q`: the N vector literals nearest to the vector `?q` (bound or constant).
     fn match_knn(&self, tp: &TriplePattern, s: &Sol, k: usize, out: &mut Vec<Sol>) -> R<()> {
-        let q = self.ground(&tp.o, s).and_then(|t| crate::vector::parse(&t)).ok_or("g:knn needs a vector (\"[0.1, 0.2, ...]\"^^g:vector) as its object")?;
+        let q = self
+            .ground(&tp.o, s)
+            .and_then(|t| crate::vector::parse(&t))
+            .ok_or("g:knn needs a vector (\"[0.1, 0.2, ...]\"^^g:vector) as its object")?;
         let found = self.store.nearest_vectors(&q, k);
         match self.resolve(&tp.s, s) {
             Ok(Some(id)) => {
@@ -1380,7 +1630,13 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
-    fn match_rank(&self, tp: &TriplePattern, s: &Sol, digits: Option<usize>, out: &mut Vec<Sol>) -> R<()> {
+    fn match_rank(
+        &self,
+        tp: &TriplePattern,
+        s: &Sol,
+        digits: Option<usize>,
+        out: &mut Vec<Sol>,
+    ) -> R<()> {
         let value = |r: f32| {
             let r = match digits {
                 Some(d) => (r as f64 * 10f64.powi(d as i32)).round() / 10f64.powi(d as i32),
@@ -1411,7 +1667,13 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
-    fn match_triple(&self, tp: &TriplePattern, s: &Sol, graphs: &Option<Vec<Id>>, out: &mut Vec<Sol>) -> R<()> {
+    fn match_triple(
+        &self,
+        tp: &TriplePattern,
+        s: &Sol,
+        graphs: &Option<Vec<Id>>,
+        out: &mut Vec<Sol>,
+    ) -> R<()> {
         if let Predicate::Path(Path::Iri(i)) = &tp.p {
             if i == ONTO_FTS {
                 return self.match_fts(tp, s, out);
@@ -1440,9 +1702,17 @@ impl<'a> Ctx<'a> {
                 let local = |vt: &VarOrTerm| match vt {
                     VarOrTerm::Term(t) => Ok(Some(self.intern(t))),
                     // a variable bound to a term that is not in the graph matches nothing
-                    _ => self.resolve(vt, s).and_then(|id| if id.is_some_and(|x| x >= LOCAL) { Err(()) } else { Ok(id) }),
+                    _ => self.resolve(vt, s).and_then(|id| {
+                        if id.is_some_and(|x| x >= LOCAL) {
+                            Err(())
+                        } else {
+                            Ok(id)
+                        }
+                    }),
                 };
-                let (Ok(sid), Ok(oid)) = (local(&tp.s), local(&tp.o)) else { return Ok(()) };
+                let (Ok(sid), Ok(oid)) = (local(&tp.s), local(&tp.o)) else {
+                    return Ok(());
+                };
                 for (a, b) in self.path(path, sid, oid, graphs)? {
                     let mut n = s.clone();
                     if self.bind(&mut n, &tp.s, a) && self.bind(&mut n, &tp.o, b) {
@@ -1452,8 +1722,12 @@ impl<'a> Ctx<'a> {
                 return Ok(());
             }
         }
-        let Ok(sid) = self.resolve(&tp.s, s) else { return Ok(()) };
-        let Ok(oid) = self.resolve(&tp.o, s) else { return Ok(()) };
+        let Ok(sid) = self.resolve(&tp.s, s) else {
+            return Ok(());
+        };
+        let Ok(oid) = self.resolve(&tp.o, s) else {
+            return Ok(());
+        };
         if sid.is_some_and(|x| x >= LOCAL) || oid.is_some_and(|x| x >= LOCAL) {
             return Ok(()); // local terms never occur in the store
         }
@@ -1473,7 +1747,10 @@ impl<'a> Ctx<'a> {
                 // returns the number of solutions so far
                 let mut emit = |q: [Id; 4]| {
                     let mut n = s.clone();
-                    if self.bind(&mut n, &tp.s, q[0]) && bind_pred(&mut n, &tp.p, q[1]) && self.bind(&mut n, &tp.o, q[2]) {
+                    if self.bind(&mut n, &tp.s, q[0])
+                        && bind_pred(&mut n, &tp.p, q[1])
+                        && self.bind(&mut n, &tp.o, q[2])
+                    {
                         out.push(n);
                     }
                     out.len()
@@ -1484,17 +1761,24 @@ impl<'a> Ctx<'a> {
                         None => self.scan(sid, pid, oid, None).for_each(|q| {
                             emit(q);
                         }),
-                        Some(gs) if gs.len() == 1 => self.scan(sid, pid, oid, Some(gs[0])).for_each(|q| {
-                            emit(q);
-                        }),
-                        _ => self.scan_graphs(sid, pid, oid, graphs).into_iter().for_each(|q| {
-                            emit(q);
-                        }),
+                        Some(gs) if gs.len() == 1 => {
+                            self.scan(sid, pid, oid, Some(gs[0])).for_each(|q| {
+                                emit(q);
+                            })
+                        }
+                        _ => self
+                            .scan_graphs(sid, pid, oid, graphs)
+                            .into_iter()
+                            .for_each(|q| {
+                                emit(q);
+                            }),
                     }
                 } else {
                     let scan: Box<dyn Iterator<Item = [Id; 4]>> = match graphs {
                         None => Box::new(self.scan(sid, pid, oid, None)),
-                        Some(gs) if gs.len() == 1 => Box::new(self.scan(sid, pid, oid, Some(gs[0]))),
+                        Some(gs) if gs.len() == 1 => {
+                            Box::new(self.scan(sid, pid, oid, Some(gs[0])))
+                        }
                         _ => Box::new(self.scan_graphs(sid, pid, oid, graphs).into_iter()),
                     };
                     for q in scan {
@@ -1516,22 +1800,53 @@ impl<'a> Ctx<'a> {
         Ok(())
     }
 
-    fn step(&self, p: &str, s: Option<Id>, o: Option<Id>, graphs: &Option<Vec<Id>>) -> Vec<(Id, Id)> {
-        let Some(pid) = self.lookup_iri(p) else { return Vec::new() };
+    fn step(
+        &self,
+        p: &str,
+        s: Option<Id>,
+        o: Option<Id>,
+        graphs: &Option<Vec<Id>>,
+    ) -> Vec<(Id, Id)> {
+        let Some(pid) = self.lookup_iri(p) else {
+            return Vec::new();
+        };
         match graphs {
-            None => self.scan(s, Some(pid), o, None).map(|q| (q[0], q[2])).collect(),
-            _ => self.scan_graphs(s, Some(pid), o, graphs).into_iter().map(|q| (q[0], q[2])).collect(),
+            None => self
+                .scan(s, Some(pid), o, None)
+                .map(|q| (q[0], q[2]))
+                .collect(),
+            _ => self
+                .scan_graphs(s, Some(pid), o, graphs)
+                .into_iter()
+                .map(|q| (q[0], q[2]))
+                .collect(),
         }
     }
 
     /// Every edge of predicate `pid` as `(from << 32) | to`, sorted by `from`: the subject, or the
     /// object when walking `backwards`. `est` is about how many there are.
-    fn path_edges(&self, pid: Id, backwards: bool, graphs: &Option<Vec<Id>>, est: usize) -> Vec<u64> {
-        let pack = |q: [Id; 4]| if backwards { (q[2] as u64) << 32 | q[0] as u64 } else { (q[0] as u64) << 32 | q[2] as u64 };
+    fn path_edges(
+        &self,
+        pid: Id,
+        backwards: bool,
+        graphs: &Option<Vec<Id>>,
+        est: usize,
+    ) -> Vec<u64> {
+        let pack = |q: [Id; 4]| {
+            if backwards {
+                (q[2] as u64) << 32 | q[0] as u64
+            } else {
+                (q[0] as u64) << 32 | q[2] as u64
+            }
+        };
         let mut all = Vec::with_capacity(est + est / 8);
         match graphs {
             None => all.extend(self.scan(None, Some(pid), None, None).map(pack)),
-            _ => all.extend(self.scan_graphs(None, Some(pid), None, graphs).into_iter().map(pack)),
+            _ => all.extend(
+                self.scan_graphs(None, Some(pid), None, graphs)
+                    .into_iter()
+                    .map(pack),
+            ),
         }
         // the predicate's index is in object order, so a backward walk usually needs no sort
         if !all.is_sorted_by_key(|&x| x >> 32) {
@@ -1556,11 +1871,21 @@ impl<'a> Ctx<'a> {
     }
 
     /// All (start, end) pairs connected by `path`, honouring bound ends.
-    fn path(&self, path: &Path, s: Option<Id>, o: Option<Id>, graphs: &Option<Vec<Id>>) -> R<Vec<(Id, Id)>> {
+    fn path(
+        &self,
+        path: &Path,
+        s: Option<Id>,
+        o: Option<Id>,
+        graphs: &Option<Vec<Id>>,
+    ) -> R<Vec<(Id, Id)>> {
         self.check_time()?;
         Ok(match path {
             Path::Iri(p) => self.step(p, s, o, graphs),
-            Path::Inverse(inner) => self.path(inner, o, s, graphs)?.into_iter().map(|(a, b)| (b, a)).collect(),
+            Path::Inverse(inner) => self
+                .path(inner, o, s, graphs)?
+                .into_iter()
+                .map(|(a, b)| (b, a))
+                .collect(),
             Path::Alt(alts) => {
                 let mut out = Vec::new();
                 for a in alts {
@@ -1617,7 +1942,11 @@ impl<'a> Ctx<'a> {
                 let starts: Vec<(Id, bool)> = match (s, o) {
                     (Some(a), _) => vec![(a, false)],
                     (None, Some(b)) => vec![(b, true)],
-                    (None, None) => self.all_nodes(graphs).into_iter().map(|n| (n, false)).collect(),
+                    (None, None) => self
+                        .all_nodes(graphs)
+                        .into_iter()
+                        .map(|n| (n, false))
+                        .collect(),
                 };
                 let mut out = Vec::new();
                 // A walk over a plain predicate that reaches many nodes reads all its edges in one
@@ -1641,7 +1970,9 @@ impl<'a> Ctx<'a> {
                                 // much more than twice as long as the better of the two ways
                                 let est = self.store.estimate(None, Some(pid), None, None);
                                 if *lookups * SCAN_PER_LOOKUP >= est {
-                                    *e = Some(Edges::new(self.path_edges(pid, backwards, graphs, est)));
+                                    *e = Some(Edges::new(
+                                        self.path_edges(pid, backwards, graphs, est),
+                                    ));
                                 }
                             }
                             if let Some(e) = e {
@@ -1651,9 +1982,17 @@ impl<'a> Ctx<'a> {
                         }
                         *lookups += 1;
                         if backwards {
-                            found.extend(self.path(inner, None, Some(n), graphs)?.into_iter().map(|(a, _)| a));
+                            found.extend(
+                                self.path(inner, None, Some(n), graphs)?
+                                    .into_iter()
+                                    .map(|(a, _)| a),
+                            );
                         } else {
-                            found.extend(self.path(inner, Some(n), None, graphs)?.into_iter().map(|(_, b)| b));
+                            found.extend(
+                                self.path(inner, Some(n), None, graphs)?
+                                    .into_iter()
+                                    .map(|(_, b)| b),
+                            );
                         }
                         Ok(())
                     };
@@ -1684,16 +2023,34 @@ impl<'a> Ctx<'a> {
                 out
             }
             Path::Negated(set) => {
-                let fwd: HashSet<Id> = set.iter().filter(|(_, inv)| !inv).filter_map(|(i, _)| self.lookup_iri(i)).collect();
-                let inv: HashSet<Id> = set.iter().filter(|(_, inv)| *inv).filter_map(|(i, _)| self.lookup_iri(i)).collect();
+                let fwd: HashSet<Id> = set
+                    .iter()
+                    .filter(|(_, inv)| !inv)
+                    .filter_map(|(i, _)| self.lookup_iri(i))
+                    .collect();
+                let inv: HashSet<Id> = set
+                    .iter()
+                    .filter(|(_, inv)| *inv)
+                    .filter_map(|(i, _)| self.lookup_iri(i))
+                    .collect();
                 let has_fwd = set.iter().any(|(_, i)| !i) || set.is_empty();
                 let has_inv = set.iter().any(|(_, i)| *i);
                 let mut out = Vec::new();
                 if has_fwd {
-                    out.extend(self.scan_graphs(s, None, o, graphs).into_iter().filter(|q| !fwd.contains(&q[1])).map(|q| (q[0], q[2])));
+                    out.extend(
+                        self.scan_graphs(s, None, o, graphs)
+                            .into_iter()
+                            .filter(|q| !fwd.contains(&q[1]))
+                            .map(|q| (q[0], q[2])),
+                    );
                 }
                 if has_inv {
-                    out.extend(self.scan_graphs(o, None, s, graphs).into_iter().filter(|q| !inv.contains(&q[1])).map(|q| (q[2], q[0])));
+                    out.extend(
+                        self.scan_graphs(o, None, s, graphs)
+                            .into_iter()
+                            .filter(|q| !inv.contains(&q[1]))
+                            .map(|q| (q[2], q[0])),
+                    );
                 }
                 out
             }
@@ -1752,7 +2109,11 @@ impl<'a> Ctx<'a> {
                         None => error = true,
                     }
                 }
-                if error { None } else { Some(Term::boolean(*negated)) }
+                if error {
+                    None
+                } else {
+                    Some(Term::boolean(*negated))
+                }
             }
             Expr::Arith(op, a, b) => {
                 let x = func::num(&self.expr(a, s, g)?)?;
@@ -1777,13 +2138,21 @@ impl<'a> Ctx<'a> {
                 "BNODE" if args.len() == 1 => {
                     let label = func::string_lit(&self.expr(&args[0], s, g)?)?.0.to_string();
                     let row = self.row.borrow().clone().unwrap_or_else(|| s.clone());
-                    Some(self.bnodes.borrow_mut().entry((row, label)).or_insert_with(Term::fresh_blank).clone())
+                    Some(
+                        self.bnodes
+                            .borrow_mut()
+                            .entry((row, label))
+                            .or_insert_with(Term::fresh_blank)
+                            .clone(),
+                    )
                 }
                 "http://graphrd.org/fn#similarity" => {
                     // cosine similarity of two vectors (literals of numbers)
                     let a = crate::vector::parse(&self.expr(args.first()?, s, g)?)?;
                     let b = crate::vector::parse(&self.expr(args.get(1)?, s, g)?)?;
-                    crate::vector::cosine(&a, &b).map(|x| Term::typed(format!("{x}"), "http://www.w3.org/2001/XMLSchema#double"))
+                    crate::vector::cosine(&a, &b).map(|x| {
+                        Term::typed(format!("{x}"), "http://www.w3.org/2001/XMLSchema#double")
+                    })
                 }
                 "http://graphrd.org/fn#ftsScore" | "http://graphrd.org/fn#ftsHighlight" => {
                     let vals: Vec<Option<Term>> = args.iter().map(|a| self.expr(a, s, g)).collect();
@@ -1806,20 +2175,36 @@ impl<'a> Ctx<'a> {
 
     /// A query evaluated against the active graph `g` (a subquery inside GRAPH sees that graph).
     fn select_in(&self, q: &Query, g: Active, seed: Option<&Sol>) -> R<(Vec<Var>, Vec<Sol>)> {
-        let counted = if seed.is_some() { None } else { self.count_one_pattern(q, g)? };
+        let counted = if seed.is_some() {
+            None
+        } else {
+            self.count_one_pattern(q, g)?
+        };
         let mut sols = match counted {
             Some(grouped) => grouped,
             None => {
                 // only the first OFFSET + LIMIT solutions of an unordered, ungrouped,
                 // non-DISTINCT query (without a trailing VALUES, which joins later) are kept
-                let plain = q.aggregates.is_empty() && q.group_by.is_empty() && q.having.is_empty() && q.order_by.is_empty() && q.values.is_none();
-                let distinct = matches!(&q.form, Form::Select { distinct: true, .. } | Form::Select { reduced: true, .. });
+                let plain = q.aggregates.is_empty()
+                    && q.group_by.is_empty()
+                    && q.having.is_empty()
+                    && q.order_by.is_empty()
+                    && q.values.is_none();
+                let distinct = matches!(
+                    &q.form,
+                    Form::Select { distinct: true, .. } | Form::Select { reduced: true, .. }
+                );
                 let cap = match q.limit {
                     Some(l) if plain && !distinct => q.offset.saturating_add(l),
                     _ => usize::MAX,
                 };
-                let sols = self.eval_capped(&q.pattern, g, seed.unwrap_or(&self.empty_sol()), cap)?;
-                if !q.aggregates.is_empty() || !q.group_by.is_empty() { self.group(q, sols)? } else { sols }
+                let sols =
+                    self.eval_capped(&q.pattern, g, seed.unwrap_or(&self.empty_sol()), cap)?;
+                if !q.aggregates.is_empty() || !q.group_by.is_empty() {
+                    self.group(q, sols)?
+                } else {
+                    sols
+                }
             }
         };
         for h in &q.having {
@@ -1879,7 +2264,10 @@ impl<'a> Ctx<'a> {
                 p
             })
             .collect();
-        if let Form::Select { distinct, reduced, .. } = &q.form {
+        if let Form::Select {
+            distinct, reduced, ..
+        } = &q.form
+        {
             if *distinct || *reduced {
                 let mut seen = HashSet::new();
                 projected.retain(|s| seen.insert(vars.iter().map(|&v| s[v]).collect::<Vec<_>>()));
@@ -1931,10 +2319,17 @@ impl<'a> Ctx<'a> {
             if *desc0 { o.reverse() } else { o }
         };
         // (with DISTINCT, rows past the limit may be needed after duplicates go)
-        let distinct = matches!(&q.form, Form::Select { distinct: true, .. } | Form::Select { reduced: true, .. });
+        let distinct = matches!(
+            &q.form,
+            Form::Select { distinct: true, .. } | Form::Select { reduced: true, .. }
+        );
         let mut rows: Vec<(u32, Sol)> = idx.into_iter().zip(sols).collect();
         let mut used: Vec<u32> = (0..vals.len() as u32).collect();
-        if let Some(k) = q.limit.map(|l| q.offset.saturating_add(l)).filter(|_| !distinct) {
+        if let Some(k) = q
+            .limit
+            .map(|l| q.offset.saturating_add(l))
+            .filter(|_| !distinct)
+        {
             if k == 0 {
                 return Vec::new();
             }
@@ -1961,7 +2356,15 @@ impl<'a> Ctx<'a> {
         let rest = &q.order_by[1..];
         let mut keyed: Vec<(u32, Vec<Option<Term>>, Sol)> = rows
             .into_iter()
-            .map(|(i, s)| (rank[i as usize], rest.iter().map(|(e, _)| self.expr(e, &s, Active::Default)).collect(), s))
+            .map(|(i, s)| {
+                (
+                    rank[i as usize],
+                    rest.iter()
+                        .map(|(e, _)| self.expr(e, &s, Active::Default))
+                        .collect(),
+                    s,
+                )
+            })
             .collect();
         keyed.sort_by(|a, b| {
             a.0.cmp(&b.0).then_with(|| {
@@ -1995,11 +2398,18 @@ impl<'a> Ctx<'a> {
         if let Some((e, _)) = filter {
             spatial_calls(e, &mut spatial);
         }
-        if spatial.iter().any(|(name, _, radius)| crate::geo::indexable(name, *radius)) {
+        if spatial
+            .iter()
+            .any(|(name, _, radius)| crate::geo::indexable(name, *radius))
+        {
             return Ok(None);
         }
-        let Pattern::Bgp(tps) = pattern else { return Ok(None) };
-        let [tp] = tps.as_slice() else { return Ok(None) };
+        let Pattern::Bgp(tps) = pattern else {
+            return Ok(None);
+        };
+        let [tp] = tps.as_slice() else {
+            return Ok(None);
+        };
         if q.aggregates.is_empty() || q.aggregates.iter().any(|a| a.func != "COUNT") {
             return Ok(None);
         }
@@ -2015,12 +2425,31 @@ impl<'a> Ctx<'a> {
         };
         let p = match &tp.p {
             Predicate::Var(v) => Pos::Var(*v),
-            Predicate::Path(Path::Iri(i)) if i != ONTO_FTS && !i.starts_with(RDF_RANK) && !i.starts_with(KNN) && !i.starts_with(crate::connector::NAMESPACE) => Pos::Const(self.lookup_iri(i)),
+            Predicate::Path(Path::Iri(i))
+                if i != ONTO_FTS
+                    && !i.starts_with(RDF_RANK)
+                    && !i.starts_with(KNN)
+                    && !i.starts_with(crate::connector::NAMESPACE) =>
+            {
+                Pos::Const(self.lookup_iri(i))
+            }
             _ => return Ok(None),
         };
-        let (Some(s), Some(o)) = (pos(&tp.s), pos(&tp.o)) else { return Ok(None) };
+        let (Some(s), Some(o)) = (pos(&tp.s), pos(&tp.o)) else {
+            return Ok(None);
+        };
         let positions = [s, p, o];
-        let vars: Vec<(usize, Var)> = positions.iter().enumerate().filter_map(|(i, x)| if let Pos::Var(v) = x { Some((i, *v)) } else { None }).collect();
+        let vars: Vec<(usize, Var)> = positions
+            .iter()
+            .enumerate()
+            .filter_map(|(i, x)| {
+                if let Pos::Var(v) = x {
+                    Some((i, *v))
+                } else {
+                    None
+                }
+            })
+            .collect();
         if (0..vars.len()).any(|i| vars[i + 1..].iter().any(|w| w.1 == vars[i].1)) {
             return Ok(None); // a repeated variable constrains the match
         }
@@ -2062,8 +2491,21 @@ impl<'a> Ctx<'a> {
         if !missing {
             let graphs = self.graphs_for(g);
             let rows: Box<dyn Iterator<Item = [Id; 4]>> = match &graphs {
-                None => self.scan(id(&positions[0]), id(&positions[1]), id(&positions[2]), None),
-                Some(_) => Box::new(self.scan_graphs(id(&positions[0]), id(&positions[1]), id(&positions[2]), &graphs).into_iter()),
+                None => self.scan(
+                    id(&positions[0]),
+                    id(&positions[1]),
+                    id(&positions[2]),
+                    None,
+                ),
+                Some(_) => Box::new(
+                    self.scan_graphs(
+                        id(&positions[0]),
+                        id(&positions[1]),
+                        id(&positions[2]),
+                        &graphs,
+                    )
+                    .into_iter(),
+                ),
             };
             let mut probe = self.empty_sol();
             let mut memo: HashMap<Id, bool> = HashMap::new();
@@ -2094,7 +2536,11 @@ impl<'a> Ctx<'a> {
                         probe[v] = Some(id);
                         self.filter(e, &probe, g)
                     };
-                    let pass = if use_memo { *memo.entry(row[i]).or_insert_with(|| test(row[i])) } else { test(row[i]) };
+                    let pass = if use_memo {
+                        *memo.entry(row[i]).or_insert_with(|| test(row[i]))
+                    } else {
+                        test(row[i])
+                    };
                     if !pass {
                         continue;
                     }
@@ -2104,7 +2550,9 @@ impl<'a> Ctx<'a> {
                     Some(e) => e,
                     None => {
                         order.push(key.clone());
-                        groups.entry(key).or_insert_with(|| (0, vec![HashSet::new(); agg_slots.len()]))
+                        groups
+                            .entry(key)
+                            .or_insert_with(|| (0, vec![HashSet::new(); agg_slots.len()]))
                     }
                 };
                 entry.0 += 1;
@@ -2130,7 +2578,11 @@ impl<'a> Ctx<'a> {
             }
             for (k, (a, &hv)) in q.aggregates.iter().zip(&q.agg_vars).enumerate() {
                 // the matched triples are distinct, so COUNT(DISTINCT *) counts rows
-                let n = if a.distinct && agg_slots[k].is_some() { distinct[k].len() as u64 } else { *rows };
+                let n = if a.distinct && agg_slots[k].is_some() {
+                    distinct[k].len() as u64
+                } else {
+                    *rows
+                };
                 sol[hv] = Some(self.intern(&Term::integer(n as i64)));
             }
             out.push(sol);
@@ -2197,7 +2649,11 @@ impl<'a> Ctx<'a> {
             Some(Expr::Var(v)) if agg.func == "COUNT" => {
                 // COUNT(?x) / COUNT(DISTINCT ?x) on ids, without decoding terms
                 let n = if agg.distinct {
-                    members.iter().filter_map(|m| m[*v]).collect::<HashSet<_>>().len()
+                    members
+                        .iter()
+                        .filter_map(|m| m[*v])
+                        .collect::<HashSet<_>>()
+                        .len()
                 } else {
                     members.iter().filter(|m| m[*v].is_some()).count()
                 };
@@ -2265,7 +2721,12 @@ impl<'a> Ctx<'a> {
                         None => v,
                         Some(b) => {
                             let o = func::order_cmp(Some(&v), Some(&b));
-                            if (agg.func == "MIN" && o.is_lt()) || (agg.func == "MAX" && o.is_gt()) { v } else { b }
+                            if (agg.func == "MIN" && o.is_lt()) || (agg.func == "MAX" && o.is_gt())
+                            {
+                                v
+                            } else {
+                                b
+                            }
                         }
                     });
                 }
@@ -2273,47 +2734,86 @@ impl<'a> Ctx<'a> {
             }
             "SAMPLE" => values.into_iter().next(),
             "GROUP_CONCAT" => {
-                let parts: Option<Vec<String>> = values.iter().map(|v| func::string_lit(v).map(|(s, _)| s.to_string()).or_else(|| v.as_literal().map(|l| l.value.clone()))).collect();
+                let parts: Option<Vec<String>> = values
+                    .iter()
+                    .map(|v| {
+                        func::string_lit(v)
+                            .map(|(s, _)| s.to_string())
+                            .or_else(|| v.as_literal().map(|l| l.value.clone()))
+                    })
+                    .collect();
                 Some(Term::string(parts?.join(&agg.separator)))
             }
             _ => None,
         }
     }
 
-/// Evaluate a pattern from the empty solution; graph `with` when given.
+    /// Evaluate a pattern from the empty solution; graph `with` when given.
     pub fn query(&self, q: &Query) -> R<QueryResult> {
         self.prefetch_services(&q.pattern);
         match &q.form {
             Form::Select { .. } => {
                 let (vars, sols) = self.select(q)?;
-                let rows = sols.iter().map(|s| vars.iter().map(|&v| s[v].map(|id| self.term(id))).collect()).collect();
-                Ok(QueryResult::Solutions { vars: vars.iter().map(|&v| self.vars.names[v].clone()).collect(), rows })
+                let rows = sols
+                    .iter()
+                    .map(|s| vars.iter().map(|&v| s[v].map(|id| self.term(id))).collect())
+                    .collect();
+                Ok(QueryResult::Solutions {
+                    vars: vars.iter().map(|&v| self.vars.names[v].clone()).collect(),
+                    rows,
+                })
             }
             Form::Ask => {
                 // through select(): a trailing VALUES joins with the pattern
-                let (_, sols) = self.select(&Query { form: Form::Select { distinct: false, reduced: false, projection: None }, limit: Some(1), ..q.clone() })?;
+                let (_, sols) = self.select(&Query {
+                    form: Form::Select {
+                        distinct: false,
+                        reduced: false,
+                        projection: None,
+                    },
+                    limit: Some(1),
+                    ..q.clone()
+                })?;
                 Ok(QueryResult::Boolean(!sols.is_empty()))
             }
             Form::Construct(template) => {
                 // every variable, hidden ones included (reifiers and blank nodes of CONSTRUCT WHERE)
                 let all = Some((0..self.nvars).map(|v| (None, v)).collect());
-                let (_, sols) = self.select(&Query { form: Form::Select { distinct: false, reduced: false, projection: all }, ..q.clone() })?;
+                let (_, sols) = self.select(&Query {
+                    form: Form::Select {
+                        distinct: false,
+                        reduced: false,
+                        projection: all,
+                    },
+                    ..q.clone()
+                })?;
                 let mut seen = HashSet::new();
                 let mut out = Vec::new();
                 for s in &sols {
                     let mut bnodes: HashMap<String, Term> = HashMap::new();
                     for tp in template {
-                        let inst = |vt: &VarOrTerm, bnodes: &mut HashMap<String, Term>| self.inst(vt, s, bnodes);
+                        let inst = |vt: &VarOrTerm, bnodes: &mut HashMap<String, Term>| {
+                            self.inst(vt, s, bnodes)
+                        };
                         let p = match &tp.p {
                             Predicate::Var(v) => s[*v].map(|id| self.term(id)),
                             Predicate::Path(Path::Iri(i)) => Some(Term::Iri(i.clone())),
                             _ => None,
                         };
-                        let (Some(subj), Some(pred), Some(obj)) = (inst(&tp.s, &mut bnodes), p, inst(&tp.o, &mut bnodes)) else { continue };
+                        let (Some(subj), Some(pred), Some(obj)) =
+                            (inst(&tp.s, &mut bnodes), p, inst(&tp.o, &mut bnodes))
+                        else {
+                            continue;
+                        };
                         if subj.is_literal() || !pred.is_iri() {
                             continue;
                         }
-                        let quad = Quad { s: subj, p: pred, o: obj, g: None };
+                        let quad = Quad {
+                            s: subj,
+                            p: pred,
+                            o: obj,
+                            g: None,
+                        };
                         if seen.insert(quad.clone()) {
                             out.push(quad);
                         }
@@ -2325,7 +2825,15 @@ impl<'a> Ctx<'a> {
                 let sols = if matches!(q.pattern, Pattern::Bgp(ref b) if b.is_empty()) {
                     vec![self.empty_sol()]
                 } else {
-                    self.select(&Query { form: Form::Select { distinct: false, reduced: false, projection: None }, ..q.clone() })?.1
+                    self.select(&Query {
+                        form: Form::Select {
+                            distinct: false,
+                            reduced: false,
+                            projection: None,
+                        },
+                        ..q.clone()
+                    })?
+                    .1
                 };
                 let mut resources = Vec::new();
                 for t in targets {
@@ -2351,7 +2859,12 @@ impl<'a> Ctx<'a> {
                     }
                     let Some(id) = self.lookup(&r) else { continue };
                     for qd in self.scan(Some(id), None, None, None) {
-                        let quad = Quad { s: self.term(qd[0]), p: self.term(qd[1]), o: self.term(qd[2]), g: None };
+                        let quad = Quad {
+                            s: self.term(qd[0]),
+                            p: self.term(qd[1]),
+                            o: self.term(qd[2]),
+                            g: None,
+                        };
                         if quad.o.is_blank() {
                             queue.push_back(quad.o.clone());
                         }
@@ -2368,13 +2881,21 @@ impl<'a> Ctx<'a> {
     // ------------------------------------------------------------ updates
 
     /// Instantiate quad templates for every solution.
-    pub fn instantiate(&self, templates: &[QuadPattern], sols: &[Sol], with: Option<&Term>) -> Vec<Quad> {
+    pub fn instantiate(
+        &self,
+        templates: &[QuadPattern],
+        sols: &[Sol],
+        with: Option<&Term>,
+    ) -> Vec<Quad> {
         let mut out = Vec::new();
         for s in sols {
             let mut bnodes: HashMap<String, Term> = HashMap::new();
             for t in templates {
                 let mut inst = |vt: &VarOrTerm| self.inst(vt, s, &mut bnodes);
-                let (Some(subj), Some(pred), Some(obj)) = (inst(&t.s), inst(&t.p), inst(&t.o)) else { continue };
+                let (Some(subj), Some(pred), Some(obj)) = (inst(&t.s), inst(&t.p), inst(&t.o))
+                else {
+                    continue;
+                };
                 let g = match &t.g {
                     Some(g) => match inst(g) {
                         Some(g @ Term::Iri(_)) => Some(g),
@@ -2385,13 +2906,18 @@ impl<'a> Ctx<'a> {
                 if subj.is_literal() || !pred.is_iri() {
                     continue;
                 }
-                out.push(Quad { s: subj, p: pred, o: obj, g });
+                out.push(Quad {
+                    s: subj,
+                    p: pred,
+                    o: obj,
+                    g,
+                });
             }
         }
         out
     }
 
-/// Evaluate a pattern from the empty solution in the default graph.
+    /// Evaluate a pattern from the empty solution in the default graph.
     pub fn eval_where(&self, p: &Pattern, with: Option<&Term>) -> R<Vec<Sol>> {
         if let Some(w) = with {
             match self.lookup(w) {
@@ -2412,7 +2938,9 @@ fn spatial_calls<'e>(e: &'e Expr, out: &mut Vec<(&'e str, &'e [Expr], Option<f64
             spatial_calls(a, out);
             spatial_calls(b, out);
         }
-        Expr::Call(name, args) if name.starts_with(crate::geo::GEOF) && args.len() >= 2 => out.push((name, args, None)),
+        Expr::Call(name, args) if name.starts_with(crate::geo::GEOF) && args.len() >= 2 => {
+            out.push((name, args, None))
+        }
         Expr::Cmp(CmpOp::Lt | CmpOp::Le, call, r) | Expr::Cmp(CmpOp::Gt | CmpOp::Ge, r, call) => {
             if let (Expr::Call(name, args), Expr::Const(t)) = (&**call, &**r) {
                 if name.starts_with(crate::geo::GEOF) && args.len() >= 2 {
@@ -2468,7 +2996,8 @@ fn join(left: Vec<Sol>, right: Vec<Sol>) -> Vec<Sol> {
     }
     // Hash join on a variable bound in every solution of both sides.
     let n = left[0].len();
-    let key = (0..n).find(|&v| left.iter().all(|s| s[v].is_some()) && right.iter().all(|s| s[v].is_some()));
+    let key = (0..n)
+        .find(|&v| left.iter().all(|s| s[v].is_some()) && right.iter().all(|s| s[v].is_some()));
     let mut out = Vec::new();
     match key {
         Some(k) => {
@@ -2543,7 +3072,10 @@ pub fn visible_vars(p: &Pattern, vars: &VarTable) -> Vec<Var> {
                 }
             }
             Pattern::SubSelect(q) => match &q.form {
-                Form::Select { projection: Some(p), .. } => {
+                Form::Select {
+                    projection: Some(p),
+                    ..
+                } => {
                     for (_, v) in p {
                         add(*v, out);
                     }
@@ -2582,11 +3114,13 @@ pub fn quads_to_pattern(quads: &[QuadPattern]) -> Pattern {
     }
     let mut p = Pattern::Bgp(default);
     for (g, tps) in graphs {
-        p = Pattern::Join(Box::new(p), Box::new(Pattern::Graph(g, Box::new(Pattern::Bgp(tps)))));
+        p = Pattern::Join(
+            Box::new(p),
+            Box::new(Pattern::Graph(g, Box::new(Pattern::Bgp(tps)))),
+        );
     }
     p
 }
-
 
 // ------------------------------------------------------------------ explain
 
@@ -2599,20 +3133,44 @@ impl Ctx<'_> {
         let names = &self.vars.names;
         let v = |x: Var| format!("?{}", names.get(x).map(String::as_str).unwrap_or("_"));
         let head = match &q.form {
-            Form::Select { distinct, reduced, projection } => {
+            Form::Select {
+                distinct,
+                reduced,
+                projection,
+            } => {
                 let cols = match projection {
-                    Some(p) => p.iter().map(|(e, x)| match e {
-                        // an aggregate's hidden slot: show the aggregate itself
-                        Some(Expr::Var(h)) if q.agg_vars.contains(h) => {
-                            let a = &q.aggregates[q.agg_vars.iter().position(|y| y == h).unwrap()];
-                            format!("({}({}{}) AS {})", a.func, if a.distinct { "distinct " } else { "" }, a.expr.as_ref().map_or("*".into(), |e| self.expr_str(e)), v(*x))
-                        }
-                        Some(e) => format!("({} AS {})", self.expr_str(e), v(*x)),
-                        None => v(*x),
-                    }).collect::<Vec<_>>().join(" "),
+                    Some(p) => p
+                        .iter()
+                        .map(|(e, x)| match e {
+                            // an aggregate's hidden slot: show the aggregate itself
+                            Some(Expr::Var(h)) if q.agg_vars.contains(h) => {
+                                let a =
+                                    &q.aggregates[q.agg_vars.iter().position(|y| y == h).unwrap()];
+                                format!(
+                                    "({}({}{}) AS {})",
+                                    a.func,
+                                    if a.distinct { "distinct " } else { "" },
+                                    a.expr.as_ref().map_or("*".into(), |e| self.expr_str(e)),
+                                    v(*x)
+                                )
+                            }
+                            Some(e) => format!("({} AS {})", self.expr_str(e), v(*x)),
+                            None => v(*x),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" "),
                     None => "*".into(),
                 };
-                format!("Select{} {cols}", if *distinct { " distinct" } else if *reduced { " reduced" } else { "" })
+                format!(
+                    "Select{} {cols}",
+                    if *distinct {
+                        " distinct"
+                    } else if *reduced {
+                        " reduced"
+                    } else {
+                        ""
+                    }
+                )
             }
             Form::Construct(t) => format!("Construct ({} template patterns)", t.len()),
             Form::Ask => "Ask".into(),
@@ -2621,15 +3179,40 @@ impl Ctx<'_> {
         out.push_str(&head);
         out.push('\n');
         let mut depth = 1;
-        let line = |out: &mut String, d: usize, s: String| { out.push_str(&"  ".repeat(d)); out.push_str(&s); out.push('\n'); };
+        let line = |out: &mut String, d: usize, s: String| {
+            out.push_str(&"  ".repeat(d));
+            out.push_str(&s);
+            out.push('\n');
+        };
         if q.limit.is_some() || q.offset > 0 {
-            line(&mut out, depth, format!("Slice offset {} limit {}", q.offset, q.limit.map_or("none".into(), |l| l.to_string())));
+            line(
+                &mut out,
+                depth,
+                format!(
+                    "Slice offset {} limit {}",
+                    q.offset,
+                    q.limit.map_or("none".into(), |l| l.to_string())
+                ),
+            );
             depth += 1;
         }
         if !q.order_by.is_empty() {
-            let keys: Vec<String> = q.order_by.iter().map(|(e, desc)| format!("{}{}", if *desc { "desc " } else { "" }, self.expr_str(e))).collect();
-            let topk = q.limit.map(|l| format!(" (partial sort: top {})", q.offset + l)).unwrap_or_default();
-            line(&mut out, depth, format!("OrderBy {}{topk}", keys.join(", ")));
+            let keys: Vec<String> = q
+                .order_by
+                .iter()
+                .map(|(e, desc)| {
+                    format!("{}{}", if *desc { "desc " } else { "" }, self.expr_str(e))
+                })
+                .collect();
+            let topk = q
+                .limit
+                .map(|l| format!(" (partial sort: top {})", q.offset + l))
+                .unwrap_or_default();
+            line(
+                &mut out,
+                depth,
+                format!("OrderBy {}{topk}", keys.join(", ")),
+            );
             depth += 1;
         }
         for h in &q.having {
@@ -2637,9 +3220,30 @@ impl Ctx<'_> {
         }
         if !q.aggregates.is_empty() || !q.group_by.is_empty() {
             let keys: Vec<String> = q.group_by.iter().map(|(e, _)| self.expr_str(e)).collect();
-            let aggs: Vec<String> = q.aggregates.iter().map(|a| format!("{}({}{})", a.func, if a.distinct { "distinct " } else { "" }, a.expr.as_ref().map_or("*".into(), |e| self.expr_str(e)))).collect();
-            let fast = if matches!(&q.pattern, Pattern::Bgp(t) if t.len() == 1) && q.aggregates.iter().all(|a| a.func == "COUNT") { " (counted from the index scan)" } else { "" };
-            line(&mut out, depth, format!("Group by [{}] {}{fast}", keys.join(", "), aggs.join(", ")));
+            let aggs: Vec<String> = q
+                .aggregates
+                .iter()
+                .map(|a| {
+                    format!(
+                        "{}({}{})",
+                        a.func,
+                        if a.distinct { "distinct " } else { "" },
+                        a.expr.as_ref().map_or("*".into(), |e| self.expr_str(e))
+                    )
+                })
+                .collect();
+            let fast = if matches!(&q.pattern, Pattern::Bgp(t) if t.len() == 1)
+                && q.aggregates.iter().all(|a| a.func == "COUNT")
+            {
+                " (counted from the index scan)"
+            } else {
+                ""
+            };
+            line(
+                &mut out,
+                depth,
+                format!("Group by [{}] {}{fast}", keys.join(", "), aggs.join(", ")),
+            );
             depth += 1;
         }
         self.explain_pattern(&q.pattern, depth, &HashSet::new(), &mut out);
@@ -2656,45 +3260,96 @@ impl Ctx<'_> {
         match p {
             Pattern::Bgp(tps) if tps.is_empty() => out.push_str(&format!("{pad}Empty\n")),
             Pattern::Bgp(tps) => {
-                out.push_str(&format!("{pad}BGP ({} patterns, in evaluation order)\n", tps.len()));
+                out.push_str(&format!(
+                    "{pad}BGP ({} patterns, in evaluation order)\n",
+                    tps.len()
+                ));
                 let mut rows: Option<u64> = None;
                 for tp in self.order_bgp(tps, &bound) {
                     let est = self.estimate(tp);
                     let join = match rows {
-                        Some(r) if r as usize >= HASH_JOIN_MIN && est <= r.saturating_mul(16) => "  hash join",
+                        Some(r) if r as usize >= HASH_JOIN_MIN && est <= r.saturating_mul(16) => {
+                            "  hash join"
+                        }
                         Some(_) => "  index lookup per row",
                         None => "  scan",
                     };
-                    out.push_str(&format!("{pad}  {}   ~{}{join}\n", self.tp_str(tp), if est > 1_000_000 { "1M+".to_string() } else { est.to_string() }));
+                    out.push_str(&format!(
+                        "{pad}  {}   ~{}{join}\n",
+                        self.tp_str(tp),
+                        if est > 1_000_000 {
+                            "1M+".to_string()
+                        } else {
+                            est.to_string()
+                        }
+                    ));
                     rows = Some(rows.map_or(est, |r| r.max(est)));
                     let mut vs = Vec::new();
                     tp.s.vars(&mut vs);
                     tp.o.vars(&mut vs);
-                    if let Predicate::Var(x) = &tp.p { vs.push(*x); }
+                    if let Predicate::Var(x) = &tp.p {
+                        vs.push(*x);
+                    }
                     bound.extend(vs);
                 }
             }
-            Pattern::Join(a, b) => { out.push_str(&format!("{pad}Join\n")); self.explain_pattern(a, d + 1, &bound, out); self.explain_pattern(b, d + 1, &bound, out); }
-            Pattern::LeftJoin(a, b, f) => {
-                out.push_str(&format!("{pad}Optional{}\n", f.as_ref().map_or(String::new(), |f| format!(" filter {}", self.expr_str(f)))));
+            Pattern::Join(a, b) => {
+                out.push_str(&format!("{pad}Join\n"));
                 self.explain_pattern(a, d + 1, &bound, out);
                 self.explain_pattern(b, d + 1, &bound, out);
             }
-            Pattern::Union(a, b) => { out.push_str(&format!("{pad}Union\n")); self.explain_pattern(a, d + 1, &bound, out); self.explain_pattern(b, d + 1, &bound, out); }
-            Pattern::Minus(a, b) => { out.push_str(&format!("{pad}Minus\n")); self.explain_pattern(a, d + 1, &bound, out); self.explain_pattern(b, d + 1, &bound, out); }
-            Pattern::Filter(e, inner) => { out.push_str(&format!("{pad}Filter {}\n", self.expr_str(e))); self.explain_pattern(inner, d + 1, &bound, out); }
-            Pattern::Graph(g, inner) => { out.push_str(&format!("{pad}Graph {}\n", self.vt_str(g))); self.explain_pattern(inner, d + 1, &bound, out); }
+            Pattern::LeftJoin(a, b, f) => {
+                out.push_str(&format!(
+                    "{pad}Optional{}\n",
+                    f.as_ref()
+                        .map_or(String::new(), |f| format!(" filter {}", self.expr_str(f)))
+                ));
+                self.explain_pattern(a, d + 1, &bound, out);
+                self.explain_pattern(b, d + 1, &bound, out);
+            }
+            Pattern::Union(a, b) => {
+                out.push_str(&format!("{pad}Union\n"));
+                self.explain_pattern(a, d + 1, &bound, out);
+                self.explain_pattern(b, d + 1, &bound, out);
+            }
+            Pattern::Minus(a, b) => {
+                out.push_str(&format!("{pad}Minus\n"));
+                self.explain_pattern(a, d + 1, &bound, out);
+                self.explain_pattern(b, d + 1, &bound, out);
+            }
+            Pattern::Filter(e, inner) => {
+                out.push_str(&format!("{pad}Filter {}\n", self.expr_str(e)));
+                self.explain_pattern(inner, d + 1, &bound, out);
+            }
+            Pattern::Graph(g, inner) => {
+                out.push_str(&format!("{pad}Graph {}\n", self.vt_str(g)));
+                self.explain_pattern(inner, d + 1, &bound, out);
+            }
             Pattern::Extend(inner, x, e) => {
                 self.explain_pattern(inner, d, &bound, out);
-                out.push_str(&format!("{pad}Bind {} AS ?{}\n", self.expr_str(e), self.vars.names.get(*x).map(String::as_str).unwrap_or("_")));
+                out.push_str(&format!(
+                    "{pad}Bind {} AS ?{}\n",
+                    self.expr_str(e),
+                    self.vars.names.get(*x).map(String::as_str).unwrap_or("_")
+                ));
             }
-            Pattern::Values(vs, rows) => out.push_str(&format!("{pad}Values ({} variables, {} rows)\n", vs.len(), rows.len())),
+            Pattern::Values(vs, rows) => out.push_str(&format!(
+                "{pad}Values ({} variables, {} rows)\n",
+                vs.len(),
+                rows.len()
+            )),
             Pattern::SubSelect(q) => {
                 out.push_str(&format!("{pad}Subquery\n"));
-                for l in self.explain(q).lines() { out.push_str(&format!("{pad}  {l}\n")); }
+                for l in self.explain(q).lines() {
+                    out.push_str(&format!("{pad}  {l}\n"));
+                }
             }
             Pattern::Service(ep, inner, silent, _) => {
-                out.push_str(&format!("{pad}Service{} {} (bind join)\n", if *silent { " silent" } else { "" }, self.vt_str(ep)));
+                out.push_str(&format!(
+                    "{pad}Service{} {} (bind join)\n",
+                    if *silent { " silent" } else { "" },
+                    self.vt_str(ep)
+                ));
                 self.explain_pattern(inner, d + 1, &bound, out);
             }
         }
@@ -2702,20 +3357,37 @@ impl Ctx<'_> {
 
     /// Matches of a triple pattern counting its constants only (capped).
     fn estimate(&self, tp: &TriplePattern) -> u64 {
-        let c = |vt: &VarOrTerm| match vt { VarOrTerm::Term(t) => Some(self.lookup(t)), _ => None };
+        let c = |vt: &VarOrTerm| match vt {
+            VarOrTerm::Term(t) => Some(self.lookup(t)),
+            _ => None,
+        };
         let (s, o) = (c(&tp.s), c(&tp.o));
-        let p = match &tp.p { Predicate::Path(Path::Iri(i)) => Some(self.lookup_iri(i)), Predicate::Var(_) => None, Predicate::Path(_) => return 0 };
+        let p = match &tp.p {
+            Predicate::Path(Path::Iri(i)) => Some(self.lookup_iri(i)),
+            Predicate::Var(_) => None,
+            Predicate::Path(_) => return 0,
+        };
         if [s, p, o].iter().any(|x| matches!(x, Some(None))) {
             return 0;
         }
-        self.scan(s.flatten(), p.flatten(), o.flatten(), None).take(1_000_001).count() as u64
+        self.scan(s.flatten(), p.flatten(), o.flatten(), None)
+            .take(1_000_001)
+            .count() as u64
     }
 
     fn vt_str(&self, vt: &VarOrTerm) -> String {
         match vt {
-            VarOrTerm::Var(x) => format!("?{}", self.vars.names.get(*x).map(String::as_str).unwrap_or("_")),
+            VarOrTerm::Var(x) => format!(
+                "?{}",
+                self.vars.names.get(*x).map(String::as_str).unwrap_or("_")
+            ),
             VarOrTerm::Term(t) => t.to_string(),
-            VarOrTerm::Triple(t) => format!("<< {} {} {} >>", self.vt_str(&t[0]), self.vt_str(&t[1]), self.vt_str(&t[2])),
+            VarOrTerm::Triple(t) => format!(
+                "<< {} {} {} >>",
+                self.vt_str(&t[0]),
+                self.vt_str(&t[1]),
+                self.vt_str(&t[2])
+            ),
         }
     }
 
@@ -2724,17 +3396,29 @@ impl Ctx<'_> {
             Path::Iri(i) => format!("<{i}>"),
             Path::Inverse(x) => format!("^{}", Self::path_str(x)),
             Path::Seq(xs) => xs.iter().map(Self::path_str).collect::<Vec<_>>().join("/"),
-            Path::Alt(xs) => format!("({})", xs.iter().map(Self::path_str).collect::<Vec<_>>().join("|")),
+            Path::Alt(xs) => format!(
+                "({})",
+                xs.iter().map(Self::path_str).collect::<Vec<_>>().join("|")
+            ),
             Path::ZeroOrMore(x) => format!("{}*", Self::path_str(x)),
             Path::OneOrMore(x) => format!("{}+", Self::path_str(x)),
             Path::ZeroOrOne(x) => format!("{}?", Self::path_str(x)),
-            Path::Negated(xs) => format!("!({})", xs.iter().map(|(i, inv)| format!("{}<{i}>", if *inv { "^" } else { "" })).collect::<Vec<_>>().join("|")),
+            Path::Negated(xs) => format!(
+                "!({})",
+                xs.iter()
+                    .map(|(i, inv)| format!("{}<{i}>", if *inv { "^" } else { "" }))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            ),
         }
     }
 
     fn tp_str(&self, tp: &TriplePattern) -> String {
         let p = match &tp.p {
-            Predicate::Var(x) => format!("?{}", self.vars.names.get(*x).map(String::as_str).unwrap_or("_")),
+            Predicate::Var(x) => format!(
+                "?{}",
+                self.vars.names.get(*x).map(String::as_str).unwrap_or("_")
+            ),
             Predicate::Path(p) => Self::path_str(p),
         };
         format!("{} {} {}", self.vt_str(&tp.s), p, self.vt_str(&tp.o))
@@ -2743,18 +3427,45 @@ impl Ctx<'_> {
     fn expr_str(&self, e: &Expr) -> String {
         let s = |e: &Expr| self.expr_str(e);
         match e {
-            Expr::Var(x) => format!("?{}", self.vars.names.get(*x).map(String::as_str).unwrap_or("_")),
+            Expr::Var(x) => format!(
+                "?{}",
+                self.vars.names.get(*x).map(String::as_str).unwrap_or("_")
+            ),
             Expr::Const(t) => t.to_string(),
             Expr::Or(a, b) => format!("({} || {})", s(a), s(b)),
             Expr::And(a, b) => format!("({} && {})", s(a), s(b)),
             Expr::Not(a) => format!("!{}", s(a)),
-            Expr::Cmp(op, a, b) => format!("({} {} {})", s(a), match op { CmpOp::Eq => "=", CmpOp::Ne => "!=", CmpOp::Lt => "<", CmpOp::Le => "<=", CmpOp::Gt => ">", CmpOp::Ge => ">=" }, s(b)),
-            Expr::In(a, list, neg) => format!("({} {}IN ({}))", s(a), if *neg { "NOT " } else { "" }, list.iter().map(s).collect::<Vec<_>>().join(", ")),
+            Expr::Cmp(op, a, b) => format!(
+                "({} {} {})",
+                s(a),
+                match op {
+                    CmpOp::Eq => "=",
+                    CmpOp::Ne => "!=",
+                    CmpOp::Lt => "<",
+                    CmpOp::Le => "<=",
+                    CmpOp::Gt => ">",
+                    CmpOp::Ge => ">=",
+                },
+                s(b)
+            ),
+            Expr::In(a, list, neg) => format!(
+                "({} {}IN ({}))",
+                s(a),
+                if *neg { "NOT " } else { "" },
+                list.iter().map(s).collect::<Vec<_>>().join(", ")
+            ),
             Expr::Arith(op, a, b) => format!("({} {op} {})", s(a), s(b)),
             Expr::Neg(a) => format!("-{}", s(a)),
-            Expr::Bound(x) => format!("BOUND(?{})", self.vars.names.get(*x).map(String::as_str).unwrap_or("_")),
+            Expr::Bound(x) => format!(
+                "BOUND(?{})",
+                self.vars.names.get(*x).map(String::as_str).unwrap_or("_")
+            ),
             Expr::Exists(_, neg) => format!("{}EXISTS {{...}}", if *neg { "NOT " } else { "" }),
-            Expr::Call(name, args) => format!("{}({})", name.rsplit(['/', '#']).next().unwrap_or(name), args.iter().map(s).collect::<Vec<_>>().join(", ")),
+            Expr::Call(name, args) => format!(
+                "{}({})",
+                name.rsplit(['/', '#']).next().unwrap_or(name),
+                args.iter().map(s).collect::<Vec<_>>().join(", ")
+            ),
         }
     }
 }
@@ -2769,7 +3480,11 @@ pub(crate) fn single_var(e: &Expr) -> Option<Var> {
                 _ => *var = Some(*v),
             },
             Expr::Exists(..) => *ok = false,
-            Expr::Call(name, _) if matches!(name.as_str(), "RAND" | "NOW" | "UUID" | "STRUUID" | "BNODE") => *ok = false,
+            Expr::Call(name, _)
+                if matches!(name.as_str(), "RAND" | "NOW" | "UUID" | "STRUUID" | "BNODE") =>
+            {
+                *ok = false
+            }
             _ => e.for_each_child(&mut |c| walk(c, var, ok)),
         }
     }
@@ -2784,16 +3499,22 @@ pub type ServiceRows = (Vec<String>, Vec<Vec<Option<Term>>>);
 /// Seconds a SERVICE answer is reused by later queries (`serve --service-cache`; 0 = never).
 pub static SERVICE_CACHE_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// Time limit of one SERVICE call (`serve --service-timeout`; 0 = 300 s), within the query's own.
-pub static SERVICE_TIMEOUT_SECS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static SERVICE_TIMEOUT_SECS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 /// Further attempts after a SERVICE call fails to connect or gets a 5xx answer
 /// (`serve --service-retries`).
 pub static SERVICE_RETRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 type CacheEntry = (std::time::Instant, std::sync::Arc<ServiceRows>);
-static SERVICE_CACHE: std::sync::Mutex<Option<HashMap<(String, String), CacheEntry>>> = std::sync::Mutex::new(None);
+static SERVICE_CACHE: std::sync::Mutex<Option<HashMap<(String, String), CacheEntry>>> =
+    std::sync::Mutex::new(None);
 
 /// One SERVICE call (through the answer cache when it is on).
-fn fetch_service(endpoint: &str, text: &str, timeout: std::time::Duration) -> R<std::sync::Arc<ServiceRows>> {
+fn fetch_service(
+    endpoint: &str,
+    text: &str,
+    timeout: std::time::Duration,
+) -> R<std::sync::Arc<ServiceRows>> {
     use std::sync::atomic::Ordering::Relaxed;
     let ttl = SERVICE_CACHE_SECS.load(Relaxed);
     let key = (endpoint.to_string(), text.to_string());
@@ -2813,19 +3534,37 @@ fn fetch_service(endpoint: &str, text: &str, timeout: std::time::Duration) -> R<
         let left = timeout.saturating_sub(started.elapsed());
         let r = if enc.len() < 1500 {
             let sep = if endpoint.contains('?') { '&' } else { '?' };
-            crate::http::fetch_with(&format!("{endpoint}{sep}query={enc}"), "GET", accept, None, left)
+            crate::http::fetch_with(
+                &format!("{endpoint}{sep}query={enc}"),
+                "GET",
+                accept,
+                None,
+                left,
+            )
         } else {
             let form = format!("query={enc}");
-            crate::http::fetch_with(endpoint, "POST", accept, Some(("application/x-www-form-urlencoded", form.as_bytes())), left)
+            crate::http::fetch_with(
+                endpoint,
+                "POST",
+                accept,
+                Some(("application/x-www-form-urlencoded", form.as_bytes())),
+                left,
+            )
         };
         match r {
             Ok((_, body)) => break body,
             Err(e) => {
                 // the error starts with the request URL, which repeats the whole query
-                let msg = e.rsplit_once(": ").map_or(e.as_str(), |(_, m)| m).to_string();
+                let msg = e
+                    .rsplit_once(": ")
+                    .map_or(e.as_str(), |(_, m)| m)
+                    .to_string();
                 // a 4xx answer will not change; a refused connection or a 5xx may
                 let transient = !e.contains(": HTTP 4");
-                if attempt < SERVICE_RETRIES.load(Relaxed) && transient && started.elapsed() < timeout {
+                if attempt < SERVICE_RETRIES.load(Relaxed)
+                    && transient
+                    && started.elapsed() < timeout
+                {
                     attempt += 1;
                     std::thread::sleep(std::time::Duration::from_millis(100 << attempt.min(5)));
                     continue;
@@ -2834,8 +3573,11 @@ fn fetch_service(endpoint: &str, text: &str, timeout: std::time::Duration) -> R<
             }
         }
     };
-    let parsed = super::parse_results_json(&String::from_utf8_lossy(&body)).map_err(|e| format!("SERVICE <{endpoint}>: {e}"))?;
-    let rows = std::sync::Arc::new(parsed.map_err(|_| format!("SERVICE <{endpoint}> answered a boolean"))?);
+    let parsed = super::parse_results_json(&String::from_utf8_lossy(&body))
+        .map_err(|e| format!("SERVICE <{endpoint}>: {e}"))?;
+    let rows = std::sync::Arc::new(
+        parsed.map_err(|_| format!("SERVICE <{endpoint}> answered a boolean"))?,
+    );
     if ttl > 0 {
         let mut cache = SERVICE_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         let c = cache.get_or_insert_with(HashMap::new);

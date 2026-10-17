@@ -20,8 +20,8 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
 
 use crate::graphql::{Schema, Value as GqlValue};
-use crate::rdf::{Term, RDF_TYPE};
-use crate::sparql::{self, eval::QueryResult, func, QueryOptions};
+use crate::rdf::{RDF_TYPE, Term};
+use crate::sparql::{self, QueryOptions, eval::QueryResult, func};
 use crate::store::{Id, Store};
 
 /// A result table: column names, then a row of optional strings per tuple.
@@ -30,14 +30,28 @@ pub type Rows = (Vec<String>, Vec<Vec<Option<String>>>);
 /// What the protocol layer needs from the server.
 pub trait Backend: Send + Sync + 'static {
     /// Err(message) when the user may not read the database.
-    fn authenticate(&self, user: &str, password: Option<&str>, database: &str) -> Result<(), String>;
+    fn authenticate(
+        &self,
+        user: &str,
+        password: Option<&str>,
+        database: &str,
+    ) -> Result<(), String>;
     /// Whether the client must authenticate.
     fn auth_required(&self) -> bool;
     /// Run `f` against the repository's store.
-    fn with_store(&self, database: &str, f: &mut dyn FnMut(&Store) -> Result<Rows, String>) -> Result<Rows, String>;
+    fn with_store(
+        &self,
+        database: &str,
+        f: &mut dyn FnMut(&Store) -> Result<Rows, String>,
+    ) -> Result<Rows, String>;
     /// Run `f` as one write transaction as `user`: Err when the user may not
     /// write, or when `f` fails (then nothing it changed stays).
-    fn with_store_mut(&self, user: &str, database: &str, f: &mut dyn FnMut(&mut Store) -> Result<Rows, String>) -> Result<Rows, String>;
+    fn with_store_mut(
+        &self,
+        user: &str,
+        database: &str,
+        f: &mut dyn FnMut(&mut Store) -> Result<Rows, String>,
+    ) -> Result<Rows, String>;
 }
 
 /// Answer PostgreSQL protocol connections on `addr`.
@@ -68,7 +82,12 @@ fn cstr(b: &mut Vec<u8>, s: &str) {
 
 fn error(out: &mut Vec<u8>, code: &str, message: &str) {
     let mut b = Vec::new();
-    for (k, v) in [(b'S', "ERROR"), (b'V', "ERROR"), (b'C', code), (b'M', message)] {
+    for (k, v) in [
+        (b'S', "ERROR"),
+        (b'V', "ERROR"),
+        (b'C', code),
+        (b'M', message),
+    ] {
         b.push(k);
         cstr(&mut b, v);
     }
@@ -114,7 +133,10 @@ fn read_i32(r: &mut impl Read) -> io::Result<i32> {
 
 fn read_body(r: &mut impl Read, len: i32) -> io::Result<Vec<u8>> {
     if !(4..=64 * 1024 * 1024).contains(&len) {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "bad message length"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "bad message length",
+        ));
     }
     let mut b = vec![0u8; len as usize - 4];
     r.read_exact(&mut b)?;
@@ -122,7 +144,9 @@ fn read_body(r: &mut impl Read, len: i32) -> io::Result<Vec<u8>> {
 }
 
 fn split_cstrs(b: &[u8]) -> Vec<String> {
-    b.split(|&c| c == 0).map(|s| String::from_utf8_lossy(s).into_owned()).collect()
+    b.split(|&c| c == 0)
+        .map(|s| String::from_utf8_lossy(s).into_owned())
+        .collect()
 }
 
 struct Portal {
@@ -141,7 +165,7 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
         let code = i32::from_be_bytes(body[..4].try_into().unwrap_or([0; 4]));
         match code {
             80877103 | 80877104 => w.write_all(b"N")?, // no SSL / GSSAPI
-            80877102 => return Ok(()),                  // cancel request
+            80877102 => return Ok(()),                 // cancel request
             196608 => {
                 let parts = split_cstrs(&body[4..]);
                 let mut map = HashMap::new();
@@ -161,7 +185,10 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
         }
     };
     let user = params.get("user").cloned().unwrap_or_default();
-    let database = params.get("database").cloned().unwrap_or_else(|| user.clone());
+    let database = params
+        .get("database")
+        .cloned()
+        .unwrap_or_else(|| user.clone());
     let mut out = Vec::new();
     let password = if backend.auth_required() {
         msg(&mut out, b'R', &3i32.to_be_bytes()); // cleartext password
@@ -245,14 +272,27 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
             }
             b'P' if !failed => {
                 let name_end = body.iter().position(|&c| c == 0).unwrap_or(0);
-                let sql_end = body[name_end + 1..].iter().position(|&c| c == 0).map_or(body.len(), |p| name_end + 1 + p);
+                let sql_end = body[name_end + 1..]
+                    .iter()
+                    .position(|&c| c == 0)
+                    .map_or(body.len(), |p| name_end + 1 + p);
                 let name = String::from_utf8_lossy(&body[..name_end]).into_owned();
                 let sql = String::from_utf8_lossy(&body[name_end + 1..sql_end]).into_owned();
                 let mut i = sql_end + 1;
-                let n = i16::from_be_bytes([*body.get(i).unwrap_or(&0), *body.get(i + 1).unwrap_or(&0)]).max(0) as usize;
+                let n = i16::from_be_bytes([
+                    *body.get(i).unwrap_or(&0),
+                    *body.get(i + 1).unwrap_or(&0),
+                ])
+                .max(0) as usize;
                 i += 2;
                 let oids = (0..n)
-                    .map(|k| i32::from_be_bytes(body.get(i + k * 4..i + k * 4 + 4).and_then(|b| b.try_into().ok()).unwrap_or([0; 4])))
+                    .map(|k| {
+                        i32::from_be_bytes(
+                            body.get(i + k * 4..i + k * 4 + 4)
+                                .and_then(|b| b.try_into().ok())
+                                .unwrap_or([0; 4]),
+                        )
+                    })
                     .collect();
                 statements.insert(name, (sql, oids));
                 msg(&mut out, b'1', &[]);
@@ -260,7 +300,10 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
             b'B' if !failed => {
                 let mut i = 0;
                 let take_cstr = |i: &mut usize| {
-                    let end = body[*i..].iter().position(|&c| c == 0).map_or(body.len(), |p| *i + p);
+                    let end = body[*i..]
+                        .iter()
+                        .position(|&c| c == 0)
+                        .map_or(body.len(), |p| *i + p);
                     let s = String::from_utf8_lossy(&body[*i..end]).into_owned();
                     *i = end + 1;
                     s
@@ -268,7 +311,10 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
                 let portal = take_cstr(&mut i);
                 let stmt = take_cstr(&mut i);
                 let rd16 = |i: &mut usize| {
-                    let v = i16::from_be_bytes([*body.get(*i).unwrap_or(&0), *body.get(*i + 1).unwrap_or(&0)]);
+                    let v = i16::from_be_bytes([
+                        *body.get(*i).unwrap_or(&0),
+                        *body.get(*i + 1).unwrap_or(&0),
+                    ]);
                     *i += 2;
                     v
                 };
@@ -278,7 +324,11 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
                 let (sql_text, oids) = statements.get(&stmt).cloned().unwrap_or_default();
                 let mut values = Vec::new();
                 for k in 0..nparams.max(0) as usize {
-                    let l = i32::from_be_bytes(body.get(i..i + 4).and_then(|b| b.try_into().ok()).unwrap_or([0xff; 4]));
+                    let l = i32::from_be_bytes(
+                        body.get(i..i + 4)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0xff; 4]),
+                    );
                     i += 4;
                     if l < 0 {
                         values.push(None);
@@ -304,11 +354,18 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
                     run(&*backend, &user, &database, &sql)
                 };
                 let tag = result.as_ref().map(|(_, t)| t.clone()).unwrap_or_default();
-                portals.insert(portal, Portal { result: result.map(|(rows, _)| rows), tag });
+                portals.insert(
+                    portal,
+                    Portal {
+                        result: result.map(|(rows, _)| rows),
+                        tag,
+                    },
+                );
                 msg(&mut out, b'2', &[]);
             }
             b'D' if !failed => {
-                let target = String::from_utf8_lossy(&body[1..body.len().saturating_sub(1)]).into_owned();
+                let target =
+                    String::from_utf8_lossy(&body[1..body.len().saturating_sub(1)]).into_owned();
                 if body.first() == Some(&b'S') {
                     msg(&mut out, b't', &0i16.to_be_bytes());
                     let _ = target;
@@ -327,7 +384,10 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
             b'E' if !failed => {
                 let name = split_cstrs(&body).into_iter().next().unwrap_or_default();
                 match portals.remove(&name) {
-                    Some(Portal { result: Ok(rows), tag }) => {
+                    Some(Portal {
+                        result: Ok(rows),
+                        tag,
+                    }) => {
                         if tag.is_empty() && rows.0.is_empty() {
                             msg(&mut out, b'I', &[]);
                         } else {
@@ -352,7 +412,11 @@ fn session(stream: TcpStream, backend: Arc<dyn Backend>) -> io::Result<()> {
             }
             b'P' | b'B' | b'D' | b'E' => {}
             other => {
-                error(&mut out, "08P01", &format!("unsupported message '{}'", other as char));
+                error(
+                    &mut out,
+                    "08P01",
+                    &format!("unsupported message '{}'", other as char),
+                );
                 msg(&mut out, b'Z', b"I");
             }
         }
@@ -562,7 +626,10 @@ fn lex(sql: &str) -> Result<Vec<Tok>, String> {
                 }
             }
             out.push(Tok::Str(s));
-        } else if ch == '$' && (c.get(i + 1) == Some(&'$') || c.get(i + 1).is_some_and(|x| x.is_alphabetic() || *x == '_')) {
+        } else if ch == '$'
+            && (c.get(i + 1) == Some(&'$')
+                || c.get(i + 1).is_some_and(|x| x.is_alphabetic() || *x == '_'))
+        {
             // Dollar-quoted string: $$...$$ or $tag$...$tag$
             let mut tag_end = i + 1;
             while tag_end < c.len() && (c[tag_end].is_alphanumeric() || c[tag_end] == '_') {
@@ -632,7 +699,10 @@ fn lex(sql: &str) -> Result<Vec<Tok>, String> {
                     }
                 }
             }
-            if c.get(i) == Some(&'.') && c.get(i + 1).is_some_and(|x| x.is_alphanumeric() || *x == '_' || *x == '"' || *x == '*') {
+            if c.get(i) == Some(&'.')
+                && c.get(i + 1)
+                    .is_some_and(|x| x.is_alphanumeric() || *x == '_' || *x == '"' || *x == '*')
+            {
                 s.push('.');
                 i += 1;
                 if c.get(i) == Some(&'"') {
@@ -705,7 +775,11 @@ fn lex(sql: &str) -> Result<Vec<Tok>, String> {
                     }
                 }
             }
-            out.push(Tok::Word(if s.is_empty() { c[start..i].iter().collect() } else { s }));
+            out.push(Tok::Word(if s.is_empty() {
+                c[start..i].iter().collect()
+            } else {
+                s
+            }));
         } else {
             let two: String = c[i..(i + 2).min(c.len())].iter().collect();
             if ["<>", "!=", "<=", ">=", "::", "||", "!~", "~*"].contains(&two.as_str()) {
@@ -781,7 +855,11 @@ impl Val {
             Val::Int(i) => Some(*i),
             Val::Float(f) => Some(*f as i64),
             Val::Bool(b) => Some(if *b { 1 } else { 0 }),
-            Val::Str(s) => s.trim().parse::<i64>().ok().or_else(|| s.trim().parse::<f64>().ok().map(|f| f as i64)),
+            Val::Str(s) => s
+                .trim()
+                .parse::<i64>()
+                .ok()
+                .or_else(|| s.trim().parse::<f64>().ok().map(|f| f as i64)),
             Val::Multi(v) => v.first().and_then(|x| x.as_i64()),
             Val::Null => None,
         }
@@ -841,7 +919,9 @@ fn cmp_vals(a: &Val, b: &Val) -> Ordering {
     if let (Val::Bool(x), Val::Bool(y)) = (a, b) {
         return x.cmp(y);
     }
-    a.as_text().unwrap_or_default().cmp(&b.as_text().unwrap_or_default())
+    a.as_text()
+        .unwrap_or_default()
+        .cmp(&b.as_text().unwrap_or_default())
 }
 
 #[derive(Debug, Clone)]
@@ -1069,8 +1149,32 @@ fn unqualified(c: &str) -> &str {
 }
 
 const RESERVED_CLAUSES: &[&str] = &[
-    "where", "order", "limit", "offset", "join", "inner", "left", "right", "full", "cross", "natural", "on", "using", "group", "having", "set", "union", "intersect", "except",
-    "window", "fetch", "for", "returning", "values", "into", "from",
+    "where",
+    "order",
+    "limit",
+    "offset",
+    "join",
+    "inner",
+    "left",
+    "right",
+    "full",
+    "cross",
+    "natural",
+    "on",
+    "using",
+    "group",
+    "having",
+    "set",
+    "union",
+    "intersect",
+    "except",
+    "window",
+    "fetch",
+    "for",
+    "returning",
+    "values",
+    "into",
+    "from",
 ];
 
 fn is_reserved_clause(w: &str) -> bool {
@@ -1166,11 +1270,16 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_kw("as")?;
-                let _ = self.eat_kw("materialized") || (self.eat_kw("not") && self.eat_kw("materialized"));
+                let _ = self.eat_kw("materialized")
+                    || (self.eat_kw("not") && self.eat_kw("materialized"));
                 self.expect_sym("(")?;
                 let subq = self.parse_query()?;
                 self.expect_sym(")")?;
-                ctes.push(Cte { name, cols, query: subq });
+                ctes.push(Cte {
+                    name,
+                    cols,
+                    query: subq,
+                });
                 if !self.eat_sym(",") {
                     break;
                 }
@@ -1207,7 +1316,13 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Query { ctes, body, order_by, limit, offset })
+        Ok(Query {
+            ctes,
+            body,
+            order_by,
+            limit,
+            offset,
+        })
     }
 
     fn parse_set_ops(&mut self) -> Result<QueryBody, String> {
@@ -1228,7 +1343,12 @@ impl<'a> Parser<'a> {
                 let _ = self.eat_kw("distinct");
             }
             let right = self.parse_primary_query_body()?;
-            left = QueryBody::SetOp { left: Box::new(left), op, all, right: Box::new(right) };
+            left = QueryBody::SetOp {
+                left: Box::new(left),
+                op,
+                all,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -1264,8 +1384,15 @@ impl<'a> Parser<'a> {
             return Ok(QueryBody::Select(Box::new(SelectAst {
                 distinct: false,
                 distinct_on: Vec::new(),
-                projection: vec![SelectItem { expr: Expr::Wildcard(None), alias: None, raw_name: "*".into() }],
-                from: Some(TableFactor::Table { name: unqualified(&name).to_string(), alias: unqualified(&name).to_string() }),
+                projection: vec![SelectItem {
+                    expr: Expr::Wildcard(None),
+                    alias: None,
+                    raw_name: "*".into(),
+                }],
+                from: Some(TableFactor::Table {
+                    name: unqualified(&name).to_string(),
+                    alias: unqualified(&name).to_string(),
+                }),
                 joins: Vec::new(),
                 where_clause: None,
                 group_by: Vec::new(),
@@ -1316,7 +1443,11 @@ impl<'a> Parser<'a> {
                     self.i += 1;
                 }
             }
-            projection.push(SelectItem { expr, alias, raw_name });
+            projection.push(SelectItem {
+                expr,
+                alias,
+                raw_name,
+            });
             if !self.eat_sym(",") {
                 break;
             }
@@ -1329,7 +1460,11 @@ impl<'a> Parser<'a> {
             loop {
                 if self.eat_sym(",") {
                     let factor = self.parse_table_factor()?;
-                    joins.push(JoinAst { kind: JoinKind::Cross, factor, cond: JoinCond::None });
+                    joins.push(JoinAst {
+                        kind: JoinKind::Cross,
+                        factor,
+                        cond: JoinCond::None,
+                    });
                     continue;
                 }
                 let _natural = self.eat_kw("natural");
@@ -1394,7 +1529,11 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let where_clause = if self.eat_kw("where") { Some(self.parse_expr()?) } else { None };
+        let where_clause = if self.eat_kw("where") {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
 
         let mut group_by = Vec::new();
         if self.eat_kw("group") {
@@ -1407,9 +1546,22 @@ impl<'a> Parser<'a> {
             }
         }
 
-        let having = if self.eat_kw("having") { Some(self.parse_expr()?) } else { None };
+        let having = if self.eat_kw("having") {
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
 
-        Ok(SelectAst { distinct, distinct_on, projection, from, joins, where_clause, group_by, having })
+        Ok(SelectAst {
+            distinct,
+            distinct_on,
+            projection,
+            from,
+            joins,
+            where_clause,
+            group_by,
+            having,
+        })
     }
 
     fn parse_table_factor(&mut self) -> Result<TableFactor, String> {
@@ -1432,7 +1584,10 @@ impl<'a> Parser<'a> {
                     self.i += 1;
                 }
             }
-            return Ok(TableFactor::Subquery { query: Box::new(subq), alias });
+            return Ok(TableFactor::Subquery {
+                query: Box::new(subq),
+                alias,
+            });
         }
 
         let raw_name = match self.next() {
@@ -1462,7 +1617,11 @@ impl<'a> Parser<'a> {
             }
             let default_alias = unqualified(&raw_name).to_string();
             let alias = self.parse_optional_table_alias(&default_alias);
-            return Ok(TableFactor::Func { name: raw_name, args, alias });
+            return Ok(TableFactor::Func {
+                name: raw_name,
+                args,
+                alias,
+            });
         }
 
         let name = normalize_table_name(&raw_name);
@@ -1506,7 +1665,11 @@ impl<'a> Parser<'a> {
                     nulls_first = Some(false);
                 }
             }
-            list.push(OrderByItem { expr, desc, nulls_first });
+            list.push(OrderByItem {
+                expr,
+                desc,
+                nulls_first,
+            });
             if !self.eat_sym(",") {
                 break;
             }
@@ -1523,7 +1686,11 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_and()?;
         while self.eat_kw("or") {
             let right = self.parse_and()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::Or, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op: BinOp::Or,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -1532,7 +1699,11 @@ impl<'a> Parser<'a> {
         let mut left = self.parse_not()?;
         while self.eat_kw("and") {
             let right = self.parse_not()?;
-            left = Expr::Binary { left: Box::new(left), op: BinOp::And, right: Box::new(right) };
+            left = Expr::Binary {
+                left: Box::new(left),
+                op: BinOp::And,
+                right: Box::new(right),
+            };
         }
         Ok(left)
     }
@@ -1544,10 +1715,16 @@ impl<'a> Parser<'a> {
                 self.expect_sym("(")?;
                 let q = self.parse_query()?;
                 self.expect_sym(")")?;
-                return Ok(Expr::Exists { query: Box::new(q), not: true });
+                return Ok(Expr::Exists {
+                    query: Box::new(q),
+                    not: true,
+                });
             }
             let expr = self.parse_not()?;
-            return Ok(Expr::Unary { op: UnaryOp::Not, expr: Box::new(expr) });
+            return Ok(Expr::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+            });
         }
         self.parse_comparison()
     }
@@ -1558,15 +1735,30 @@ impl<'a> Parser<'a> {
             if self.eat_kw("is") {
                 let not = self.eat_kw("not");
                 if self.eat_kw("null") {
-                    left = Expr::IsNull { expr: Box::new(left), not };
+                    left = Expr::IsNull {
+                        expr: Box::new(left),
+                        not,
+                    };
                 } else if self.eat_kw("true") {
-                    left = Expr::IsBool { expr: Box::new(left), val: true, not };
+                    left = Expr::IsBool {
+                        expr: Box::new(left),
+                        val: true,
+                        not,
+                    };
                 } else if self.eat_kw("false") {
-                    left = Expr::IsBool { expr: Box::new(left), val: false, not };
+                    left = Expr::IsBool {
+                        expr: Box::new(left),
+                        val: false,
+                        not,
+                    };
                 } else if self.eat_kw("distinct") {
                     self.expect_kw("from")?;
                     let right = self.parse_additive()?;
-                    let eq = Expr::Binary { left: Box::new(left), op: if not { BinOp::Eq } else { BinOp::Ne }, right: Box::new(right) };
+                    let eq = Expr::Binary {
+                        left: Box::new(left),
+                        op: if not { BinOp::Eq } else { BinOp::Ne },
+                        right: Box::new(right),
+                    };
                     left = eq;
                 } else {
                     return Err("expected NULL, TRUE, or FALSE after IS".into());
@@ -1574,11 +1766,17 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if self.eat_kw("notnull") {
-                left = Expr::IsNull { expr: Box::new(left), not: true };
+                left = Expr::IsNull {
+                    expr: Box::new(left),
+                    not: true,
+                };
                 continue;
             }
             if self.eat_kw("isnull") {
-                left = Expr::IsNull { expr: Box::new(left), not: false };
+                left = Expr::IsNull {
+                    expr: Box::new(left),
+                    not: false,
+                };
                 continue;
             }
 
@@ -1595,15 +1793,25 @@ impl<'a> Parser<'a> {
                 let low = self.parse_additive()?;
                 self.expect_kw("and")?;
                 let high = self.parse_additive()?;
-                left = Expr::Between { expr: Box::new(left), low: Box::new(low), high: Box::new(high), not: not_prefix };
+                left = Expr::Between {
+                    expr: Box::new(left),
+                    low: Box::new(low),
+                    high: Box::new(high),
+                    not: not_prefix,
+                };
                 continue;
             }
             if self.eat_kw("in") {
                 self.expect_sym("(")?;
-                if kw(self.peek(), "select") || kw(self.peek(), "with") || kw(self.peek(), "values") {
+                if kw(self.peek(), "select") || kw(self.peek(), "with") || kw(self.peek(), "values")
+                {
                     let subq = self.parse_query()?;
                     self.expect_sym(")")?;
-                    left = Expr::InSubquery { expr: Box::new(left), query: Box::new(subq), not: not_prefix };
+                    left = Expr::InSubquery {
+                        expr: Box::new(left),
+                        query: Box::new(subq),
+                        not: not_prefix,
+                    };
                 } else {
                     let mut list = Vec::new();
                     if !self.eat_sym(")") {
@@ -1615,18 +1823,38 @@ impl<'a> Parser<'a> {
                         }
                         self.expect_sym(")")?;
                     }
-                    left = Expr::InList { expr: Box::new(left), list, not: not_prefix };
+                    left = Expr::InList {
+                        expr: Box::new(left),
+                        list,
+                        not: not_prefix,
+                    };
                 }
                 continue;
             }
             if self.eat_kw("like") {
                 let right = self.parse_additive()?;
-                left = Expr::Binary { left: Box::new(left), op: if not_prefix { BinOp::NotLike } else { BinOp::Like }, right: Box::new(right) };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op: if not_prefix {
+                        BinOp::NotLike
+                    } else {
+                        BinOp::Like
+                    },
+                    right: Box::new(right),
+                };
                 continue;
             }
             if self.eat_kw("ilike") {
                 let right = self.parse_additive()?;
-                left = Expr::Binary { left: Box::new(left), op: if not_prefix { BinOp::NotILike } else { BinOp::ILike }, right: Box::new(right) };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op: if not_prefix {
+                        BinOp::NotILike
+                    } else {
+                        BinOp::ILike
+                    },
+                    right: Box::new(right),
+                };
                 continue;
             }
 
@@ -1647,22 +1875,36 @@ impl<'a> Parser<'a> {
             };
             if let Some(op) = op {
                 self.i += 1;
-                if (op == BinOp::Eq || op == BinOp::Ne) && (self.eat_kw("any") || self.eat_kw("some")) {
+                if (op == BinOp::Eq || op == BinOp::Ne)
+                    && (self.eat_kw("any") || self.eat_kw("some"))
+                {
                     self.expect_sym("(")?;
                     if kw(self.peek(), "select") || kw(self.peek(), "with") {
                         let subq = self.parse_query()?;
                         self.expect_sym(")")?;
-                        left = Expr::InSubquery { expr: Box::new(left), query: Box::new(subq), not: op == BinOp::Ne };
+                        left = Expr::InSubquery {
+                            expr: Box::new(left),
+                            query: Box::new(subq),
+                            not: op == BinOp::Ne,
+                        };
                         continue;
                     } else {
                         let inner = self.parse_expr()?;
                         self.expect_sym(")")?;
-                        left = Expr::Binary { left: Box::new(left), op, right: Box::new(inner) };
+                        left = Expr::Binary {
+                            left: Box::new(left),
+                            op,
+                            right: Box::new(inner),
+                        };
                         continue;
                     }
                 }
                 let right = self.parse_additive()?;
-                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
             } else {
                 break;
             }
@@ -1682,7 +1924,11 @@ impl<'a> Parser<'a> {
             if let Some(op) = op {
                 self.i += 1;
                 let right = self.parse_multiplicative()?;
-                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
             } else {
                 break;
             }
@@ -1702,7 +1948,11 @@ impl<'a> Parser<'a> {
             if let Some(op) = op {
                 self.i += 1;
                 let right = self.parse_postfix()?;
-                left = Expr::Binary { left: Box::new(left), op, right: Box::new(right) };
+                left = Expr::Binary {
+                    left: Box::new(left),
+                    op,
+                    right: Box::new(right),
+                };
             } else {
                 break;
             }
@@ -1714,7 +1964,10 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_unary()?;
         while self.eat_sym("::") {
             let ty = self.parse_type_name()?;
-            expr = Expr::Cast { expr: Box::new(expr), ty };
+            expr = Expr::Cast {
+                expr: Box::new(expr),
+                ty,
+            };
         }
         Ok(expr)
     }
@@ -1728,7 +1981,9 @@ impl<'a> Parser<'a> {
             ty = "double precision".into();
         } else if ty.eq_ignore_ascii_case("character") && self.eat_kw("varying") {
             ty = "varchar".into();
-        } else if (ty.eq_ignore_ascii_case("timestamp") || ty.eq_ignore_ascii_case("time")) && (self.eat_kw("with") || self.eat_kw("without")) {
+        } else if (ty.eq_ignore_ascii_case("timestamp") || ty.eq_ignore_ascii_case("time"))
+            && (self.eat_kw("with") || self.eat_kw("without"))
+        {
             let _ = self.eat_kw("time");
             let _ = self.eat_kw("zone");
         }
@@ -1746,11 +2001,17 @@ impl<'a> Parser<'a> {
     fn parse_unary(&mut self) -> Result<Expr, String> {
         if self.eat_sym("-") {
             let e = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Neg, expr: Box::new(e) });
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(e),
+            });
         }
         if self.eat_sym("+") {
             let e = self.parse_unary()?;
-            return Ok(Expr::Unary { op: UnaryOp::Pos, expr: Box::new(e) });
+            return Ok(Expr::Unary {
+                op: UnaryOp::Pos,
+                expr: Box::new(e),
+            });
         }
         self.parse_atom()
     }
@@ -1772,7 +2033,10 @@ impl<'a> Parser<'a> {
             self.expect_sym("(")?;
             let q = self.parse_query()?;
             self.expect_sym(")")?;
-            return Ok(Expr::Exists { query: Box::new(q), not: false });
+            return Ok(Expr::Exists {
+                query: Box::new(q),
+                not: false,
+            });
         }
         if self.eat_kw("case") {
             let operand = if !kw(self.peek(), "when") {
@@ -1787,9 +2051,17 @@ impl<'a> Parser<'a> {
                 let val = self.parse_expr()?;
                 branches.push((cond, val));
             }
-            let else_expr = if self.eat_kw("else") { Some(Box::new(self.parse_expr()?)) } else { None };
+            let else_expr = if self.eat_kw("else") {
+                Some(Box::new(self.parse_expr()?))
+            } else {
+                None
+            };
             self.expect_kw("end")?;
-            return Ok(Expr::Case { operand, branches, else_expr });
+            return Ok(Expr::Case {
+                operand,
+                branches,
+                else_expr,
+            });
         }
         if self.eat_kw("cast") {
             self.expect_sym("(")?;
@@ -1797,7 +2069,10 @@ impl<'a> Parser<'a> {
             self.expect_kw("as")?;
             let ty = self.parse_type_name()?;
             self.expect_sym(")")?;
-            return Ok(Expr::Cast { expr: Box::new(expr), ty });
+            return Ok(Expr::Cast {
+                expr: Box::new(expr),
+                ty,
+            });
         }
         if self.eat_kw("extract") {
             self.expect_sym("(")?;
@@ -1808,7 +2083,13 @@ impl<'a> Parser<'a> {
             self.expect_kw("from")?;
             let src = self.parse_expr()?;
             self.expect_sym(")")?;
-            return Ok(Expr::Func { name: "extract".into(), args: vec![Expr::Str(field), src], distinct: false, filter: None, over: None });
+            return Ok(Expr::Func {
+                name: "extract".into(),
+                args: vec![Expr::Str(field), src],
+                distinct: false,
+                filter: None,
+                over: None,
+            });
         }
         if self.eat_kw("position") && sym(self.peek(), "(") {
             self.expect_sym("(")?;
@@ -1816,14 +2097,26 @@ impl<'a> Parser<'a> {
             if self.eat_kw("in") {
                 let s = self.parse_expr()?;
                 self.expect_sym(")")?;
-                return Ok(Expr::Func { name: "position".into(), args: vec![sub, s], distinct: false, filter: None, over: None });
+                return Ok(Expr::Func {
+                    name: "position".into(),
+                    args: vec![sub, s],
+                    distinct: false,
+                    filter: None,
+                    over: None,
+                });
             } else {
                 let mut args = vec![sub];
                 while self.eat_sym(",") {
                     args.push(self.parse_expr()?);
                 }
                 self.expect_sym(")")?;
-                return Ok(Expr::Func { name: "position".into(), args, distinct: false, filter: None, over: None });
+                return Ok(Expr::Func {
+                    name: "position".into(),
+                    args,
+                    distinct: false,
+                    filter: None,
+                    over: None,
+                });
             }
         }
         if self.eat_kw("substring") && sym(self.peek(), "(") {
@@ -1837,7 +2130,13 @@ impl<'a> Parser<'a> {
                 }
             }
             self.expect_sym(")")?;
-            return Ok(Expr::Func { name: "substring".into(), args, distinct: false, filter: None, over: None });
+            return Ok(Expr::Func {
+                name: "substring".into(),
+                args,
+                distinct: false,
+                filter: None,
+                over: None,
+            });
         }
         if self.eat_kw("trim") && sym(self.peek(), "(") {
             self.expect_sym("(")?;
@@ -1849,7 +2148,11 @@ impl<'a> Parser<'a> {
             } else {
                 let _ = self.eat_kw("both");
             }
-            let first = if self.eat_kw("from") { None } else { Some(self.parse_expr()?) };
+            let first = if self.eat_kw("from") {
+                None
+            } else {
+                Some(self.parse_expr()?)
+            };
             let args = if self.eat_kw("from") {
                 let target = self.parse_expr()?;
                 match first {
@@ -1872,7 +2175,13 @@ impl<'a> Parser<'a> {
                 "trailing" => "rtrim",
                 _ => "trim",
             };
-            return Ok(Expr::Func { name: fname.into(), args, distinct: false, filter: None, over: None });
+            return Ok(Expr::Func {
+                name: fname.into(),
+                args,
+                distinct: false,
+                filter: None,
+                over: None,
+            });
         }
         if self.eat_kw("array") && self.eat_sym("[") {
             let mut items = Vec::new();
@@ -1885,7 +2194,13 @@ impl<'a> Parser<'a> {
                 }
                 self.expect_sym("]")?;
             }
-            return Ok(Expr::Func { name: "array_construct".into(), args: items, distinct: false, filter: None, over: None });
+            return Ok(Expr::Func {
+                name: "array_construct".into(),
+                args: items,
+                distinct: false,
+                filter: None,
+                over: None,
+            });
         }
         if self.eat_sym("(") {
             if kw(self.peek(), "select") || kw(self.peek(), "with") || kw(self.peek(), "values") {
@@ -1904,7 +2219,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 self.expect_sym(")")?;
-                return Ok(Expr::Func { name: "row_construct".into(), args: items, distinct: false, filter: None, over: None });
+                return Ok(Expr::Func {
+                    name: "row_construct".into(),
+                    args: items,
+                    distinct: false,
+                    filter: None,
+                    over: None,
+                });
             }
             self.expect_sym(")")?;
             return Ok(expr);
@@ -1923,7 +2244,10 @@ impl<'a> Parser<'a> {
             Some(Tok::Str(s)) => Ok(Expr::Str(s)),
             Some(Tok::Word(w)) => {
                 // Typed literal like DATE '2025-01-01', TIMESTAMP '...', INTERVAL '...'
-                if ["date", "timestamp", "timestamptz", "time", "interval"].iter().any(|k| w.eq_ignore_ascii_case(k)) {
+                if ["date", "timestamp", "timestamptz", "time", "interval"]
+                    .iter()
+                    .any(|k| w.eq_ignore_ascii_case(k))
+                {
                     if let Some(Tok::Str(s)) = self.peek().cloned() {
                         self.i += 1;
                         return Ok(Expr::Str(s));
@@ -1933,12 +2257,27 @@ impl<'a> Parser<'a> {
                     return Ok(Expr::Wildcard(Some(prefix.to_string())));
                 }
                 // Special SQL niladic functions
-                if ["current_user", "user", "session_user", "current_date", "current_timestamp", "current_time", "current_schema", "current_catalog"]
-                    .iter()
-                    .any(|k| w.eq_ignore_ascii_case(k))
+                if [
+                    "current_user",
+                    "user",
+                    "session_user",
+                    "current_date",
+                    "current_timestamp",
+                    "current_time",
+                    "current_schema",
+                    "current_catalog",
+                ]
+                .iter()
+                .any(|k| w.eq_ignore_ascii_case(k))
                     && !sym(self.peek(), "(")
                 {
-                    return Ok(Expr::Func { name: w.to_ascii_lowercase(), args: Vec::new(), distinct: false, filter: None, over: None });
+                    return Ok(Expr::Func {
+                        name: w.to_ascii_lowercase(),
+                        args: Vec::new(),
+                        distinct: false,
+                        filter: None,
+                        over: None,
+                    });
                 }
 
                 if self.eat_sym("(") {
@@ -1977,7 +2316,10 @@ impl<'a> Parser<'a> {
                     if self.eat_kw("over") {
                         if let Some(Tok::Word(_win_name)) = self.peek() {
                             self.i += 1;
-                            over = Some(WindowSpec { partition_by: Vec::new(), order_by: Vec::new() });
+                            over = Some(WindowSpec {
+                                partition_by: Vec::new(),
+                                order_by: Vec::new(),
+                            });
                         } else {
                             self.expect_sym("(")?;
                             let mut partition_by = Vec::new();
@@ -1999,11 +2341,20 @@ impl<'a> Parser<'a> {
                             while !self.eat_sym(")") && self.peek().is_some() {
                                 self.i += 1;
                             }
-                            over = Some(WindowSpec { partition_by, order_by });
+                            over = Some(WindowSpec {
+                                partition_by,
+                                order_by,
+                            });
                         }
                     }
                     let fname = unqualified(&w).to_ascii_lowercase();
-                    return Ok(Expr::Func { name: fname, args, distinct, filter, over });
+                    return Ok(Expr::Func {
+                        name: fname,
+                        args,
+                        distinct,
+                        filter,
+                        over,
+                    });
                 }
                 Ok(Expr::Col(w))
             }
@@ -2017,7 +2368,10 @@ fn normalize_table_name(raw: &str) -> String {
     if lower.starts_with("information_schema.") || lower.starts_with("pg_catalog.") {
         return lower;
     }
-    if let Some(rest) = raw.strip_prefix("public.").or_else(|| raw.strip_prefix("PUBLIC.")) {
+    if let Some(rest) = raw
+        .strip_prefix("public.")
+        .or_else(|| raw.strip_prefix("PUBLIC."))
+    {
         return rest.to_string();
     }
     unqualified(raw).to_string()
@@ -2072,7 +2426,10 @@ impl Rel {
                 .cols
                 .iter()
                 .enumerate()
-                .filter(|(_, (rq, rc))| (rq.eq_ignore_ascii_case(q) || rq.eq_ignore_ascii_case(q_short)) && rc.eq_ignore_ascii_case(c))
+                .filter(|(_, (rq, rc))| {
+                    (rq.eq_ignore_ascii_case(q) || rq.eq_ignore_ascii_case(q_short))
+                        && rc.eq_ignore_ascii_case(c)
+                })
                 .map(|(i, _)| i)
                 .collect();
             match matches.as_slice() {
@@ -2096,7 +2453,10 @@ impl Rel {
                 if !name.contains('.') {
                     let first_col = &self.cols[matches[0]].1;
                     // Check if all matching columns come from same synthetic projection or USING merge
-                    if matches.iter().all(|&idx| self.cols[idx].0.is_empty() && self.cols[idx].1.eq_ignore_ascii_case(first_col)) {
+                    if matches.iter().all(|&idx| {
+                        self.cols[idx].0.is_empty()
+                            && self.cols[idx].1.eq_ignore_ascii_case(first_col)
+                    }) {
                         return Ok(matches[0]);
                     }
                 }
@@ -2107,7 +2467,11 @@ impl Rel {
 
     fn to_rows(self) -> Rows {
         let headers = self.cols.into_iter().map(|(_, c)| c).collect();
-        let data = self.rows.into_iter().map(|r| r.into_iter().map(|v| v.as_text()).collect()).collect();
+        let data = self
+            .rows
+            .into_iter()
+            .map(|r| r.into_iter().map(|v| v.as_text()).collect())
+            .collect();
         (headers, data)
     }
 }
@@ -2141,12 +2505,22 @@ fn like_match(text: &str, pat: &str, case_insensitive: bool) -> bool {
 fn no_table(schema: &Schema, views: &[(String, String)], name: &str) -> String {
     let mut names: Vec<String> = schema.tables().into_iter().map(|(t, _)| t).collect();
     names.extend(views.iter().map(|(v, _)| v.clone()));
-    format!("relation \"{name}\" does not exist (tables: {})", names.join(", "))
+    format!(
+        "relation \"{name}\" does not exist (tables: {})",
+        names.join(", ")
+    )
 }
 
 fn table_columns(schema: &Schema, table: &str) -> Vec<String> {
     let mut c = vec!["id".to_string()];
-    c.extend(schema.tables().into_iter().find(|(t, _)| t.eq_ignore_ascii_case(table)).map(|(_, f)| f).unwrap_or_default());
+    c.extend(
+        schema
+            .tables()
+            .into_iter()
+            .find(|(t, _)| t.eq_ignore_ascii_case(table))
+            .map(|(_, f)| f)
+            .unwrap_or_default(),
+    );
     c
 }
 
@@ -2157,7 +2531,12 @@ fn node_col_val(store: &Store, schema: &Schema, n: Id, col: &str) -> Val {
     let mut vals: Vec<Val> = schema
         .predicates(col)
         .into_iter()
-        .flat_map(|p| store.quads_matching(Some(n), Some(p), None, None).map(|q| Val::from_term(&store.dict.term(q[2]))).collect::<Vec<_>>())
+        .flat_map(|p| {
+            store
+                .quads_matching(Some(n), Some(p), None, None)
+                .map(|q| Val::from_term(&store.dict.term(q[2])))
+                .collect::<Vec<_>>()
+        })
         .collect();
     match vals.len() {
         0 => Val::Null,
@@ -2172,8 +2551,15 @@ fn load_base_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Rel, String
     }
     // 1. Check CTEs
     if let Some(cte_rel) = ctx.ctes.get(&name.to_ascii_lowercase()) {
-        let cols = cte_rel.cols.iter().map(|(_, c)| (alias.to_string(), c.clone())).collect();
-        return Ok(Rel { cols, rows: cte_rel.rows.clone() });
+        let cols = cte_rel
+            .cols
+            .iter()
+            .map(|(_, c)| (alias.to_string(), c.clone()))
+            .collect();
+        return Ok(Rel {
+            cols,
+            rows: cte_rel.rows.clone(),
+        });
     }
     // 2. Check system catalogs (information_schema & pg_catalog)
     if let Some(sys_rel) = load_system_table(ctx, name, alias)? {
@@ -2187,15 +2573,31 @@ fn load_base_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Rel, String
         let mut sub_ctx = ctx.clone();
         sub_ctx.depth += 1;
         let view_rel = eval_query(&sub_ctx, &q)?;
-        let cols = view_rel.cols.into_iter().map(|(_, c)| (alias.to_string(), c)).collect();
-        return Ok(Rel { cols, rows: view_rel.rows });
+        let cols = view_rel
+            .cols
+            .into_iter()
+            .map(|(_, c)| (alias.to_string(), c))
+            .collect();
+        return Ok(Rel {
+            cols,
+            rows: view_rel.rows,
+        });
     }
     // 4. Load RDF Class table
-    let class = ctx.schema.class(name).ok_or_else(|| no_table(ctx.schema, &views(ctx.store), name))?;
+    let class = ctx
+        .schema
+        .class(name)
+        .ok_or_else(|| no_table(ctx.schema, &views(ctx.store), name))?;
     let cols = table_columns(ctx.schema, name);
-    let qual_cols: Vec<(String, String)> = cols.iter().map(|c| (alias.to_string(), c.clone())).collect();
+    let qual_cols: Vec<(String, String)> = cols
+        .iter()
+        .map(|c| (alias.to_string(), c.clone()))
+        .collect();
     let Some(ty) = ctx.store.dict.lookup(&Term::iri(RDF_TYPE)) else {
-        return Ok(Rel { cols: qual_cols, rows: Vec::new() });
+        return Ok(Rel {
+            cols: qual_cols,
+            rows: Vec::new(),
+        });
     };
     let mut seen = HashSet::new();
     let nodes: Vec<Id> = ctx
@@ -2206,14 +2608,24 @@ fn load_base_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Rel, String
         .collect();
     let rows = nodes
         .into_iter()
-        .map(|n| cols.iter().map(|c| node_col_val(ctx.store, ctx.schema, n, c)).collect())
+        .map(|n| {
+            cols.iter()
+                .map(|c| node_col_val(ctx.store, ctx.schema, n, c))
+                .collect()
+        })
         .collect();
-    Ok(Rel { cols: qual_cols, rows })
+    Ok(Rel {
+        cols: qual_cols,
+        rows,
+    })
 }
 
 fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Rel>, String> {
     let lower = name.to_ascii_lowercase();
-    let short = lower.strip_prefix("information_schema.").or_else(|| lower.strip_prefix("pg_catalog.")).unwrap_or(&lower);
+    let short = lower
+        .strip_prefix("information_schema.")
+        .or_else(|| lower.strip_prefix("pg_catalog."))
+        .unwrap_or(&lower);
     let is_info = lower.starts_with("information_schema.");
     let is_pg = lower.starts_with("pg_catalog.") || short.starts_with("pg_");
 
@@ -2222,10 +2634,17 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
     }
 
     let make_rel = |col_names: &[&str], str_rows: Vec<Vec<Option<String>>>| -> Rel {
-        let cols = col_names.iter().map(|c| (alias.to_string(), (*c).to_string())).collect();
+        let cols = col_names
+            .iter()
+            .map(|c| (alias.to_string(), (*c).to_string()))
+            .collect();
         let rows = str_rows
             .into_iter()
-            .map(|r| r.into_iter().map(|c| c.map(|v| Val::from_str_inferred(&v)).unwrap_or(Val::Null)).collect())
+            .map(|r| {
+                r.into_iter()
+                    .map(|c| c.map(|v| Val::from_str_inferred(&v)).unwrap_or(Val::Null))
+                    .collect()
+            })
             .collect();
         Rel { cols, rows }
     };
@@ -2237,10 +2656,27 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
             "tables" => {
                 let mut rows: Vec<Vec<Option<String>>> = tables
                     .into_iter()
-                    .map(|(t, _)| vec![Some(t), Some("public".into()), Some("BASE TABLE".into()), Some(ctx.database.into())])
+                    .map(|(t, _)| {
+                        vec![
+                            Some(t),
+                            Some("public".into()),
+                            Some("BASE TABLE".into()),
+                            Some(ctx.database.into()),
+                        ]
+                    })
                     .collect();
-                rows.extend(v_list.into_iter().map(|(v, _)| vec![Some(v), Some("public".into()), Some("VIEW".into()), Some(ctx.database.into())]));
-                Ok(Some(make_rel(&["table_name", "table_schema", "table_type", "table_catalog"], rows)))
+                rows.extend(v_list.into_iter().map(|(v, _)| {
+                    vec![
+                        Some(v),
+                        Some("public".into()),
+                        Some("VIEW".into()),
+                        Some(ctx.database.into()),
+                    ]
+                }));
+                Ok(Some(make_rel(
+                    &["table_name", "table_schema", "table_type", "table_catalog"],
+                    rows,
+                )))
             }
             "columns" => {
                 let mut rows: Vec<Vec<Option<String>>> = Vec::new();
@@ -2282,26 +2718,64 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
                     }
                 }
                 Ok(Some(make_rel(
-                    &["table_name", "column_name", "data_type", "table_schema", "ordinal_position", "is_nullable"],
+                    &[
+                        "table_name",
+                        "column_name",
+                        "data_type",
+                        "table_schema",
+                        "ordinal_position",
+                        "is_nullable",
+                    ],
                     rows,
                 )))
             }
             "views" => {
-                let rows = v_list.into_iter().map(|(v, sql)| vec![Some(v), Some("public".into()), Some(sql)]).collect();
-                Ok(Some(make_rel(&["table_name", "table_schema", "view_definition"], rows)))
+                let rows = v_list
+                    .into_iter()
+                    .map(|(v, sql)| vec![Some(v), Some("public".into()), Some(sql)])
+                    .collect();
+                Ok(Some(make_rel(
+                    &["table_name", "table_schema", "view_definition"],
+                    rows,
+                )))
             }
             "schemata" => {
                 let rows = vec![
-                    vec![Some(ctx.database.into()), Some("public".into()), Some(ctx.user.into())],
-                    vec![Some(ctx.database.into()), Some("information_schema".into()), Some(ctx.user.into())],
-                    vec![Some(ctx.database.into()), Some("pg_catalog".into()), Some(ctx.user.into())],
+                    vec![
+                        Some(ctx.database.into()),
+                        Some("public".into()),
+                        Some(ctx.user.into()),
+                    ],
+                    vec![
+                        Some(ctx.database.into()),
+                        Some("information_schema".into()),
+                        Some(ctx.user.into()),
+                    ],
+                    vec![
+                        Some(ctx.database.into()),
+                        Some("pg_catalog".into()),
+                        Some(ctx.user.into()),
+                    ],
                 ];
-                Ok(Some(make_rel(&["catalog_name", "schema_name", "schema_owner"], rows)))
+                Ok(Some(make_rel(
+                    &["catalog_name", "schema_name", "schema_owner"],
+                    rows,
+                )))
             }
-            "table_constraints" | "key_column_usage" | "referential_constraints" => Ok(Some(make_rel(
-                &["constraint_catalog", "constraint_schema", "constraint_name", "table_schema", "table_name", "constraint_type", "column_name"],
-                Vec::new(),
-            ))),
+            "table_constraints" | "key_column_usage" | "referential_constraints" => {
+                Ok(Some(make_rel(
+                    &[
+                        "constraint_catalog",
+                        "constraint_schema",
+                        "constraint_name",
+                        "table_schema",
+                        "table_name",
+                        "constraint_type",
+                        "column_name",
+                    ],
+                    Vec::new(),
+                )))
+            }
             _ => Ok(None),
         };
     }
@@ -2310,24 +2784,87 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
     match short {
         "pg_namespace" => {
             let rows = vec![
-                vec![Some("11".into()), Some("pg_catalog".into()), Some("10".into())],
-                vec![Some("2200".into()), Some("public".into()), Some("10".into())],
-                vec![Some("13000".into()), Some("information_schema".into()), Some("10".into())],
+                vec![
+                    Some("11".into()),
+                    Some("pg_catalog".into()),
+                    Some("10".into()),
+                ],
+                vec![
+                    Some("2200".into()),
+                    Some("public".into()),
+                    Some("10".into()),
+                ],
+                vec![
+                    Some("13000".into()),
+                    Some("information_schema".into()),
+                    Some("10".into()),
+                ],
             ];
             Ok(Some(make_rel(&["oid", "nspname", "nspowner"], rows)))
         }
         "pg_type" => {
             let rows = vec![
-                vec![Some("16".into()), Some("bool".into()), Some("11".into()), Some("1".into()), Some("b".into())],
-                vec![Some("20".into()), Some("int8".into()), Some("11".into()), Some("8".into()), Some("b".into())],
-                vec![Some("21".into()), Some("int2".into()), Some("11".into()), Some("2".into()), Some("b".into())],
-                vec![Some("23".into()), Some("int4".into()), Some("11".into()), Some("4".into()), Some("b".into())],
-                vec![Some("25".into()), Some("text".into()), Some("11".into()), Some("-1".into()), Some("b".into())],
-                vec![Some("700".into()), Some("float4".into()), Some("11".into()), Some("4".into()), Some("b".into())],
-                vec![Some("701".into()), Some("float8".into()), Some("11".into()), Some("8".into()), Some("b".into())],
-                vec![Some("1043".into()), Some("varchar".into()), Some("11".into()), Some("-1".into()), Some("b".into())],
+                vec![
+                    Some("16".into()),
+                    Some("bool".into()),
+                    Some("11".into()),
+                    Some("1".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("20".into()),
+                    Some("int8".into()),
+                    Some("11".into()),
+                    Some("8".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("21".into()),
+                    Some("int2".into()),
+                    Some("11".into()),
+                    Some("2".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("23".into()),
+                    Some("int4".into()),
+                    Some("11".into()),
+                    Some("4".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("25".into()),
+                    Some("text".into()),
+                    Some("11".into()),
+                    Some("-1".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("700".into()),
+                    Some("float4".into()),
+                    Some("11".into()),
+                    Some("4".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("701".into()),
+                    Some("float8".into()),
+                    Some("11".into()),
+                    Some("8".into()),
+                    Some("b".into()),
+                ],
+                vec![
+                    Some("1043".into()),
+                    Some("varchar".into()),
+                    Some("11".into()),
+                    Some("-1".into()),
+                    Some("b".into()),
+                ],
             ];
-            Ok(Some(make_rel(&["oid", "typname", "typnamespace", "typlen", "typtype"], rows)))
+            Ok(Some(make_rel(
+                &["oid", "typname", "typnamespace", "typlen", "typtype"],
+                rows,
+            )))
         }
         "pg_class" => {
             let mut rows = Vec::new();
@@ -2349,7 +2886,10 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
                     Some("10".into()),
                 ]);
             }
-            Ok(Some(make_rel(&["oid", "relname", "relnamespace", "relkind", "relowner"], rows)))
+            Ok(Some(make_rel(
+                &["oid", "relname", "relnamespace", "relkind", "relowner"],
+                rows,
+            )))
         }
         "pg_attribute" => {
             let mut rows = Vec::new();
@@ -2366,15 +2906,41 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
                     ]);
                 }
             }
-            Ok(Some(make_rel(&["attrelid", "attname", "atttypid", "attnum", "attnotnull", "attisdropped"], rows)))
+            Ok(Some(make_rel(
+                &[
+                    "attrelid",
+                    "attname",
+                    "atttypid",
+                    "attnum",
+                    "attnotnull",
+                    "attisdropped",
+                ],
+                rows,
+            )))
         }
         "pg_database" => {
-            let rows = vec![vec![Some("16380".into()), Some(ctx.database.into()), Some("10".into()), Some("6".into())]];
-            Ok(Some(make_rel(&["oid", "datname", "datdba", "encoding"], rows)))
+            let rows = vec![vec![
+                Some("16380".into()),
+                Some(ctx.database.into()),
+                Some("10".into()),
+                Some("6".into()),
+            ]];
+            Ok(Some(make_rel(
+                &["oid", "datname", "datdba", "encoding"],
+                rows,
+            )))
         }
         "pg_roles" | "pg_user" | "pg_authid" => {
-            let rows = vec![vec![Some("10".into()), Some(ctx.user.into()), Some("true".into()), Some("true".into())]];
-            Ok(Some(make_rel(&["oid", "rolname", "rolsuper", "rolcanlogin"], rows)))
+            let rows = vec![vec![
+                Some("10".into()),
+                Some(ctx.user.into()),
+                Some("true".into()),
+                Some("true".into()),
+            ]];
+            Ok(Some(make_rel(
+                &["oid", "rolname", "rolsuper", "rolcanlogin"],
+                rows,
+            )))
         }
         "pg_settings" => {
             let rows = vec![
@@ -2382,12 +2948,25 @@ fn load_system_table(ctx: &ExecCtx, name: &str, alias: &str) -> Result<Option<Re
                 vec![Some("server_encoding".into()), Some("UTF8".into())],
                 vec![Some("client_encoding".into()), Some("UTF8".into())],
                 vec![Some("TimeZone".into()), Some("UTC".into())],
-                vec![Some("standard_conforming_strings".into()), Some("on".into())],
+                vec![
+                    Some("standard_conforming_strings".into()),
+                    Some("on".into()),
+                ],
             ];
             Ok(Some(make_rel(&["name", "setting"], rows)))
         }
         "pg_index" | "pg_constraint" | "pg_description" | "pg_attrdef" | "pg_am" => {
-            Ok(Some(make_rel(&["oid", "indrelid", "indexrelid", "conname", "description", "amname"], Vec::new())))
+            Ok(Some(make_rel(
+                &[
+                    "oid",
+                    "indrelid",
+                    "indexrelid",
+                    "conname",
+                    "description",
+                    "amname",
+                ],
+                Vec::new(),
+            )))
         }
         _ => Ok(None),
     }
@@ -2398,30 +2977,62 @@ fn eval_table_factor(ctx: &ExecCtx, tf: &TableFactor) -> Result<Rel, String> {
         TableFactor::Table { name, alias } => load_base_table(ctx, name, alias),
         TableFactor::Subquery { query, alias } => {
             let rel = eval_query(ctx, query)?;
-            let cols = rel.cols.into_iter().map(|(_, c)| (alias.clone(), c)).collect();
-            Ok(Rel { cols, rows: rel.rows })
+            let cols = rel
+                .cols
+                .into_iter()
+                .map(|(_, c)| (alias.clone(), c))
+                .collect();
+            Ok(Rel {
+                cols,
+                rows: rel.rows,
+            })
         }
         TableFactor::Sparql { query, alias } => {
-            let opts = QueryOptions { base: "", prefixes: &HashMap::new(), dataset: None, timeout_secs: Some(60), infer: true, at_query: false };
+            let opts = QueryOptions {
+                base: "",
+                prefixes: &HashMap::new(),
+                dataset: None,
+                timeout_secs: Some(60),
+                infer: true,
+                at_query: false,
+            };
             let (vars, str_rows) = match sparql::query(ctx.store, query, &opts)? {
                 QueryResult::Solutions { vars, rows } => {
                     let r: Vec<Vec<Val>> = rows
                         .into_iter()
-                        .map(|row| row.into_iter().map(|t| t.as_ref().map(Val::from_term).unwrap_or(Val::Null)).collect())
+                        .map(|row| {
+                            row.into_iter()
+                                .map(|t| t.as_ref().map(Val::from_term).unwrap_or(Val::Null))
+                                .collect()
+                        })
                         .collect();
                     (vars, r)
                 }
                 QueryResult::Boolean(b) => (vec!["result".into()], vec![vec![Val::Bool(b)]]),
                 QueryResult::Graph(g) => (
                     vec!["subject".into(), "predicate".into(), "object".into()],
-                    g.into_iter().map(|q| vec![Val::from_term(&q.s), Val::from_term(&q.p), Val::from_term(&q.o)]).collect(),
+                    g.into_iter()
+                        .map(|q| {
+                            vec![
+                                Val::from_term(&q.s),
+                                Val::from_term(&q.p),
+                                Val::from_term(&q.o),
+                            ]
+                        })
+                        .collect(),
                 ),
             };
             let cols = vars.into_iter().map(|v| (alias.clone(), v)).collect();
-            Ok(Rel { cols, rows: str_rows })
+            Ok(Rel {
+                cols,
+                rows: str_rows,
+            })
         }
         TableFactor::Func { name, args, alias } => {
-            let empty_rel = Rel { cols: Vec::new(), rows: vec![Vec::new()] };
+            let empty_rel = Rel {
+                cols: Vec::new(),
+                rows: vec![Vec::new()],
+            };
             let mut arg_vals = Vec::new();
             for a in args {
                 arg_vals.push(eval_expr(ctx, &empty_rel, &[], a)?);
@@ -2429,7 +3040,10 @@ fn eval_table_factor(ctx: &ExecCtx, tf: &TableFactor) -> Result<Rel, String> {
             if name.eq_ignore_ascii_case("generate_series") {
                 let start = arg_vals.first().and_then(|v| v.as_i64()).unwrap_or(1);
                 let stop = arg_vals.get(1).and_then(|v| v.as_i64()).unwrap_or(start);
-                let step = arg_vals.get(2).and_then(|v| v.as_i64()).unwrap_or(if start <= stop { 1 } else { -1 });
+                let step = arg_vals
+                    .get(2)
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(if start <= stop { 1 } else { -1 });
                 if step == 0 {
                     return Err("step size cannot equal zero".into());
                 }
@@ -2442,12 +3056,18 @@ fn eval_table_factor(ctx: &ExecCtx, tf: &TableFactor) -> Result<Rel, String> {
                         break;
                     }
                 }
-                return Ok(Rel { cols: vec![(alias.clone(), alias.clone())], rows });
+                return Ok(Rel {
+                    cols: vec![(alias.clone(), alias.clone())],
+                    rows,
+                });
             }
             if name.eq_ignore_ascii_case("unnest") {
                 let items = arg_vals.first().map(|v| v.items()).unwrap_or_default();
                 let rows = items.into_iter().map(|v| vec![v]).collect();
-                return Ok(Rel { cols: vec![(alias.clone(), alias.clone())], rows });
+                return Ok(Rel {
+                    cols: vec![(alias.clone(), alias.clone())],
+                    rows,
+                });
             }
             Err(format!("unsupported table function \"{name}\""))
         }
@@ -2473,7 +3093,12 @@ fn join_values_match(left: &Val, right: &Val) -> bool {
 
 /// Extract simple `a = b` equi-join column indices when possible, to support multi-valued RDF predicate unnesting.
 fn extract_simple_equi(left_rel: &Rel, right_rel: &Rel, expr: &Expr) -> Option<(usize, usize)> {
-    if let Expr::Binary { left, op: BinOp::Eq, right } = expr {
+    if let Expr::Binary {
+        left,
+        op: BinOp::Eq,
+        right,
+    } = expr
+    {
         if let (Expr::Col(a), Expr::Col(b)) = (left.as_ref(), right.as_ref()) {
             if let (Ok(l), Ok(r)) = (left_rel.resolve(a), right_rel.resolve(b)) {
                 return Some((l, r));
@@ -2491,7 +3116,10 @@ fn execute_join(ctx: &ExecCtx, left_rel: Rel, j: &JoinAst) -> Result<Rel, String
     let mut combined_cols = left_rel.cols.clone();
     combined_cols.extend(right_rel.cols.clone());
 
-    let dummy_rel = Rel { cols: combined_cols.clone(), rows: Vec::new() };
+    let dummy_rel = Rel {
+        cols: combined_cols.clone(),
+        rows: Vec::new(),
+    };
     // Validate column references in ON or USING early
     match &j.cond {
         JoinCond::On(expr) => {
@@ -2539,7 +3167,9 @@ fn execute_join(ctx: &ExecCtx, left_rel: Rel, j: &JoinAst) -> Result<Rel, String
                     if let Some((li, ri)) = simple_equi {
                         join_values_match(&l_row[li], &r_row[ri])
                     } else {
-                        eval_expr(ctx, &dummy_rel, &combined_row, expr)?.as_bool().unwrap_or(false)
+                        eval_expr(ctx, &dummy_rel, &combined_row, expr)?
+                            .as_bool()
+                            .unwrap_or(false)
                     }
                 }
             };
@@ -2560,7 +3190,8 @@ fn execute_join(ctx: &ExecCtx, left_rel: Rel, j: &JoinAst) -> Result<Rel, String
     if j.kind == JoinKind::Right || j.kind == JoinKind::Full {
         for (r_idx, r_row) in right_rel.rows.iter().enumerate() {
             if !right_matched[r_idx] {
-                let mut combined_row: Vec<Val> = std::iter::repeat_n(Val::Null, left_rel.cols.len()).collect();
+                let mut combined_row: Vec<Val> =
+                    std::iter::repeat_n(Val::Null, left_rel.cols.len()).collect();
                 combined_row.extend(r_row.iter().cloned());
                 out_rows.push(combined_row);
             }
@@ -2584,7 +3215,10 @@ fn execute_join(ctx: &ExecCtx, left_rel: Rel, j: &JoinAst) -> Result<Rel, String
         }
     }
 
-    Ok(Rel { cols: combined_cols, rows: out_rows })
+    Ok(Rel {
+        cols: combined_cols,
+        rows: out_rows,
+    })
 }
 
 fn validate_expr_cols(rel: &Rel, expr: &Expr) -> Result<(), String> {
@@ -2593,12 +3227,17 @@ fn validate_expr_cols(rel: &Rel, expr: &Expr) -> Result<(), String> {
             rel.resolve(c)?;
             Ok(())
         }
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::IsBool { expr, .. } | Expr::Cast { expr, .. } => validate_expr_cols(rel, expr),
+        Expr::Unary { expr, .. }
+        | Expr::IsNull { expr, .. }
+        | Expr::IsBool { expr, .. }
+        | Expr::Cast { expr, .. } => validate_expr_cols(rel, expr),
         Expr::Binary { left, right, .. } => {
             validate_expr_cols(rel, left)?;
             validate_expr_cols(rel, right)
         }
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             validate_expr_cols(rel, expr)?;
             validate_expr_cols(rel, low)?;
             validate_expr_cols(rel, high)
@@ -2610,7 +3249,11 @@ fn validate_expr_cols(rel: &Rel, expr: &Expr) -> Result<(), String> {
             }
             Ok(())
         }
-        Expr::Case { operand, branches, else_expr } => {
+        Expr::Case {
+            operand,
+            branches,
+            else_expr,
+        } => {
             if let Some(op) = operand {
                 validate_expr_cols(rel, op)?;
             }
@@ -2641,13 +3284,25 @@ fn validate_expr_cols(rel: &Rel, expr: &Expr) -> Result<(), String> {
 fn is_agg_func(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
-        "count" | "sum" | "avg" | "min" | "max" | "string_agg" | "group_concat" | "array_agg" | "bool_and" | "bool_or" | "every"
+        "count"
+            | "sum"
+            | "avg"
+            | "min"
+            | "max"
+            | "string_agg"
+            | "group_concat"
+            | "array_agg"
+            | "bool_and"
+            | "bool_or"
+            | "every"
     )
 }
 
 fn expr_contains_agg(expr: &Expr) -> bool {
     match expr {
-        Expr::Func { name, args, over, .. } => {
+        Expr::Func {
+            name, args, over, ..
+        } => {
             if over.is_some() {
                 return false;
             }
@@ -2656,13 +3311,26 @@ fn expr_contains_agg(expr: &Expr) -> bool {
             }
             args.iter().any(expr_contains_agg)
         }
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::IsBool { expr, .. } | Expr::Cast { expr, .. } => expr_contains_agg(expr),
+        Expr::Unary { expr, .. }
+        | Expr::IsNull { expr, .. }
+        | Expr::IsBool { expr, .. }
+        | Expr::Cast { expr, .. } => expr_contains_agg(expr),
         Expr::Binary { left, right, .. } => expr_contains_agg(left) || expr_contains_agg(right),
-        Expr::Between { expr, low, high, .. } => expr_contains_agg(expr) || expr_contains_agg(low) || expr_contains_agg(high),
-        Expr::InList { expr, list, .. } => expr_contains_agg(expr) || list.iter().any(expr_contains_agg),
-        Expr::Case { operand, branches, else_expr } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => expr_contains_agg(expr) || expr_contains_agg(low) || expr_contains_agg(high),
+        Expr::InList { expr, list, .. } => {
+            expr_contains_agg(expr) || list.iter().any(expr_contains_agg)
+        }
+        Expr::Case {
+            operand,
+            branches,
+            else_expr,
+        } => {
             operand.as_ref().is_some_and(|e| expr_contains_agg(e))
-                || branches.iter().any(|(w, t)| expr_contains_agg(w) || expr_contains_agg(t))
+                || branches
+                    .iter()
+                    .any(|(w, t)| expr_contains_agg(w) || expr_contains_agg(t))
                 || else_expr.as_ref().is_some_and(|e| expr_contains_agg(e))
         }
         _ => false,
@@ -2672,11 +3340,22 @@ fn expr_contains_agg(expr: &Expr) -> bool {
 fn expr_contains_window(expr: &Expr) -> bool {
     match expr {
         Expr::Func { over, args, .. } => over.is_some() || args.iter().any(expr_contains_window),
-        Expr::Unary { expr, .. } | Expr::IsNull { expr, .. } | Expr::IsBool { expr, .. } | Expr::Cast { expr, .. } => expr_contains_window(expr),
-        Expr::Binary { left, right, .. } => expr_contains_window(left) || expr_contains_window(right),
-        Expr::Case { operand, branches, else_expr } => {
+        Expr::Unary { expr, .. }
+        | Expr::IsNull { expr, .. }
+        | Expr::IsBool { expr, .. }
+        | Expr::Cast { expr, .. } => expr_contains_window(expr),
+        Expr::Binary { left, right, .. } => {
+            expr_contains_window(left) || expr_contains_window(right)
+        }
+        Expr::Case {
+            operand,
+            branches,
+            else_expr,
+        } => {
             operand.as_ref().is_some_and(|e| expr_contains_window(e))
-                || branches.iter().any(|(w, t)| expr_contains_window(w) || expr_contains_window(t))
+                || branches
+                    .iter()
+                    .any(|(w, t)| expr_contains_window(w) || expr_contains_window(t))
                 || else_expr.as_ref().is_some_and(|e| expr_contains_window(e))
         }
         _ => false,
@@ -2687,7 +3366,13 @@ fn eval_expr(ctx: &ExecCtx, rel: &Rel, row: &[Val], expr: &Expr) -> Result<Val, 
     eval_expr_group(ctx, rel, row, None, expr)
 }
 
-fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Option<&[Vec<Val>]>, expr: &Expr) -> Result<Val, String> {
+fn eval_expr_group(
+    ctx: &ExecCtx,
+    rel: &Rel,
+    repr_row: &[Val],
+    group_rows: Option<&[Vec<Val>]>,
+    expr: &Expr,
+) -> Result<Val, String> {
     match expr {
         Expr::Null => Ok(Val::Null),
         Expr::Bool(b) => Ok(Val::Bool(*b)),
@@ -2700,7 +3385,10 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
                 return Ok(repr_row.get(idx).cloned().unwrap_or(Val::Null));
             }
             if let Some(outer) = &ctx.outer {
-                let outer_rel = Rel { cols: outer.0.clone(), rows: Vec::new() };
+                let outer_rel = Rel {
+                    cols: outer.0.clone(),
+                    rows: Vec::new(),
+                };
                 if let Ok(idx) = outer_rel.resolve(name) {
                     return Ok(outer.1.get(idx).cloned().unwrap_or(Val::Null));
                 }
@@ -2730,12 +3418,21 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             let is_n = v.is_null();
             Ok(Val::Bool(if *not { !is_n } else { is_n }))
         }
-        Expr::IsBool { expr: inner, val, not } => {
+        Expr::IsBool {
+            expr: inner,
+            val,
+            not,
+        } => {
             let v = eval_expr_group(ctx, rel, repr_row, group_rows, inner)?;
             let matches = v.as_bool() == Some(*val);
             Ok(Val::Bool(if *not { !matches } else { matches }))
         }
-        Expr::Between { expr: target, low, high, not } => {
+        Expr::Between {
+            expr: target,
+            low,
+            high,
+            not,
+        } => {
             let v = eval_expr_group(ctx, rel, repr_row, group_rows, target)?;
             let l = eval_expr_group(ctx, rel, repr_row, group_rows, low)?;
             let h = eval_expr_group(ctx, rel, repr_row, group_rows, high)?;
@@ -2743,10 +3440,16 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
                 return Ok(Val::Bool(false));
             }
             let items = v.items();
-            let hit = items.iter().any(|item| cmp_vals(item, &l) != Ordering::Less && cmp_vals(item, &h) != Ordering::Greater);
+            let hit = items.iter().any(|item| {
+                cmp_vals(item, &l) != Ordering::Less && cmp_vals(item, &h) != Ordering::Greater
+            });
             Ok(Val::Bool(if *not { !hit } else { hit }))
         }
-        Expr::InList { expr: target, list, not } => {
+        Expr::InList {
+            expr: target,
+            list,
+            not,
+        } => {
             let v = eval_expr_group(ctx, rel, repr_row, group_rows, target)?;
             if v.is_null() {
                 return Ok(Val::Bool(false));
@@ -2755,14 +3458,22 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             let mut hit = false;
             for item_expr in list {
                 let lv = eval_expr_group(ctx, rel, repr_row, group_rows, item_expr)?;
-                if !lv.is_null() && v_items.iter().any(|vi| cmp_vals(vi, &lv) == Ordering::Equal) {
+                if !lv.is_null()
+                    && v_items
+                        .iter()
+                        .any(|vi| cmp_vals(vi, &lv) == Ordering::Equal)
+                {
                     hit = true;
                     break;
                 }
             }
             Ok(Val::Bool(if *not { !hit } else { hit }))
         }
-        Expr::InSubquery { expr: target, query, not } => {
+        Expr::InSubquery {
+            expr: target,
+            query,
+            not,
+        } => {
             let v = eval_expr_group(ctx, rel, repr_row, group_rows, target)?;
             if v.is_null() {
                 return Ok(Val::Bool(false));
@@ -2776,7 +3487,11 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
                 .iter()
                 .filter_map(|r| r.first())
                 .filter(|cell| !cell.is_null())
-                .any(|cell| v_items.iter().any(|vi| cmp_vals(vi, cell) == Ordering::Equal));
+                .any(|cell| {
+                    v_items
+                        .iter()
+                        .any(|vi| cmp_vals(vi, cell) == Ordering::Equal)
+                });
             Ok(Val::Bool(if *not { !hit } else { hit }))
         }
         Expr::Exists { query, not } => {
@@ -2790,9 +3505,18 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             let mut sub_ctx = ctx.clone();
             sub_ctx.outer = Some(Arc::new((rel.cols.clone(), repr_row.to_vec())));
             let sub_rel = eval_query(&sub_ctx, query)?;
-            Ok(sub_rel.rows.into_iter().next().and_then(|r| r.into_iter().next()).unwrap_or(Val::Null))
+            Ok(sub_rel
+                .rows
+                .into_iter()
+                .next()
+                .and_then(|r| r.into_iter().next())
+                .unwrap_or(Val::Null))
         }
-        Expr::Case { operand, branches, else_expr } => {
+        Expr::Case {
+            operand,
+            branches,
+            else_expr,
+        } => {
             let op_val = match operand {
                 Some(op) => Some(eval_expr_group(ctx, rel, repr_row, group_rows, op)?),
                 None => None,
@@ -2800,7 +3524,9 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             for (when_e, then_e) in branches {
                 let w_val = eval_expr_group(ctx, rel, repr_row, group_rows, when_e)?;
                 let matched = match &op_val {
-                    Some(ov) => !ov.is_null() && !w_val.is_null() && cmp_vals(ov, &w_val) == Ordering::Equal,
+                    Some(ov) => {
+                        !ov.is_null() && !w_val.is_null() && cmp_vals(ov, &w_val) == Ordering::Equal
+                    }
                     None => w_val.as_bool().unwrap_or(false),
                 };
                 if matched {
@@ -2819,11 +3545,22 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             }
             let t = ty.to_ascii_lowercase();
             if t.contains("int") || t == "serial" || t == "bigserial" || t == "oid" {
-                v.as_i64().map(Val::Int).ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
-            } else if t.contains("float") || t.contains("double") || t.contains("numeric") || t.contains("decimal") || t == "real" {
-                v.as_f64().map(Val::Float).ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
+                v.as_i64()
+                    .map(Val::Int)
+                    .ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
+            } else if t.contains("float")
+                || t.contains("double")
+                || t.contains("numeric")
+                || t.contains("decimal")
+                || t == "real"
+            {
+                v.as_f64()
+                    .map(Val::Float)
+                    .ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
             } else if t.starts_with("bool") {
-                v.as_bool().map(Val::Bool).ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
+                v.as_bool()
+                    .map(Val::Bool)
+                    .ok_or_else(|| format!("cannot cast {:?} to {ty}", v.as_text()))
             } else {
                 Ok(Val::Str(v.as_text().unwrap_or_default()))
             }
@@ -2858,14 +3595,28 @@ fn eval_expr_group(ctx: &ExecCtx, rel: &Rel, repr_row: &[Val], group_rows: Optio
             let rv = eval_expr_group(ctx, rel, repr_row, group_rows, right)?;
             eval_binary_op(&lv, op, &rv)
         }
-        Expr::Func { name, args, distinct, filter, over } => {
+        Expr::Func {
+            name,
+            args,
+            distinct,
+            filter,
+            over,
+        } => {
             if over.is_some() {
                 return Ok(Val::Null); // Evaluated in window pass
             }
             if is_agg_func(name) {
                 let one_row = vec![repr_row.to_vec()]; // an aggregate without GROUP BY sees one row
                 let rows_slice = group_rows.unwrap_or(&one_row);
-                return eval_aggregate(ctx, rel, rows_slice, name, args, *distinct, filter.as_deref());
+                return eval_aggregate(
+                    ctx,
+                    rel,
+                    rows_slice,
+                    name,
+                    args,
+                    *distinct,
+                    filter.as_deref(),
+                );
             }
             let mut eval_args = Vec::with_capacity(args.len());
             for a in args {
@@ -2925,29 +3676,40 @@ fn eval_binary_op(lv: &Val, op: &BinOp, rv: &Val) -> Result<Val, String> {
             };
             // 58000 * 1.1 computes 63800.00000000001: a result that close to a
             // whole number is that whole number (real fractions stay)
-            let res = if (res - res.round()).abs() < 1e-9 { res.round() } else { res };
+            let res = if (res - res.round()).abs() < 1e-9 {
+                res.round()
+            } else {
+                res
+            };
             if res.fract() == 0.0 && matches!((lv, rv), (Val::Int(_), Val::Int(_))) {
                 Ok(Val::Int(res as i64))
             } else {
                 Ok(Val::Float(res))
             }
         }
-        BinOp::Concat => Ok(Val::Str(format!("{}{}", lv.as_text().unwrap_or_default(), rv.as_text().unwrap_or_default()))),
+        BinOp::Concat => Ok(Val::Str(format!(
+            "{}{}",
+            lv.as_text().unwrap_or_default(),
+            rv.as_text().unwrap_or_default()
+        ))),
         BinOp::Like | BinOp::NotLike | BinOp::ILike | BinOp::NotILike => {
             let pat = rv.as_text().unwrap_or_default();
             let ci = matches!(op, BinOp::ILike | BinOp::NotILike);
             let neg = matches!(op, BinOp::NotLike | BinOp::NotILike);
-            let hit = lv.items().iter().any(|item| like_match(&item.as_text().unwrap_or_default(), &pat, ci));
+            let hit = lv
+                .items()
+                .iter()
+                .any(|item| like_match(&item.as_text().unwrap_or_default(), &pat, ci));
             Ok(Val::Bool(if neg { !hit } else { hit }))
         }
         BinOp::Regex | BinOp::IRegex | BinOp::NotRegex => {
             let pat = rv.as_text().unwrap_or_default();
             let flags = if *op == BinOp::IRegex { "i" } else { "" };
             let neg = *op == BinOp::NotRegex;
-            let hit = lv
-                .items()
-                .iter()
-                .any(|item| crate::sparql::regex::Regex::new(&pat, flags).is_ok_and(|r| r.is_match(&item.as_text().unwrap_or_default())));
+            let hit = lv.items().iter().any(|item| {
+                crate::sparql::regex::Regex::new(&pat, flags)
+                    .is_ok_and(|r| r.is_match(&item.as_text().unwrap_or_default()))
+            });
             Ok(Val::Bool(if neg { !hit } else { hit }))
         }
         BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
@@ -2957,7 +3719,11 @@ fn eval_binary_op(lv: &Val, op: &BinOp, rv: &Val) -> Result<Val, String> {
                 r_items.iter().any(|b| {
                     let ord = match (a.as_f64(), b.as_f64()) {
                         (Some(x), Some(y)) => x.partial_cmp(&y),
-                        _ => Some(a.as_text().unwrap_or_default().cmp(&b.as_text().unwrap_or_default())),
+                        _ => Some(
+                            a.as_text()
+                                .unwrap_or_default()
+                                .cmp(&b.as_text().unwrap_or_default()),
+                        ),
                     };
                     let Some(o) = ord else { return false };
                     match op {
@@ -3003,7 +3769,9 @@ fn eval_aggregate(
         return Ok(Val::Int(filtered_rows.len() as i64));
     }
 
-    let arg_expr = args.first().ok_or_else(|| format!("{name}() requires an argument"))?;
+    let arg_expr = args
+        .first()
+        .ok_or_else(|| format!("{name}() requires an argument"))?;
     let mut vals = Vec::new();
     let mut seen_texts = HashSet::new();
 
@@ -3060,21 +3828,31 @@ fn eval_aggregate(
             }
             let sep = if let Some(sep_expr) = args.get(1) {
                 if let Some(first_row) = filtered_rows.first() {
-                    eval_expr(ctx, rel, first_row, sep_expr)?.as_text().unwrap_or_else(|| ",".into())
+                    eval_expr(ctx, rel, first_row, sep_expr)?
+                        .as_text()
+                        .unwrap_or_else(|| ",".into())
                 } else {
                     ",".into()
                 }
             } else {
                 ",".into()
             };
-            let joined = vals.into_iter().filter_map(|v| v.as_text()).collect::<Vec<_>>().join(&sep);
+            let joined = vals
+                .into_iter()
+                .filter_map(|v| v.as_text())
+                .collect::<Vec<_>>()
+                .join(&sep);
             Ok(Val::Str(joined))
         }
         "array_agg" => {
             if vals.is_empty() {
                 return Ok(Val::Null);
             }
-            let joined = vals.into_iter().filter_map(|v| v.as_text()).collect::<Vec<_>>().join(",");
+            let joined = vals
+                .into_iter()
+                .filter_map(|v| v.as_text())
+                .collect::<Vec<_>>()
+                .join(",");
             Ok(Val::Str(format!("{{{joined}}}")))
         }
         "bool_and" | "every" => {
@@ -3100,11 +3878,16 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
     let n0 = || args.first().and_then(|v| v.as_f64());
 
     match name {
-        "version" => Ok(Val::Str(format!("PostgreSQL 15.0 (GraphRD {})", crate::server::VERSION))),
+        "version" => Ok(Val::Str(format!(
+            "PostgreSQL 15.0 (GraphRD {})",
+            crate::server::VERSION
+        ))),
         "current_database" | "current_catalog" => Ok(Val::Str(ctx.database.to_string())),
         "current_schema" => Ok(Val::Str("public".into())),
         "current_schemas" => Ok(Val::Str("{pg_catalog,public}".into())),
-        "current_user" | "user" | "session_user" | "getpgusername" => Ok(Val::Str(ctx.user.to_string())),
+        "current_user" | "user" | "session_user" | "getpgusername" => {
+            Ok(Val::Str(ctx.user.to_string()))
+        }
         "pg_backend_pid" => Ok(Val::Int(std::process::id() as i64)),
         "pg_is_in_recovery" => Ok(Val::Bool(false)),
         "current_setting" => {
@@ -3137,10 +3920,18 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             };
             Ok(Val::Str(t.into()))
         }
-        "pg_get_expr" | "pg_get_indexdef" | "pg_get_constraintdef" | "obj_description" | "col_description" | "shobj_description" => Ok(Val::Null),
-        "pg_table_is_visible" | "pg_type_is_visible" | "pg_function_is_visible" | "has_table_privilege" | "has_schema_privilege" | "has_database_privilege" => {
-            Ok(Val::Bool(true))
-        }
+        "pg_get_expr"
+        | "pg_get_indexdef"
+        | "pg_get_constraintdef"
+        | "obj_description"
+        | "col_description"
+        | "shobj_description" => Ok(Val::Null),
+        "pg_table_is_visible"
+        | "pg_type_is_visible"
+        | "pg_function_is_visible"
+        | "has_table_privilege"
+        | "has_schema_privilege"
+        | "has_database_privilege" => Ok(Val::Bool(true)),
         "pg_get_userbyid" => Ok(Val::Str(ctx.user.to_string())),
         "pg_typeof" => Ok(Val::Str(match args.first() {
             Some(Val::Int(_)) => "integer".into(),
@@ -3149,17 +3940,33 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             Some(Val::Null) | None => "unknown".into(),
             _ => "text".into(),
         })),
-        "coalesce" | "ifnull" | "nvl" => Ok(args.iter().find(|v| !v.is_null()).cloned().unwrap_or(Val::Null)),
+        "coalesce" | "ifnull" | "nvl" => Ok(args
+            .iter()
+            .find(|v| !v.is_null())
+            .cloned()
+            .unwrap_or(Val::Null)),
         "nullif" => {
-            let (Some(a), Some(b)) = (args.first(), args.get(1)) else { return Ok(Val::Null) };
+            let (Some(a), Some(b)) = (args.first(), args.get(1)) else {
+                return Ok(Val::Null);
+            };
             if !a.is_null() && !b.is_null() && cmp_vals(a, b) == Ordering::Equal {
                 Ok(Val::Null)
             } else {
                 Ok(a.clone())
             }
         }
-        "greatest" => Ok(args.iter().filter(|v| !v.is_null()).max_by(|a, b| cmp_vals(a, b)).cloned().unwrap_or(Val::Null)),
-        "least" => Ok(args.iter().filter(|v| !v.is_null()).min_by(|a, b| cmp_vals(a, b)).cloned().unwrap_or(Val::Null)),
+        "greatest" => Ok(args
+            .iter()
+            .filter(|v| !v.is_null())
+            .max_by(|a, b| cmp_vals(a, b))
+            .cloned()
+            .unwrap_or(Val::Null)),
+        "least" => Ok(args
+            .iter()
+            .filter(|v| !v.is_null())
+            .min_by(|a, b| cmp_vals(a, b))
+            .cloned()
+            .unwrap_or(Val::Null)),
         "iif" | "if" => {
             let cond = args.first().and_then(|v| v.as_bool()).unwrap_or(false);
             Ok(if cond {
@@ -3169,9 +3976,15 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             })
         }
         // String functions
-        "upper" | "ucase" => Ok(s0().map(|s| Val::Str(s.to_uppercase())).unwrap_or(Val::Null)),
-        "lower" | "lcase" => Ok(s0().map(|s| Val::Str(s.to_lowercase())).unwrap_or(Val::Null)),
-        "length" | "char_length" | "character_length" | "len" => Ok(s0().map(|s| Val::Int(s.chars().count() as i64)).unwrap_or(Val::Null)),
+        "upper" | "ucase" => Ok(s0()
+            .map(|s| Val::Str(s.to_uppercase()))
+            .unwrap_or(Val::Null)),
+        "lower" | "lcase" => Ok(s0()
+            .map(|s| Val::Str(s.to_lowercase()))
+            .unwrap_or(Val::Null)),
+        "length" | "char_length" | "character_length" | "len" => Ok(s0()
+            .map(|s| Val::Int(s.chars().count() as i64))
+            .unwrap_or(Val::Null)),
         "octet_length" => Ok(s0().map(|s| Val::Int(s.len() as i64)).unwrap_or(Val::Null)),
         "trim" | "btrim" => {
             let Some(s) = s0() else { return Ok(Val::Null) };
@@ -3210,7 +4023,11 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             }
             if let Some(len) = args.get(2).and_then(|v| v.as_i64()) {
                 let take = len.max(0) as usize;
-                Ok(Val::Str(chars[start..(start + take).min(chars.len())].iter().collect()))
+                Ok(Val::Str(
+                    chars[start..(start + take).min(chars.len())]
+                        .iter()
+                        .collect(),
+                ))
             } else {
                 Ok(Val::Str(chars[start..].iter().collect()))
             }
@@ -3228,7 +4045,9 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             Ok(Val::Str(chars.into_iter().skip(skip).collect()))
         }
         "replace" => {
-            let (Some(s), Some(from)) = (s0(), args.get(1).and_then(|v| v.as_text())) else { return Ok(Val::Null) };
+            let (Some(s), Some(from)) = (s0(), args.get(1).and_then(|v| v.as_text())) else {
+                return Ok(Val::Null);
+            };
             let to = args.get(2).and_then(|v| v.as_text()).unwrap_or_default();
             Ok(Val::Str(s.replace(&from, &to)))
         }
@@ -3242,12 +4061,18 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             Ok(Val::Str(out))
         }
         "concat_ws" => {
-            let Some(sep) = s0() else { return Ok(Val::Null) };
+            let Some(sep) = s0() else {
+                return Ok(Val::Null);
+            };
             let parts: Vec<String> = args.iter().skip(1).filter_map(|a| a.as_text()).collect();
             Ok(Val::Str(parts.join(&sep)))
         }
         "split_part" => {
-            let (Some(s), Some(delim), Some(idx)) = (s0(), args.get(1).and_then(|v| v.as_text()), args.get(2).and_then(|v| v.as_i64())) else {
+            let (Some(s), Some(delim), Some(idx)) = (
+                s0(),
+                args.get(1).and_then(|v| v.as_text()),
+                args.get(2).and_then(|v| v.as_i64()),
+            ) else {
                 return Ok(Val::Null);
             };
             if idx < 1 {
@@ -3257,24 +4082,40 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             Ok(Val::Str(part.to_string()))
         }
         "position" | "strpos" => {
-            let (Some(a), Some(b)) = (s0(), args.get(1).and_then(|v| v.as_text())) else { return Ok(Val::Null) };
+            let (Some(a), Some(b)) = (s0(), args.get(1).and_then(|v| v.as_text())) else {
+                return Ok(Val::Null);
+            };
             // position(sub in str) passes [sub, str]; strpos(str, sub) passes [str, sub]
             let (haystack, needle) = if name == "position" { (b, a) } else { (a, b) };
-            let pos = haystack.find(&needle).map(|byte_idx| haystack[..byte_idx].chars().count() as i64 + 1).unwrap_or(0);
+            let pos = haystack
+                .find(&needle)
+                .map(|byte_idx| haystack[..byte_idx].chars().count() as i64 + 1)
+                .unwrap_or(0);
             Ok(Val::Int(pos))
         }
         "starts_with" => {
-            let (Some(s), Some(prefix)) = (s0(), args.get(1).and_then(|v| v.as_text())) else { return Ok(Val::Null) };
+            let (Some(s), Some(prefix)) = (s0(), args.get(1).and_then(|v| v.as_text())) else {
+                return Ok(Val::Null);
+            };
             Ok(Val::Bool(s.starts_with(&prefix)))
         }
-        "reverse" => Ok(s0().map(|s| Val::Str(s.chars().rev().collect())).unwrap_or(Val::Null)),
+        "reverse" => Ok(s0()
+            .map(|s| Val::Str(s.chars().rev().collect()))
+            .unwrap_or(Val::Null)),
         "repeat" => {
-            let (Some(s), Some(n)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else { return Ok(Val::Null) };
+            let (Some(s), Some(n)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else {
+                return Ok(Val::Null);
+            };
             Ok(Val::Str(s.repeat(n.clamp(0, 10_000) as usize)))
         }
         "lpad" => {
-            let (Some(s), Some(len)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else { return Ok(Val::Null) };
-            let fill = args.get(2).and_then(|v| v.as_text()).unwrap_or_else(|| " ".into());
+            let (Some(s), Some(len)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else {
+                return Ok(Val::Null);
+            };
+            let fill = args
+                .get(2)
+                .and_then(|v| v.as_text())
+                .unwrap_or_else(|| " ".into());
             let target = len.max(0) as usize;
             let cur_len = s.chars().count();
             if cur_len >= target {
@@ -3285,8 +4126,13 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             }
         }
         "rpad" => {
-            let (Some(s), Some(len)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else { return Ok(Val::Null) };
-            let fill = args.get(2).and_then(|v| v.as_text()).unwrap_or_else(|| " ".into());
+            let (Some(s), Some(len)) = (s0(), args.get(1).and_then(|v| v.as_i64())) else {
+                return Ok(Val::Null);
+            };
+            let fill = args
+                .get(2)
+                .and_then(|v| v.as_text())
+                .unwrap_or_else(|| " ".into());
             let target = len.max(0) as usize;
             let cur_len = s.chars().count();
             if cur_len >= target {
@@ -3321,7 +4167,9 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             _ => Ok(n0().map(|f| Val::Float(f.abs())).unwrap_or(Val::Null)),
         },
         "ceil" | "ceiling" => Ok(n0().map(|f| Val::Int(f.ceil() as i64)).unwrap_or(Val::Null)),
-        "floor" => Ok(n0().map(|f| Val::Int(f.floor() as i64)).unwrap_or(Val::Null)),
+        "floor" => Ok(n0()
+            .map(|f| Val::Int(f.floor() as i64))
+            .unwrap_or(Val::Null)),
         "round" => {
             let Some(f) = n0() else { return Ok(Val::Null) };
             let digits = args.get(1).and_then(|v| v.as_i64()).unwrap_or(0);
@@ -3344,7 +4192,9 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
             }
         }
         "power" | "pow" => {
-            let (Some(a), Some(b)) = (n0(), args.get(1).and_then(|v| v.as_f64())) else { return Ok(Val::Null) };
+            let (Some(a), Some(b)) = (n0(), args.get(1).and_then(|v| v.as_f64())) else {
+                return Ok(Val::Null);
+            };
             let r = a.powf(b);
             if r.fract() == 0.0 {
                 Ok(Val::Int(r as i64))
@@ -3354,7 +4204,9 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
         }
         "sqrt" => Ok(n0().map(|f| Val::Float(f.sqrt())).unwrap_or(Val::Null)),
         "mod" => {
-            let (Some(a), Some(b)) = (args.first(), args.get(1)) else { return Ok(Val::Null) };
+            let (Some(a), Some(b)) = (args.first(), args.get(1)) else {
+                return Ok(Val::Null);
+            };
             eval_binary_op(a, &BinOp::Rem, b)
         }
         "sign" => Ok(n0()
@@ -3372,14 +4224,23 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
         "log" | "log10" => Ok(n0().map(|f| Val::Float(f.log10())).unwrap_or(Val::Null)),
         "exp" => Ok(n0().map(|f| Val::Float(f.exp())).unwrap_or(Val::Null)),
         // Date/Time functions
-        "now" | "current_timestamp" | "transaction_timestamp" | "statement_timestamp" | "clock_timestamp" => Ok(Val::Str("2026-01-01T00:00:00Z".into())),
+        "now"
+        | "current_timestamp"
+        | "transaction_timestamp"
+        | "statement_timestamp"
+        | "clock_timestamp" => Ok(Val::Str("2026-01-01T00:00:00Z".into())),
         "current_date" => Ok(Val::Str("2026-01-01".into())),
         "current_time" => Ok(Val::Str("00:00:00".into())),
         "extract" | "date_part" => {
-            let (Some(field), Some(src)) = (s0(), args.get(1).and_then(|v| v.as_text())) else { return Ok(Val::Null) };
+            let (Some(field), Some(src)) = (s0(), args.get(1).and_then(|v| v.as_text())) else {
+                return Ok(Val::Null);
+            };
             let f = field.to_ascii_lowercase();
             // Parse YYYY-MM-DD[THH:MM:SS]
-            let parts: Vec<&str> = src.split(|c: char| !c.is_ascii_digit()).filter(|s| !s.is_empty()).collect();
+            let parts: Vec<&str> = src
+                .split(|c: char| !c.is_ascii_digit())
+                .filter(|s| !s.is_empty())
+                .collect();
             let val = match f.as_str() {
                 "year" => parts.first().and_then(|s| s.parse::<i64>().ok()),
                 "month" => parts.get(1).and_then(|s| s.parse::<i64>().ok()),
@@ -3393,7 +4254,11 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
         }
         "to_char" => Ok(s0().map(Val::Str).unwrap_or(Val::Null)),
         "array_construct" | "row_construct" => {
-            let s = args.iter().filter_map(|a| a.as_text()).collect::<Vec<_>>().join(",");
+            let s = args
+                .iter()
+                .filter_map(|a| a.as_text())
+                .collect::<Vec<_>>()
+                .join(",");
             Ok(Val::Str(format!("{{{s}}}")))
         }
         "array_length" | "cardinality" => {
@@ -3409,9 +4274,21 @@ fn eval_scalar_func(ctx: &ExecCtx, name: &str, args: &[Val]) -> Result<Val, Stri
     }
 }
 
-fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize, expr: &Expr) -> Result<Val, String> {
+fn eval_window_expr(
+    ctx: &ExecCtx,
+    rel: &Rel,
+    rows: &[Vec<Val>],
+    row_idx: usize,
+    expr: &Expr,
+) -> Result<Val, String> {
     match expr {
-        Expr::Func { name, args, distinct, filter, over: Some(win) } => {
+        Expr::Func {
+            name,
+            args,
+            distinct,
+            filter,
+            over: Some(win),
+        } => {
             let cur_row = &rows[row_idx];
             // Build partition matching current row
             let cur_part_key: Vec<Val> = win
@@ -3422,8 +4299,16 @@ fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize,
 
             let mut part_indices: Vec<usize> = Vec::new();
             for (idx, r) in rows.iter().enumerate() {
-                let k: Vec<Val> = win.partition_by.iter().map(|pe| eval_expr(ctx, rel, r, pe)).collect::<Result<_, _>>()?;
-                let eq = cur_part_key.len() == k.len() && cur_part_key.iter().zip(&k).all(|(a, b)| cmp_vals(a, b) == Ordering::Equal);
+                let k: Vec<Val> = win
+                    .partition_by
+                    .iter()
+                    .map(|pe| eval_expr(ctx, rel, r, pe))
+                    .collect::<Result<_, _>>()?;
+                let eq = cur_part_key.len() == k.len()
+                    && cur_part_key
+                        .iter()
+                        .zip(&k)
+                        .all(|(a, b)| cmp_vals(a, b) == Ordering::Equal);
                 if eq {
                     part_indices.push(idx);
                 }
@@ -3443,7 +4328,10 @@ fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize,
                 part_indices = keyed.into_iter().map(|(_, idx)| idx).collect();
             }
 
-            let pos_in_part = part_indices.iter().position(|&idx| idx == row_idx).unwrap_or(0);
+            let pos_in_part = part_indices
+                .iter()
+                .position(|&idx| idx == row_idx)
+                .unwrap_or(0);
             let fname = name.to_ascii_lowercase();
             match fname.as_str() {
                 "row_number" => Ok(Val::Int((pos_in_part + 1) as i64)),
@@ -3470,7 +4358,11 @@ fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize,
                             rank = (p + 1) as i64;
                         }
                     }
-                    Ok(Val::Int(if fname == "dense_rank" { dense_rank } else { rank }))
+                    Ok(Val::Int(if fname == "dense_rank" {
+                        dense_rank
+                    } else {
+                        rank
+                    }))
                 }
                 "lag" | "lead" => {
                     let arg = args.first().ok_or("LAG/LEAD requires an argument")?;
@@ -3503,27 +4395,59 @@ fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize,
                 }
                 "last_value" => {
                     let arg = args.first().ok_or("LAST_VALUE requires an argument")?;
-                    let last_idx = if win.order_by.is_empty() { *part_indices.last().unwrap() } else { part_indices[pos_in_part] };
+                    let last_idx = if win.order_by.is_empty() {
+                        *part_indices.last().unwrap()
+                    } else {
+                        part_indices[pos_in_part]
+                    };
                     eval_expr(ctx, rel, &rows[last_idx], arg)
                 }
                 "ntile" => {
-                    let buckets = args.first().and_then(|e| eval_expr(ctx, rel, cur_row, e).ok()).and_then(|v| v.as_i64()).unwrap_or(1).max(1) as usize;
+                    let buckets = args
+                        .first()
+                        .and_then(|e| eval_expr(ctx, rel, cur_row, e).ok())
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(1)
+                        .max(1) as usize;
                     let n = part_indices.len().max(1);
                     let bucket = (pos_in_part * buckets / n) + 1;
                     Ok(Val::Int(bucket as i64))
                 }
                 _ if is_agg_func(&fname) => {
                     // Running aggregate if ORDER BY is given, otherwise full partition aggregate
-                    let slice_end = if win.order_by.is_empty() { part_indices.len() } else { pos_in_part + 1 };
-                    let frame_rows: Vec<Vec<Val>> = part_indices[..slice_end].iter().map(|&i| rows[i].clone()).collect();
-                    eval_aggregate(ctx, rel, &frame_rows, &fname, args, *distinct, filter.as_deref())
+                    let slice_end = if win.order_by.is_empty() {
+                        part_indices.len()
+                    } else {
+                        pos_in_part + 1
+                    };
+                    let frame_rows: Vec<Vec<Val>> = part_indices[..slice_end]
+                        .iter()
+                        .map(|&i| rows[i].clone())
+                        .collect();
+                    eval_aggregate(
+                        ctx,
+                        rel,
+                        &frame_rows,
+                        &fname,
+                        args,
+                        *distinct,
+                        filter.as_deref(),
+                    )
                 }
                 _ => Err(format!("unsupported window function \"{name}\"")),
             }
         }
         Expr::Unary { op, expr: inner } => {
             let v = eval_window_expr(ctx, rel, rows, row_idx, inner)?;
-            eval_expr(ctx, rel, &rows[row_idx], &Expr::Unary { op: op.clone(), expr: Box::new(val_to_lit_expr(v)) })
+            eval_expr(
+                ctx,
+                rel,
+                &rows[row_idx],
+                &Expr::Unary {
+                    op: op.clone(),
+                    expr: Box::new(val_to_lit_expr(v)),
+                },
+            )
         }
         Expr::Binary { left, op, right } => {
             let lv = eval_window_expr(ctx, rel, rows, row_idx, left)?;
@@ -3532,7 +4456,15 @@ fn eval_window_expr(ctx: &ExecCtx, rel: &Rel, rows: &[Vec<Val>], row_idx: usize,
         }
         Expr::Cast { expr: inner, ty } => {
             let v = eval_window_expr(ctx, rel, rows, row_idx, inner)?;
-            eval_expr(ctx, rel, &rows[row_idx], &Expr::Cast { expr: Box::new(val_to_lit_expr(v)), ty: ty.clone() })
+            eval_expr(
+                ctx,
+                rel,
+                &rows[row_idx],
+                &Expr::Cast {
+                    expr: Box::new(val_to_lit_expr(v)),
+                    ty: ty.clone(),
+                },
+            )
         }
         _ => eval_expr(ctx, rel, &rows[row_idx], expr),
     }
@@ -3557,11 +4489,19 @@ fn compare_order_keys(a: &[Val], b: &[Val], specs: &[OrderByItem]) -> Ordering {
             (true, true) => continue,
             (true, false) => {
                 let nulls_first = spec.nulls_first.unwrap_or(spec.desc);
-                return if nulls_first { Ordering::Less } else { Ordering::Greater };
+                return if nulls_first {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
             }
             (false, true) => {
                 let nulls_first = spec.nulls_first.unwrap_or(spec.desc);
-                return if nulls_first { Ordering::Greater } else { Ordering::Less };
+                return if nulls_first {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
             }
             (false, false) => {
                 let mut o = cmp_vals(va, vb);
@@ -3586,7 +4526,9 @@ fn eval_query(ctx: &ExecCtx, q: &Query) -> Result<Rel, String> {
                 c.1 = col_alias.clone();
             }
         }
-        local_ctx.ctes.insert(cte.name.to_ascii_lowercase(), cte_rel);
+        local_ctx
+            .ctes
+            .insert(cte.name.to_ascii_lowercase(), cte_rel);
     }
 
     let mut rel = eval_query_body(&local_ctx, &q.body)?;
@@ -3596,18 +4538,31 @@ fn eval_query(ctx: &ExecCtx, q: &Query) -> Result<Rel, String> {
         sort_rel_by_order(&local_ctx, &mut rel, &q.order_by, &[])?;
     }
 
-    let dummy = Rel { cols: Vec::new(), rows: vec![Vec::new()] };
+    let dummy = Rel {
+        cols: Vec::new(),
+        rows: vec![Vec::new()],
+    };
     let offset = match &q.offset {
-        Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?.as_i64().unwrap_or(0).max(0) as usize,
+        Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?
+            .as_i64()
+            .unwrap_or(0)
+            .max(0) as usize,
         None => 0,
     };
     let limit = match &q.limit {
-        Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?.as_i64().map(|n| n.max(0) as usize),
+        Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?
+            .as_i64()
+            .map(|n| n.max(0) as usize),
         None => None,
     };
 
     if offset > 0 || limit.is_some() {
-        rel.rows = rel.rows.into_iter().skip(offset).take(limit.unwrap_or(usize::MAX)).collect();
+        rel.rows = rel
+            .rows
+            .into_iter()
+            .skip(offset)
+            .take(limit.unwrap_or(usize::MAX))
+            .collect();
     }
 
     Ok(rel)
@@ -3617,9 +4572,14 @@ fn eval_query_body(ctx: &ExecCtx, body: &QueryBody) -> Result<Rel, String> {
     match body {
         QueryBody::Select(sel) => eval_select_ast(ctx, sel, &[]),
         QueryBody::Values(expr_rows) => {
-            let empty_rel = Rel { cols: Vec::new(), rows: vec![Vec::new()] };
+            let empty_rel = Rel {
+                cols: Vec::new(),
+                rows: vec![Vec::new()],
+            };
             let ncols = expr_rows.first().map(|r| r.len()).unwrap_or(0);
-            let cols = (1..=ncols).map(|i| (String::new(), format!("column{i}"))).collect();
+            let cols = (1..=ncols)
+                .map(|i| (String::new(), format!("column{i}")))
+                .collect();
             let mut rows = Vec::with_capacity(expr_rows.len());
             for er in expr_rows {
                 let mut r = Vec::with_capacity(er.len());
@@ -3630,14 +4590,23 @@ fn eval_query_body(ctx: &ExecCtx, body: &QueryBody) -> Result<Rel, String> {
             }
             Ok(Rel { cols, rows })
         }
-        QueryBody::SetOp { left, op, all, right } => {
+        QueryBody::SetOp {
+            left,
+            op,
+            all,
+            right,
+        } => {
             let l_rel = eval_query_body(ctx, left)?;
             let r_rel = eval_query_body(ctx, right)?;
             if l_rel.cols.len() != r_rel.cols.len() {
-                return Err(format!("each {:?} query must have the same number of columns", op));
+                return Err(format!(
+                    "each {:?} query must have the same number of columns",
+                    op
+                ));
             }
             let cols = l_rel.cols;
-            let row_key = |r: &[Val]| -> Vec<Option<String>> { r.iter().map(|v| v.as_text()).collect() };
+            let row_key =
+                |r: &[Val]| -> Vec<Option<String>> { r.iter().map(|v| v.as_text()).collect() };
             let mut out_rows = Vec::new();
             match op {
                 SetOp::Union => {
@@ -3654,7 +4623,8 @@ fn eval_query_body(ctx: &ExecCtx, body: &QueryBody) -> Result<Rel, String> {
                     }
                 }
                 SetOp::Intersect => {
-                    let r_keys: HashSet<Vec<Option<String>>> = r_rel.rows.iter().map(|r| row_key(r)).collect();
+                    let r_keys: HashSet<Vec<Option<String>>> =
+                        r_rel.rows.iter().map(|r| row_key(r)).collect();
                     let mut seen = HashSet::new();
                     for r in l_rel.rows {
                         let k = row_key(&r);
@@ -3664,7 +4634,8 @@ fn eval_query_body(ctx: &ExecCtx, body: &QueryBody) -> Result<Rel, String> {
                     }
                 }
                 SetOp::Except => {
-                    let r_keys: HashSet<Vec<Option<String>>> = r_rel.rows.iter().map(|r| row_key(r)).collect();
+                    let r_keys: HashSet<Vec<Option<String>>> =
+                        r_rel.rows.iter().map(|r| row_key(r)).collect();
                     let mut seen = HashSet::new();
                     for r in l_rel.rows {
                         let k = row_key(&r);
@@ -3674,17 +4645,27 @@ fn eval_query_body(ctx: &ExecCtx, body: &QueryBody) -> Result<Rel, String> {
                     }
                 }
             }
-            Ok(Rel { cols, rows: out_rows })
+            Ok(Rel {
+                cols,
+                rows: out_rows,
+            })
         }
     }
 }
 
 /// Evaluate a SELECT query. Note: `Query::order_by` is passed down when body is `QueryBody::Select` so `ORDER BY` can reference both underlying table columns and `SELECT` aliases.
-fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> Result<Rel, String> {
+fn eval_select_ast(
+    ctx: &ExecCtx,
+    sel: &SelectAst,
+    order_by: &[OrderByItem],
+) -> Result<Rel, String> {
     // 1. FROM & JOINs
     let mut base_rel = match &sel.from {
         Some(tf) => eval_table_factor(ctx, tf)?,
-        None => Rel { cols: Vec::new(), rows: vec![Vec::new()] },
+        None => Rel {
+            cols: Vec::new(),
+            rows: vec![Vec::new()],
+        },
     };
     for j in &sel.joins {
         base_rel = execute_join(ctx, base_rel, j)?;
@@ -3702,7 +4683,13 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
         let mut kept = Vec::with_capacity(base_rel.rows.len());
         for row in std::mem::take(&mut base_rel.rows) {
             let keep = eval_expr(ctx, &base_rel, &row, w_expr)
-                .or_else(|e| if e.contains("does not exist") { Ok(Val::Bool(false)) } else { Err(e) })?
+                .or_else(|e| {
+                    if e.contains("does not exist") {
+                        Ok(Val::Bool(false))
+                    } else {
+                        Err(e)
+                    }
+                })?
                 .as_bool()
                 .unwrap_or(false);
             if keep {
@@ -3715,14 +4702,21 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
     // 3. Determine if aggregation is active
     let has_agg = !sel.group_by.is_empty()
         || sel.having.is_some()
-        || sel.projection.iter().any(|item| expr_contains_agg(&item.expr));
+        || sel
+            .projection
+            .iter()
+            .any(|item| expr_contains_agg(&item.expr));
 
     // Resolve alias/positional helper for GROUP BY / ORDER BY
     // (a free function, so it does not borrow base_rel while rows move)
 
     if has_agg {
         // Group rows
-        let group_exprs: Vec<Expr> = sel.group_by.iter().map(|e| resolve_proj_expr(e, sel, &base_rel)).collect();
+        let group_exprs: Vec<Expr> = sel
+            .group_by
+            .iter()
+            .map(|e| resolve_proj_expr(e, sel, &base_rel))
+            .collect();
         let mut groups: Vec<(Vec<Val>, Vec<Vec<Val>>)> = Vec::new();
         let mut key_map: HashMap<Vec<Option<String>>, usize> = HashMap::new();
 
@@ -3752,8 +4746,14 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
         if let Some(h_expr) = &sel.having {
             let mut filtered_groups = Vec::with_capacity(groups.len());
             for (k, g_rows) in groups {
-                let repr = g_rows.first().cloned().unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
-                if eval_expr_group(ctx, &base_rel, &repr, Some(&g_rows), h_expr)?.as_bool().unwrap_or(false) {
+                let repr = g_rows
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
+                if eval_expr_group(ctx, &base_rel, &repr, Some(&g_rows), h_expr)?
+                    .as_bool()
+                    .unwrap_or(false)
+                {
                     filtered_groups.push((k, g_rows));
                 }
             }
@@ -3762,13 +4762,23 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
 
         // Sort groups if ORDER BY is present
         if !order_by.is_empty() {
-            let mut keyed_groups: Vec<(Vec<Val>, (Vec<Val>, Vec<Vec<Val>>))> = Vec::with_capacity(groups.len());
+            let mut keyed_groups: Vec<(Vec<Val>, (Vec<Val>, Vec<Vec<Val>>))> =
+                Vec::with_capacity(groups.len());
             for (k, g_rows) in groups {
-                let repr = g_rows.first().cloned().unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
+                let repr = g_rows
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
                 let mut ob_vals = Vec::with_capacity(order_by.len());
                 for ob in order_by {
                     let ob_expr = resolve_group_order_expr(&ob.expr, &sel.projection);
-                    ob_vals.push(eval_expr_group(ctx, &base_rel, &repr, Some(&g_rows), &ob_expr)?);
+                    ob_vals.push(eval_expr_group(
+                        ctx,
+                        &base_rel,
+                        &repr,
+                        Some(&g_rows),
+                        &ob_expr,
+                    )?);
                 }
                 keyed_groups.push((ob_vals, (k, g_rows)));
             }
@@ -3784,15 +4794,27 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
         }
         let mut out_rows = Vec::with_capacity(groups.len());
         for (_, g_rows) in &groups {
-            let repr = g_rows.first().cloned().unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
+            let repr = g_rows
+                .first()
+                .cloned()
+                .unwrap_or_else(|| vec![Val::Null; base_rel.cols.len()]);
             let mut proj_row = Vec::with_capacity(sel.projection.len());
             for item in &sel.projection {
-                proj_row.push(eval_expr_group(ctx, &base_rel, &repr, Some(g_rows), &item.expr)?);
+                proj_row.push(eval_expr_group(
+                    ctx,
+                    &base_rel,
+                    &repr,
+                    Some(g_rows),
+                    &item.expr,
+                )?);
             }
             out_rows.push(proj_row);
         }
 
-        let mut res_rel = Rel { cols: out_cols, rows: out_rows };
+        let mut res_rel = Rel {
+            cols: out_cols,
+            rows: out_rows,
+        };
         if sel.distinct {
             dedup_rel(&mut res_rel, &sel.distinct_on, ctx)?;
         }
@@ -3808,7 +4830,14 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
                     if q == "__hidden__" {
                         continue;
                     }
-                    expanded_proj.push((Expr::Col(if q.is_empty() { c.clone() } else { format!("{q}.{c}") }), c.clone()));
+                    expanded_proj.push((
+                        Expr::Col(if q.is_empty() {
+                            c.clone()
+                        } else {
+                            format!("{q}.{c}")
+                        }),
+                        c.clone(),
+                    ));
                     let _ = i;
                 }
             }
@@ -3841,7 +4870,13 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
         let mut p_row = Vec::with_capacity(expanded_proj.len());
         for (expr, _) in &expanded_proj {
             if has_window && expr_contains_window(expr) {
-                p_row.push(eval_window_expr(ctx, &base_rel, &base_rel.rows, r_idx, expr)?);
+                p_row.push(eval_window_expr(
+                    ctx,
+                    &base_rel,
+                    &base_rel.rows,
+                    r_idx,
+                    expr,
+                )?);
             } else {
                 p_row.push(eval_expr(ctx, &base_rel, row, expr)?);
             }
@@ -3855,7 +4890,14 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
             // Sort by ORDER BY first if present so DISTINCT ON picks the first ordered row
             if !order_by.is_empty() {
                 let mut base_rows = std::mem::take(&mut base_rel.rows);
-                sort_paired_rows(ctx, &base_rel, &mut base_rows, &mut projected_rows, order_by, &expanded_proj)?;
+                sort_paired_rows(
+                    ctx,
+                    &base_rel,
+                    &mut base_rows,
+                    &mut projected_rows,
+                    order_by,
+                    &expanded_proj,
+                )?;
                 base_rel.rows = base_rows;
             }
             let mut seen = HashSet::new();
@@ -3893,21 +4935,40 @@ fn eval_select_ast(ctx: &ExecCtx, sel: &SelectAst, order_by: &[OrderByItem]) -> 
     // 6. ORDER BY
     if !order_by.is_empty() {
         let mut base_rows = std::mem::take(&mut base_rel.rows);
-        sort_paired_rows(ctx, &base_rel, &mut base_rows, &mut projected_rows, order_by, &expanded_proj)?;
+        sort_paired_rows(
+            ctx,
+            &base_rel,
+            &mut base_rows,
+            &mut projected_rows,
+            order_by,
+            &expanded_proj,
+        )?;
         base_rel.rows = base_rows;
     }
 
-    let out_cols = expanded_proj.into_iter().map(|(_, name)| (String::new(), name)).collect();
-    Ok(Rel { cols: out_cols, rows: projected_rows })
+    let out_cols = expanded_proj
+        .into_iter()
+        .map(|(_, name)| (String::new(), name))
+        .collect();
+    Ok(Rel {
+        cols: out_cols,
+        rows: projected_rows,
+    })
 }
 
 /// Resolve an ORDER BY / GROUP BY reference: a positional `2` or a bare name
 /// that is a select-list alias stands for the aliased expression.
 fn resolve_proj_expr(e: &Expr, sel: &SelectAst, base_rel: &Rel) -> Expr {
     match e {
-        Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= sel.projection.len() => sel.projection[(*pos as usize) - 1].expr.clone(),
+        Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= sel.projection.len() => {
+            sel.projection[(*pos as usize) - 1].expr.clone()
+        }
         Expr::Col(name) if !name.contains('.') => {
-            if let Some(item) = sel.projection.iter().find(|p| p.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(name))) {
+            if let Some(item) = sel.projection.iter().find(|p| {
+                p.alias
+                    .as_deref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(name))
+            }) {
                 if base_rel.resolve(name).is_err() {
                     return item.expr.clone();
                 }
@@ -3920,10 +4981,15 @@ fn resolve_proj_expr(e: &Expr, sel: &SelectAst, base_rel: &Rel) -> Expr {
 
 fn resolve_group_order_expr(ob_expr: &Expr, projection: &[SelectItem]) -> Expr {
     match ob_expr {
-        Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= projection.len() => projection[(*pos as usize) - 1].expr.clone(),
+        Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= projection.len() => {
+            projection[(*pos as usize) - 1].expr.clone()
+        }
         Expr::Col(name) => {
             if let Some(item) = projection.iter().find(|p| {
-                p.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(name)) || p.raw_name.eq_ignore_ascii_case(name)
+                p.alias
+                    .as_deref()
+                    .is_some_and(|a| a.eq_ignore_ascii_case(name))
+                    || p.raw_name.eq_ignore_ascii_case(name)
             }) {
                 return item.expr.clone();
             }
@@ -3949,9 +5015,15 @@ fn sort_paired_rows(
         let mut ob_vals = Vec::with_capacity(order_by.len());
         for ob in order_by {
             let v = match &ob.expr {
-                Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= p_row.len() => p_row[(*pos as usize) - 1].clone(),
+                Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= p_row.len() => {
+                    p_row[(*pos as usize) - 1].clone()
+                }
                 Expr::Col(name) => {
-                    if let Some((idx, _)) = expanded_proj.iter().enumerate().find(|(_, (_, alias))| alias.eq_ignore_ascii_case(name)) {
+                    if let Some((idx, _)) = expanded_proj
+                        .iter()
+                        .enumerate()
+                        .find(|(_, (_, alias))| alias.eq_ignore_ascii_case(name))
+                    {
                         p_row[idx].clone()
                     } else {
                         eval_expr(ctx, base_rel, &b_row, &ob.expr)?
@@ -3971,17 +5043,27 @@ fn sort_paired_rows(
     Ok(())
 }
 
-fn sort_rel_by_order(ctx: &ExecCtx, rel: &mut Rel, order_by: &[OrderByItem], _proj: &[SelectItem]) -> Result<(), String> {
+fn sort_rel_by_order(
+    ctx: &ExecCtx,
+    rel: &mut Rel,
+    order_by: &[OrderByItem],
+    _proj: &[SelectItem],
+) -> Result<(), String> {
     if rel.rows.is_empty() {
         return Ok(());
     }
-    let snap_rel = Rel { cols: rel.cols.clone(), rows: Vec::new() };
+    let snap_rel = Rel {
+        cols: rel.cols.clone(),
+        rows: Vec::new(),
+    };
     let mut keyed: Vec<(Vec<Val>, Vec<Val>)> = Vec::with_capacity(rel.rows.len());
     for row in rel.rows.drain(..) {
         let mut ob_vals = Vec::with_capacity(order_by.len());
         for ob in order_by {
             let v = match &ob.expr {
-                Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= row.len() => row[(*pos as usize) - 1].clone(),
+                Expr::Int(pos) if *pos >= 1 && (*pos as usize) <= row.len() => {
+                    row[(*pos as usize) - 1].clone()
+                }
                 other => eval_expr(ctx, &snap_rel, &row, other)?,
             };
             ob_vals.push(v);
@@ -4013,20 +5095,35 @@ fn eval_top_query(ctx: &ExecCtx, q: &Query) -> Result<Rel, String> {
                     c.1 = col_alias.clone();
                 }
             }
-            local_ctx.ctes.insert(cte.name.to_ascii_lowercase(), cte_rel);
+            local_ctx
+                .ctes
+                .insert(cte.name.to_ascii_lowercase(), cte_rel);
         }
         let mut rel = eval_select_ast(&local_ctx, sel, &q.order_by)?;
-        let dummy = Rel { cols: Vec::new(), rows: vec![Vec::new()] };
+        let dummy = Rel {
+            cols: Vec::new(),
+            rows: vec![Vec::new()],
+        };
         let offset = match &q.offset {
-            Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?.as_i64().unwrap_or(0).max(0) as usize,
+            Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?
+                .as_i64()
+                .unwrap_or(0)
+                .max(0) as usize,
             None => 0,
         };
         let limit = match &q.limit {
-            Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?.as_i64().map(|n| n.max(0) as usize),
+            Some(e) => eval_expr(&local_ctx, &dummy, &[], e)?
+                .as_i64()
+                .map(|n| n.max(0) as usize),
             None => None,
         };
         if offset > 0 || limit.is_some() {
-            rel.rows = rel.rows.into_iter().skip(offset).take(limit.unwrap_or(usize::MAX)).collect();
+            rel.rows = rel
+                .rows
+                .into_iter()
+                .skip(offset)
+                .take(limit.unwrap_or(usize::MAX))
+                .collect();
         }
         return Ok(rel);
     }
@@ -4051,19 +5148,35 @@ const VIEW_PREFIX: &str = "urn:graphrd:sql-view:";
 
 /// (name, SELECT text) of every view.
 fn views(store: &Store) -> Vec<(String, String)> {
-    let (Some(p), Some(g)) = (store.dict.lookup(&Term::iri(VIEW_SQL)), store.dict.lookup(&Term::iri(view_consts::VIEWS_GRAPH))) else {
+    let (Some(p), Some(g)) = (
+        store.dict.lookup(&Term::iri(VIEW_SQL)),
+        store.dict.lookup(&Term::iri(view_consts::VIEWS_GRAPH)),
+    ) else {
         return Vec::new();
     };
     let mut out: Vec<(String, String)> = store
         .quads_matching(None, Some(p), None, Some(g))
-        .filter_map(|q| Some((store.dict.term(q[0]).value().strip_prefix(VIEW_PREFIX)?.to_string(), store.dict.term(q[2]).value().to_string())))
+        .filter_map(|q| {
+            Some((
+                store
+                    .dict
+                    .term(q[0])
+                    .value()
+                    .strip_prefix(VIEW_PREFIX)?
+                    .to_string(),
+                store.dict.term(q[2]).value().to_string(),
+            ))
+        })
         .collect();
     out.sort();
     out
 }
 
 fn view(store: &Store, name: &str) -> Option<String> {
-    views(store).into_iter().find(|(v, _)| v.eq_ignore_ascii_case(name)).map(|(_, sql)| sql)
+    views(store)
+        .into_iter()
+        .find(|(v, _)| v.eq_ignore_ascii_case(name))
+        .map(|(_, sql)| sql)
 }
 
 /// CREATE [OR REPLACE] VIEW name AS SELECT … / DROP VIEW [IF EXISTS] name.
@@ -4074,7 +5187,11 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
         o: Term::string(text),
         g: Some(Term::iri(view_consts::VIEWS_GRAPH)),
     };
-    let existing = |store: &Store, name: &str| views(store).into_iter().find(|(v, _)| v.eq_ignore_ascii_case(name));
+    let existing = |store: &Store, name: &str| {
+        views(store)
+            .into_iter()
+            .find(|(v, _)| v.eq_ignore_ascii_case(name))
+    };
     if kw(toks.first(), "drop") {
         let if_exists = kw(toks.get(2), "if") && kw(toks.get(3), "exists");
         let Some(Tok::Word(name)) = toks.get(if if_exists { 4 } else { 2 }) else {
@@ -4083,7 +5200,9 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
         let name = unqualified(name);
         match existing(store, name) {
             Some((n, text)) => {
-                store.apply(&[quad(&n, &text)], &[]).map_err(|e| e.to_string())?;
+                store
+                    .apply(&[quad(&n, &text)], &[])
+                    .map_err(|e| e.to_string())?;
             }
             None if if_exists => {}
             None => return Err(format!("view \"{name}\" does not exist")),
@@ -4092,7 +5211,8 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
     }
     let replace = kw(toks.get(1), "or") && kw(toks.get(2), "replace");
     let mut i = if replace { 3 } else { 1 };
-    let _ = kw(toks.get(i), "temp") || kw(toks.get(i), "temporary") || kw(toks.get(i), "materialized");
+    let _ =
+        kw(toks.get(i), "temp") || kw(toks.get(i), "temporary") || kw(toks.get(i), "materialized");
     if !kw(toks.get(i), "view") {
         i += 1;
     }
@@ -4109,9 +5229,17 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
     }
     let b = sql.as_bytes();
     let at = (1..b.len().saturating_sub(2))
-        .find(|&p| b[p - 1].is_ascii_whitespace() && b[p..p + 2].eq_ignore_ascii_case(b"as") && b[p + 2].is_ascii_whitespace())
+        .find(|&p| {
+            b[p - 1].is_ascii_whitespace()
+                && b[p..p + 2].eq_ignore_ascii_case(b"as")
+                && b[p + 2].is_ascii_whitespace()
+        })
         .ok_or("expected AS")?;
-    let body = sql[at + 2..].trim().trim_end_matches(';').trim().to_string();
+    let body = sql[at + 2..]
+        .trim()
+        .trim_end_matches(';')
+        .trim()
+        .to_string();
     let schema = Schema::build(store, 200);
     if schema.class(&name).is_some() {
         return Err(format!("relation \"{name}\" already exists (a table)"));
@@ -4124,7 +5252,9 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
     if let Some((n, text)) = old {
         remove.push(quad(&n, &text));
     }
-    store.apply(&remove, &[quad(&name, &body)]).map_err(|e| e.to_string())?;
+    store
+        .apply(&remove, &[quad(&name, &body)])
+        .map_err(|e| e.to_string())?;
     eval_select(store, &lex(&body)?, 0).map_err(|e| format!("the view's query fails: {e}"))?;
     Ok("CREATE VIEW".into())
 }
@@ -4152,7 +5282,12 @@ fn writable_table(store: &Store, name: &str) -> Result<(), String> {
 /// INSERT INTO t [(cols)] VALUES (…) | SELECT … [RETURNING …]
 /// UPDATE t SET c = expr, … [WHERE …] [RETURNING …]
 /// DELETE FROM t [WHERE …] [RETURNING …]
-fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result<(Rows, String), String> {
+fn change(
+    store: &mut Store,
+    user: &str,
+    database: &str,
+    toks: &[Tok],
+) -> Result<(Rows, String), String> {
     let mut p = Parser::new(toks);
 
     // Optional leading WITH ctes
@@ -4169,7 +5304,15 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
             p.expect_sym("(")?;
             let subq = p.parse_query()?;
             p.expect_sym(")")?;
-            let ctx = ExecCtx { store, schema: &schema_snap, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+            let ctx = ExecCtx {
+                store,
+                schema: &schema_snap,
+                user,
+                database,
+                ctes: ctes.clone(),
+                outer: None,
+                depth: 0,
+            };
             let rel = eval_top_query(&ctx, &subq)?;
             ctes.insert(name.to_ascii_lowercase(), rel);
             if !p.eat_sym(",") {
@@ -4179,8 +5322,25 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
     }
 
     let mut schema = Schema::build(store, 200);
-    let write = |store: &mut Store, schema: &mut Schema, op: &str, table: &str, id: Option<String>, input: &[(String, GqlValue)]| -> Result<String, String> {
-        crate::graphql::write(store, schema, &crate::graphql::Write { op, type_name: table, class: None, id, input, graph: None })
+    let write = |store: &mut Store,
+                 schema: &mut Schema,
+                 op: &str,
+                 table: &str,
+                 id: Option<String>,
+                 input: &[(String, GqlValue)]|
+     -> Result<String, String> {
+        crate::graphql::write(
+            store,
+            schema,
+            &crate::graphql::Write {
+                op,
+                type_name: table,
+                class: None,
+                id,
+                input,
+                graph: None,
+            },
+        )
     };
 
     if p.eat_kw("insert") {
@@ -4198,7 +5358,7 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
             None
         };
         writable_table(store, &table)?;
-        if ! p.eat_sym("(") {
+        if !p.eat_sym("(") {
             return Err("name the columns: INSERT INTO t (id, col, …) VALUES (…)".into());
         }
         let mut cols = Vec::new();
@@ -4212,8 +5372,19 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
 
         let mut source_rows: Vec<Vec<Val>> = Vec::new();
         if p.eat_kw("values") {
-            let empty_rel = Rel { cols: Vec::new(), rows: vec![Vec::new()] };
-            let ctx = ExecCtx { store, schema: &schema, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+            let empty_rel = Rel {
+                cols: Vec::new(),
+                rows: vec![Vec::new()],
+            };
+            let ctx = ExecCtx {
+                store,
+                schema: &schema,
+                user,
+                database,
+                ctes: ctes.clone(),
+                outer: None,
+                depth: 0,
+            };
             loop {
                 p.expect_sym("(")?;
                 let mut vals = Vec::new();
@@ -4226,7 +5397,11 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
                     let _ = p.eat_sym(",");
                 }
                 if vals.len() != cols.len() {
-                    return Err(format!("INSERT has {} columns but {} values", cols.len(), vals.len()));
+                    return Err(format!(
+                        "INSERT has {} columns but {} values",
+                        cols.len(),
+                        vals.len()
+                    ));
                 }
                 source_rows.push(vals);
                 if !p.eat_sym(",") {
@@ -4235,11 +5410,23 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
             }
         } else if kw(p.peek(), "select") || kw(p.peek(), "with") {
             let subq = p.parse_query()?;
-            let ctx = ExecCtx { store, schema: &schema, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+            let ctx = ExecCtx {
+                store,
+                schema: &schema,
+                user,
+                database,
+                ctes: ctes.clone(),
+                outer: None,
+                depth: 0,
+            };
             let rel = eval_top_query(&ctx, &subq)?;
             for r in rel.rows {
                 if r.len() != cols.len() {
-                    return Err(format!("INSERT has {} columns but SELECT returns {}", cols.len(), r.len()));
+                    return Err(format!(
+                        "INSERT has {} columns but SELECT returns {}",
+                        cols.len(),
+                        r.len()
+                    ));
                 }
                 source_rows.push(r);
             }
@@ -4283,7 +5470,15 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
             }
         }
         let n = inserted_ids.len();
-        let ret_rows = eval_returning(store, user, database, &table, &inserted_ids, &returning, None)?;
+        let ret_rows = eval_returning(
+            store,
+            user,
+            database,
+            &table,
+            &inserted_ids,
+            &returning,
+            None,
+        )?;
         return Ok((ret_rows, format!("INSERT 0 {n}")));
     }
 
@@ -4321,7 +5516,11 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
         }
     }
 
-    let where_expr = if p.eat_kw("where") { Some(p.parse_expr()?) } else { None };
+    let where_expr = if p.eat_kw("where") {
+        Some(p.parse_expr()?)
+    } else {
+        None
+    };
     let returning = parse_returning(&mut p)?;
     while p.eat_sym(";") {}
     if let Some(t) = p.peek() {
@@ -4330,15 +5529,33 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
 
     // Load table rows to evaluate WHERE and SET expressions
     let base_rel = {
-        let ctx = ExecCtx { store, schema: &schema, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+        let ctx = ExecCtx {
+            store,
+            schema: &schema,
+            user,
+            database,
+            ctes: ctes.clone(),
+            outer: None,
+            depth: 0,
+        };
         load_base_table(&ctx, &table, &alias)?
     };
     let mut matching_rows: Vec<Vec<Val>> = Vec::new();
     {
-        let ctx = ExecCtx { store, schema: &schema, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+        let ctx = ExecCtx {
+            store,
+            schema: &schema,
+            user,
+            database,
+            ctes: ctes.clone(),
+            outer: None,
+            depth: 0,
+        };
         for row in &base_rel.rows {
             let keep = match &where_expr {
-                Some(we) => eval_expr(&ctx, &base_rel, row, we)?.as_bool().unwrap_or(false),
+                Some(we) => eval_expr(&ctx, &base_rel, row, we)?
+                    .as_bool()
+                    .unwrap_or(false),
                 None => true,
             };
             if keep {
@@ -4352,19 +5569,53 @@ fn change(store: &mut Store, user: &str, database: &str, toks: &[Tok]) -> Result
         let id_str = row.first().and_then(|v| v.as_text()).unwrap_or_default();
         let mut input = Vec::with_capacity(assignments.len());
         if update {
-            let ctx = ExecCtx { store, schema: &schema, user, database, ctes: ctes.clone(), outer: None, depth: 0 };
+            let ctx = ExecCtx {
+                store,
+                schema: &schema,
+                user,
+                database,
+                ctes: ctes.clone(),
+                outer: None,
+                depth: 0,
+            };
             for (col, expr) in &assignments {
                 let v = eval_expr(&ctx, &base_rel, row, expr)?;
                 input.push((col.clone(), val_to_gql(&v)));
             }
         }
-        write(store, &mut schema, if update { "update" } else { "delete" }, &table, Some(id_str.clone()), &input)?;
+        write(
+            store,
+            &mut schema,
+            if update { "update" } else { "delete" },
+            &table,
+            Some(id_str.clone()),
+            &input,
+        )?;
         affected_ids.push(id_str);
     }
 
-    let pre_snap = if !update { Some((base_rel.cols, matching_rows)) } else { None };
-    let ret_rows = eval_returning(store, user, database, &table, &affected_ids, &returning, pre_snap)?;
-    Ok((ret_rows, format!("{} {}", if update { "UPDATE" } else { "DELETE" }, affected_ids.len())))
+    let pre_snap = if !update {
+        Some((base_rel.cols, matching_rows))
+    } else {
+        None
+    };
+    let ret_rows = eval_returning(
+        store,
+        user,
+        database,
+        &table,
+        &affected_ids,
+        &returning,
+        pre_snap,
+    )?;
+    Ok((
+        ret_rows,
+        format!(
+            "{} {}",
+            if update { "UPDATE" } else { "DELETE" },
+            affected_ids.len()
+        ),
+    ))
 }
 
 fn parse_returning(p: &mut Parser) -> Result<Vec<SelectItem>, String> {
@@ -4384,7 +5635,11 @@ fn parse_returning(p: &mut Parser) -> Result<Vec<SelectItem>, String> {
         } else {
             None
         };
-        items.push(SelectItem { expr, alias, raw_name });
+        items.push(SelectItem {
+            expr,
+            alias,
+            raw_name,
+        });
         if !p.eat_sym(",") {
             break;
         }
@@ -4405,7 +5660,15 @@ fn eval_returning(
         return Ok((Vec::new(), Vec::new()));
     }
     let schema = Schema::build(store, 200);
-    let ctx = ExecCtx { store, schema: &schema, user, database, ctes: HashMap::new(), outer: None, depth: 0 };
+    let ctx = ExecCtx {
+        store,
+        schema: &schema,
+        user,
+        database,
+        ctes: HashMap::new(),
+        outer: None,
+        depth: 0,
+    };
     let rel = if let Some((cols, rows)) = deleted_snap {
         Rel { cols, rows }
     } else {
@@ -4414,9 +5677,16 @@ fn eval_returning(
         let rows = full
             .rows
             .into_iter()
-            .filter(|r| r.first().and_then(|v| v.as_text()).is_some_and(|id| id_set.contains(id.as_str())))
+            .filter(|r| {
+                r.first()
+                    .and_then(|v| v.as_text())
+                    .is_some_and(|id| id_set.contains(id.as_str()))
+            })
             .collect();
-        Rel { cols: full.cols, rows }
+        Rel {
+            cols: full.cols,
+            rows,
+        }
     };
 
     let mut out_cols = Vec::new();
@@ -4448,14 +5718,27 @@ fn eval_returning(
 /// A SELECT statement's rows (tables, joins, views, `sparql('…')`, the catalog).
 fn eval_select(store: &Store, toks: &[Tok], depth: usize) -> Result<Rows, String> {
     let schema = Schema::build(store, 200);
-    let ctx = ExecCtx { store, schema: &schema, user: "postgres", database: "postgres", ctes: HashMap::new(), outer: None, depth };
+    let ctx = ExecCtx {
+        store,
+        schema: &schema,
+        user: "postgres",
+        database: "postgres",
+        ctes: HashMap::new(),
+        outer: None,
+        depth,
+    };
     let mut parser = Parser::new(toks);
     let q = parser.parse_query_top()?;
     Ok(eval_top_query(&ctx, &q)?.to_rows())
 }
 
 /// Execute one SQL statement for `database` as `user`.
-pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Result<(Rows, String), String> {
+pub fn run(
+    backend: &dyn Backend,
+    user: &str,
+    database: &str,
+    sql: &str,
+) -> Result<(Rows, String), String> {
     let toks = lex(sql)?;
     let first = match toks.first() {
         Some(Tok::Word(w)) => w.to_ascii_uppercase(),
@@ -4466,34 +5749,56 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
         (rows, tag)
     };
     match first.as_str() {
-        "SET" | "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "START" | "DISCARD" | "RESET" | "DEALLOCATE" | "CLOSE" | "LISTEN" | "UNLISTEN" | "NOTIFY" | "SAVEPOINT" | "RELEASE" => {
+        "SET" | "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "START" | "DISCARD" | "RESET"
+        | "DEALLOCATE" | "CLOSE" | "LISTEN" | "UNLISTEN" | "NOTIFY" | "SAVEPOINT" | "RELEASE" => {
             Ok(((Vec::new(), Vec::new()), first))
         }
         "SHOW" if kw(toks.get(1), "tables") => {
             let rows = backend.with_store(database, &mut |st| {
-                let mut names: Vec<String> = Schema::build(st, 200).tables().into_iter().map(|(t, _)| t).collect();
+                let mut names: Vec<String> = Schema::build(st, 200)
+                    .tables()
+                    .into_iter()
+                    .map(|(t, _)| t)
+                    .collect();
                 names.extend(views(st).into_iter().map(|(v, _)| v));
-                Ok((vec!["table_name".into()], names.into_iter().map(|t| vec![Some(t)]).collect()))
+                Ok((
+                    vec!["table_name".into()],
+                    names.into_iter().map(|t| vec![Some(t)]).collect(),
+                ))
             })?;
             Ok(select_tag(rows))
         }
-        "SHOW" if kw(toks.get(1), "databases") || kw(toks.get(1), "schemas") => {
-            Ok(select_tag((vec!["name".into()], vec![vec![Some(database.to_string())]])))
-        }
+        "SHOW" if kw(toks.get(1), "databases") || kw(toks.get(1), "schemas") => Ok(select_tag((
+            vec!["name".into()],
+            vec![vec![Some(database.to_string())]],
+        ))),
         "SHOW" if kw(toks.get(1), "columns") && kw(toks.get(2), "from") => {
-            let Some(Tok::Word(tname)) = toks.get(3) else { return Err("expected table name".into()) };
+            let Some(Tok::Word(tname)) = toks.get(3) else {
+                return Err("expected table name".into());
+            };
             let rows = backend.with_store(database, &mut |st| {
                 let schema = Schema::build(st, 200);
                 let cols = table_columns(&schema, unqualified(tname));
                 Ok((
                     vec!["column_name".into(), "data_type".into()],
-                    cols.into_iter().map(|c| vec![Some(c), Some("text".into())]).collect(),
+                    cols.into_iter()
+                        .map(|c| vec![Some(c), Some("text".into())])
+                        .collect(),
                 ))
             })?;
             Ok(select_tag(rows))
         }
         "SHOW" => {
-            let setting = toks.get(1).and_then(|t| if let Tok::Word(w) = t { Some(w.to_ascii_lowercase()) } else { None }).unwrap_or_default();
+            let setting = toks
+                .get(1)
+                .and_then(|t| {
+                    if let Tok::Word(w) = t {
+                        Some(w.to_ascii_lowercase())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
             let val = match setting.as_str() {
                 "transaction_isolation" => "read committed",
                 "server_version" => "15.0 (GraphRD)",
@@ -4501,16 +5806,26 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
                 "search_path" => "\"$user\", public",
                 _ => "",
             };
-            Ok(((vec![setting.max("setting".into())], vec![vec![Some(val.into())]]), "SHOW".into()))
+            Ok((
+                (
+                    vec![setting.max("setting".into())],
+                    vec![vec![Some(val.into())]],
+                ),
+                "SHOW".into(),
+            ))
         }
         "DESCRIBE" | "DESC" => {
-            let Some(Tok::Word(tname)) = toks.get(1) else { return Err("expected table name".into()) };
+            let Some(Tok::Word(tname)) = toks.get(1) else {
+                return Err("expected table name".into());
+            };
             let rows = backend.with_store(database, &mut |st| {
                 let schema = Schema::build(st, 200);
                 let cols = table_columns(&schema, unqualified(tname));
                 Ok((
                     vec!["column_name".into(), "data_type".into()],
-                    cols.into_iter().map(|c| vec![Some(c), Some("text".into())]).collect(),
+                    cols.into_iter()
+                        .map(|c| vec![Some(c), Some("text".into())])
+                        .collect(),
                 ))
             })?;
             Ok(select_tag(rows))
@@ -4522,7 +5837,10 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
                 idx += 1;
             }
             let inner_toks = &toks[idx..];
-            let plan = format!("GraphRD Query Plan: {:?}", inner_toks.iter().take(8).collect::<Vec<_>>());
+            let plan = format!(
+                "GraphRD Query Plan: {:?}",
+                inner_toks.iter().take(8).collect::<Vec<_>>()
+            );
             if analyze {
                 let _ = backend.with_store(database, &mut |st| eval_select(st, inner_toks, 0))?;
             }
@@ -4531,13 +5849,23 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
                 "EXPLAIN".into(),
             ))
         }
-        "SELECT" | "VALUES" | "TABLE" => Ok(select_tag(backend.with_store(database, &mut |st| {
-            let schema = Schema::build(st, 200);
-            let ctx = ExecCtx { store: st, schema: &schema, user, database, ctes: HashMap::new(), outer: None, depth: 0 };
-            let mut parser = Parser::new(&toks);
-            let q = parser.parse_query_top()?;
-            Ok(eval_top_query(&ctx, &q)?.to_rows())
-        })?)),
+        "SELECT" | "VALUES" | "TABLE" => {
+            Ok(select_tag(backend.with_store(database, &mut |st| {
+                let schema = Schema::build(st, 200);
+                let ctx = ExecCtx {
+                    store: st,
+                    schema: &schema,
+                    user,
+                    database,
+                    ctes: HashMap::new(),
+                    outer: None,
+                    depth: 0,
+                };
+                let mut parser = Parser::new(&toks);
+                let q = parser.parse_query_top()?;
+                Ok(eval_top_query(&ctx, &q)?.to_rows())
+            })?))
+        }
         "WITH" => {
             // Check whether main statement after CTEs is SELECT or DML (INSERT/UPDATE/DELETE)
             let is_dml = is_with_dml(&toks);
@@ -4552,7 +5880,15 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
             } else {
                 Ok(select_tag(backend.with_store(database, &mut |st| {
                     let schema = Schema::build(st, 200);
-                    let ctx = ExecCtx { store: st, schema: &schema, user, database, ctes: HashMap::new(), outer: None, depth: 0 };
+                    let ctx = ExecCtx {
+                        store: st,
+                        schema: &schema,
+                        user,
+                        database,
+                        ctes: HashMap::new(),
+                        outer: None,
+                        depth: 0,
+                    };
                     let mut parser = Parser::new(&toks);
                     let q = parser.parse_query_top()?;
                     Ok(eval_top_query(&ctx, &q)?.to_rows())
@@ -4578,8 +5914,14 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
         }
         "TRUNCATE" => {
             let idx = if kw(toks.get(1), "table") { 2 } else { 1 };
-            let Some(Tok::Word(w)) = toks.get(idx) else { return Err("expected table name".into()) };
-            let del_toks = vec![Tok::Word("DELETE".into()), Tok::Word("FROM".into()), Tok::Word(w.clone())];
+            let Some(Tok::Word(w)) = toks.get(idx) else {
+                return Err("expected table name".into());
+            };
+            let del_toks = vec![
+                Tok::Word("DELETE".into()),
+                Tok::Word("FROM".into()),
+                Tok::Word(w.clone()),
+            ];
             let mut tag = String::new();
             backend.with_store_mut(user, database, &mut |st| {
                 let (_, t) = change(st, user, database, &del_toks)?;
@@ -4588,7 +5930,9 @@ pub fn run(backend: &dyn Backend, user: &str, database: &str, sql: &str) -> Resu
             })?;
             Ok(((Vec::new(), Vec::new()), "TRUNCATE TABLE".into()))
         }
-        other => Err(format!("{other} is not supported (SELECT, INSERT, UPDATE, DELETE and CREATE/DROP VIEW are)")),
+        other => Err(format!(
+            "{other} is not supported (SELECT, INSERT, UPDATE, DELETE and CREATE/DROP VIEW are)"
+        )),
     }
 }
 
@@ -4598,7 +5942,14 @@ fn is_with_dml(toks: &[Tok]) -> bool {
         match t {
             Tok::Sym(s) if s == "(" => depth += 1,
             Tok::Sym(s) if s == ")" => depth -= 1,
-            Tok::Word(w) if depth == 0 && ["insert", "update", "delete"].iter().any(|k| w.eq_ignore_ascii_case(k)) => return true,
+            Tok::Word(w)
+                if depth == 0
+                    && ["insert", "update", "delete"]
+                        .iter()
+                        .any(|k| w.eq_ignore_ascii_case(k)) =>
+            {
+                return true;
+            }
             _ => {}
         }
     }
@@ -4617,10 +5968,19 @@ mod tests {
         fn auth_required(&self) -> bool {
             false
         }
-        fn with_store(&self, _: &str, f: &mut dyn FnMut(&Store) -> Result<Rows, String>) -> Result<Rows, String> {
+        fn with_store(
+            &self,
+            _: &str,
+            f: &mut dyn FnMut(&Store) -> Result<Rows, String>,
+        ) -> Result<Rows, String> {
             f(&self.0.lock().unwrap())
         }
-        fn with_store_mut(&self, _: &str, _: &str, f: &mut dyn FnMut(&mut Store) -> Result<Rows, String>) -> Result<Rows, String> {
+        fn with_store_mut(
+            &self,
+            _: &str,
+            _: &str,
+            f: &mut dyn FnMut(&mut Store) -> Result<Rows, String>,
+        ) -> Result<Rows, String> {
             // all or nothing, as the server's transaction
             let mut st = self.0.lock().unwrap();
             st.start_capture();
@@ -4636,45 +5996,104 @@ mod tests {
     fn backend() -> One {
         let mut st = Store::memory();
         let ttl = "@prefix ex: <http://ex.org/> . ex:ann a ex:Person ; ex:name \"Ann\" ; ex:age 31 ; ex:worksFor ex:acme . ex:bob a ex:Person ; ex:name \"Bob\" ; ex:age 25 . ex:cy a ex:Person ; ex:name \"Cy O'Neil\" ; ex:age 40 ; ex:worksFor ex:acme, ex:init . ex:acme a ex:Company ; ex:name \"Acme\" . ex:init a ex:Company ; ex:name \"Initech\" .";
-        st.insert(&crate::rdf::turtle::parse(ttl, "", crate::rdf::turtle::Mode::Turtle).unwrap()).unwrap();
+        st.insert(&crate::rdf::turtle::parse(ttl, "", crate::rdf::turtle::Mode::Turtle).unwrap())
+            .unwrap();
         One(std::sync::Mutex::new(st))
     }
 
     #[test]
     fn sql_queries() {
         let b = backend();
-        let ((cols, rows), tag) = run(&b, "u", "db", "SELECT name, age FROM Person WHERE age > 26 ORDER BY age DESC").unwrap();
+        let ((cols, rows), tag) = run(
+            &b,
+            "u",
+            "db",
+            "SELECT name, age FROM Person WHERE age > 26 ORDER BY age DESC",
+        )
+        .unwrap();
         assert_eq!(cols, vec!["name", "age"]);
-        assert_eq!(rows, vec![vec![Some("Cy O'Neil".into()), Some("40".into())], vec![Some("Ann".into()), Some("31".into())]]);
+        assert_eq!(
+            rows,
+            vec![
+                vec![Some("Cy O'Neil".into()), Some("40".into())],
+                vec![Some("Ann".into()), Some("31".into())]
+            ]
+        );
         assert_eq!(tag, "SELECT 2");
-        let ((_, rows), _) = run(&b, "u", "db", "SELECT COUNT(*) FROM person WHERE name LIKE 'C%'").unwrap();
+        let ((_, rows), _) = run(
+            &b,
+            "u",
+            "db",
+            "SELECT COUNT(*) FROM person WHERE name LIKE 'C%'",
+        )
+        .unwrap();
         assert_eq!(rows[0][0].as_deref(), Some("1"));
-        let ((_, rows), _) = run(&b, "u", "db", &substitute("SELECT id FROM Person WHERE name = $1", &[Some("Cy O'Neil".into())])).unwrap();
+        let ((_, rows), _) = run(
+            &b,
+            "u",
+            "db",
+            &substitute(
+                "SELECT id FROM Person WHERE name = $1",
+                &[Some("Cy O'Neil".into())],
+            ),
+        )
+        .unwrap();
         assert_eq!(rows[0][0].as_deref(), Some("http://ex.org/cy"));
         let ((cols, rows), _) = run(&b, "u", "db", "SELECT * FROM sparql('SELECT ?n WHERE { ?p <http://ex.org/name> ?n } ORDER BY ?n LIMIT 1')").unwrap();
-        assert_eq!((cols[0].as_str(), rows[0][0].as_deref()), ("n", Some("Acme")));
+        assert_eq!(
+            (cols[0].as_str(), rows[0][0].as_deref()),
+            ("n", Some("Acme"))
+        );
         assert!(run(&b, "u", "db", "SELECT * FROM Nope").is_err());
         assert!(run(&b, "u", "db", "DROP TABLE Person").is_err());
         assert_eq!(split_statements("SELECT 'a;b'; SELECT 1;").len(), 2);
     }
 
     fn rows(b: &One, sql: &str) -> Vec<Vec<Option<String>>> {
-        run(b, "u", "db", sql).unwrap_or_else(|e| panic!("{sql}: {e}")).0 .1
+        run(b, "u", "db", sql)
+            .unwrap_or_else(|e| panic!("{sql}: {e}"))
+            .0
+            .1
     }
 
     fn texts(r: &[Vec<Option<String>>]) -> Vec<String> {
-        r.iter().map(|row| row.iter().map(|c| c.clone().unwrap_or("NULL".into())).collect::<Vec<_>>().join("|")).collect()
+        r.iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.clone().unwrap_or("NULL".into()))
+                    .collect::<Vec<_>>()
+                    .join("|")
+            })
+            .collect()
     }
 
     #[test]
     fn sql_joins_and_views() {
         let b = backend();
         // a multi-valued link joins each of its values; LEFT JOIN keeps unmatched rows
-        let r = rows(&b, "SELECT p.name AS person, c.name AS company FROM Person p JOIN Company c ON p.worksFor = c.id ORDER BY person");
-        assert_eq!(texts(&r), ["Ann|Acme", "Cy O'Neil|Acme", "Cy O'Neil|Initech"]);
-        let r = rows(&b, "SELECT p.name, c.name FROM Person AS p LEFT OUTER JOIN Company c ON c.id = p.worksFor WHERE p.age < 35 ORDER BY p.age");
+        let r = rows(
+            &b,
+            "SELECT p.name AS person, c.name AS company FROM Person p JOIN Company c ON p.worksFor = c.id ORDER BY person",
+        );
+        assert_eq!(
+            texts(&r),
+            ["Ann|Acme", "Cy O'Neil|Acme", "Cy O'Neil|Initech"]
+        );
+        let r = rows(
+            &b,
+            "SELECT p.name, c.name FROM Person AS p LEFT OUTER JOIN Company c ON c.id = p.worksFor WHERE p.age < 35 ORDER BY p.age",
+        );
         assert_eq!(texts(&r), ["Bob|NULL", "Ann|Acme"]);
-        assert!(run(&b, "u", "db", "SELECT name FROM Person p JOIN Company c ON p.worksFor = c.id").unwrap_err().contains("ambiguous"));
+        assert!(
+            run(
+                &b,
+                "u",
+                "db",
+                "SELECT name FROM Person p JOIN Company c ON p.worksFor = c.id"
+            )
+            .unwrap_err()
+            .contains("ambiguous")
+        );
         // views: stored, listed, queried with their own WHERE / ORDER / LIMIT, refused when broken
         assert_eq!(
             run(
@@ -4687,56 +6106,177 @@ mod tests {
             .1,
             "CREATE VIEW"
         );
-        assert_eq!(texts(&rows(&b, "SELECT person FROM staff WHERE employer = 'Acme' ORDER BY age DESC")), ["Cy O'Neil", "Ann"]);
+        assert_eq!(
+            texts(&rows(
+                &b,
+                "SELECT person FROM staff WHERE employer = 'Acme' ORDER BY age DESC"
+            )),
+            ["Cy O'Neil", "Ann"]
+        );
         assert_eq!(texts(&rows(&b, "SELECT COUNT(*) FROM staff")), ["3"]);
-        assert!(run(&b, "u", "db", "CREATE VIEW staff AS SELECT id FROM Person").unwrap_err().contains("already exists"));
-        assert!(run(&b, "u", "db", "CREATE VIEW Person AS SELECT id FROM Company").unwrap_err().contains("a table"));
-        assert!(run(&b, "u", "db", "CREATE VIEW bad AS SELECT x FROM Nope").unwrap_err().contains("fails"));
-        run(&b, "u", "db", "CREATE OR REPLACE VIEW elders AS SELECT name FROM Person WHERE age > 30").unwrap();
+        assert!(
+            run(&b, "u", "db", "CREATE VIEW staff AS SELECT id FROM Person")
+                .unwrap_err()
+                .contains("already exists")
+        );
+        assert!(
+            run(
+                &b,
+                "u",
+                "db",
+                "CREATE VIEW Person AS SELECT id FROM Company"
+            )
+            .unwrap_err()
+            .contains("a table")
+        );
+        assert!(
+            run(&b, "u", "db", "CREATE VIEW bad AS SELECT x FROM Nope")
+                .unwrap_err()
+                .contains("fails")
+        );
+        run(
+            &b,
+            "u",
+            "db",
+            "CREATE OR REPLACE VIEW elders AS SELECT name FROM Person WHERE age > 30",
+        )
+        .unwrap();
         // a view over a view, and one over SPARQL
-        run(&b, "u", "db", "CREATE VIEW acme AS SELECT person FROM staff WHERE employer = 'Acme'").unwrap();
+        run(
+            &b,
+            "u",
+            "db",
+            "CREATE VIEW acme AS SELECT person FROM staff WHERE employer = 'Acme'",
+        )
+        .unwrap();
         assert_eq!(rows(&b, "SELECT * FROM acme").len(), 2);
         run(&b, "u", "db", "CREATE VIEW names AS SELECT * FROM sparql('SELECT ?n WHERE { ?s <http://ex.org/name> ?n }')").unwrap();
-        assert_eq!(texts(&rows(&b, "SELECT n FROM names WHERE n LIKE 'I%'")), ["Initech"]);
+        assert_eq!(
+            texts(&rows(&b, "SELECT n FROM names WHERE n LIKE 'I%'")),
+            ["Initech"]
+        );
         let tables = texts(&rows(&b, "SHOW TABLES"));
-        assert!(tables.contains(&"staff".to_string()) && tables.contains(&"Person".to_string()), "{tables:?}");
-        assert!(texts(&rows(&b, "SELECT * FROM information_schema.tables")).iter().any(|s| s.starts_with("elders|public|VIEW")));
-        assert!(texts(&rows(&b, "SELECT * FROM information_schema.columns")).iter().any(|s| s.starts_with("staff|employer|text")));
+        assert!(
+            tables.contains(&"staff".to_string()) && tables.contains(&"Person".to_string()),
+            "{tables:?}"
+        );
+        assert!(
+            texts(&rows(&b, "SELECT * FROM information_schema.tables"))
+                .iter()
+                .any(|s| s.starts_with("elders|public|VIEW"))
+        );
+        assert!(
+            texts(&rows(&b, "SELECT * FROM information_schema.columns"))
+                .iter()
+                .any(|s| s.starts_with("staff|employer|text"))
+        );
         assert_eq!(rows(&b, "SELECT * FROM information_schema.views").len(), 4);
-        assert_eq!(run(&b, "u", "db", "DROP VIEW elders").unwrap().1, "DROP VIEW");
+        assert_eq!(
+            run(&b, "u", "db", "DROP VIEW elders").unwrap().1,
+            "DROP VIEW"
+        );
         assert!(run(&b, "u", "db", "DROP VIEW elders").is_err());
         run(&b, "u", "db", "DROP VIEW IF EXISTS elders").unwrap();
-        assert!(run(&b, "u", "db", "DELETE FROM staff").unwrap_err().contains("cannot change view"));
+        assert!(
+            run(&b, "u", "db", "DELETE FROM staff")
+                .unwrap_err()
+                .contains("cannot change view")
+        );
     }
 
     #[test]
     fn sql_writes() {
         let b = backend();
-        let tag = |sql: &str| run(&b, "u", "db", sql).unwrap_or_else(|e| panic!("{sql}: {e}")).1;
+        let tag = |sql: &str| {
+            run(&b, "u", "db", sql)
+                .unwrap_or_else(|e| panic!("{sql}: {e}"))
+                .1
+        };
         assert_eq!(
-            tag("INSERT INTO Person (id, name, age, worksFor) VALUES ('http://ex.org/dan', 'Dan', 22, 'http://ex.org/init'), ('http://ex.org/eve', 'Eve', 29, NULL)"),
+            tag(
+                "INSERT INTO Person (id, name, age, worksFor) VALUES ('http://ex.org/dan', 'Dan', 22, 'http://ex.org/init'), ('http://ex.org/eve', 'Eve', 29, NULL)"
+            ),
             "INSERT 0 2"
         );
-        assert_eq!(texts(&rows(&b, "SELECT name, age FROM Person WHERE age < 30 ORDER BY age")), ["Dan|22", "Bob|25", "Eve|29"]);
-        assert_eq!(texts(&rows(&b, "SELECT c.name FROM Person p JOIN Company c ON p.worksFor = c.id WHERE p.name = 'Dan'")), ["Initech"]);
+        assert_eq!(
+            texts(&rows(
+                &b,
+                "SELECT name, age FROM Person WHERE age < 30 ORDER BY age"
+            )),
+            ["Dan|22", "Bob|25", "Eve|29"]
+        );
+        assert_eq!(
+            texts(&rows(
+                &b,
+                "SELECT c.name FROM Person p JOIN Company c ON p.worksFor = c.id WHERE p.name = 'Dan'"
+            )),
+            ["Initech"]
+        );
         // without an id, one is made up in the class's namespace
-        assert_eq!(tag("INSERT INTO Person (name) VALUES ('Fay')"), "INSERT 0 1");
-        assert!(texts(&rows(&b, "SELECT id FROM Person WHERE name = 'Fay'"))[0].starts_with("http://ex.org/person/"));
-        assert_eq!(tag("UPDATE Person SET age = 26, email = 'x@ex.org' WHERE name = 'Bob'"), "UPDATE 1");
-        assert_eq!(texts(&rows(&b, "SELECT age, email FROM Person WHERE name = 'Bob'")), ["26|x@ex.org"]);
-        assert_eq!(tag("UPDATE Person SET worksFor = NULL WHERE worksFor IS NOT NULL"), "UPDATE 3");
-        assert_eq!(texts(&rows(&b, "SELECT COUNT(*) FROM Person WHERE worksFor IS NOT NULL")), ["0"]);
+        assert_eq!(
+            tag("INSERT INTO Person (name) VALUES ('Fay')"),
+            "INSERT 0 1"
+        );
+        assert!(
+            texts(&rows(&b, "SELECT id FROM Person WHERE name = 'Fay'"))[0]
+                .starts_with("http://ex.org/person/")
+        );
+        assert_eq!(
+            tag("UPDATE Person SET age = 26, email = 'x@ex.org' WHERE name = 'Bob'"),
+            "UPDATE 1"
+        );
+        assert_eq!(
+            texts(&rows(
+                &b,
+                "SELECT age, email FROM Person WHERE name = 'Bob'"
+            )),
+            ["26|x@ex.org"]
+        );
+        assert_eq!(
+            tag("UPDATE Person SET worksFor = NULL WHERE worksFor IS NOT NULL"),
+            "UPDATE 3"
+        );
+        assert_eq!(
+            texts(&rows(
+                &b,
+                "SELECT COUNT(*) FROM Person WHERE worksFor IS NOT NULL"
+            )),
+            ["0"]
+        );
         assert_eq!(tag("DELETE FROM Person WHERE age >= 29"), "DELETE 3");
-        assert_eq!(texts(&rows(&b, "SELECT name FROM Person ORDER BY name")), ["Bob", "Dan", "Fay"]);
+        assert_eq!(
+            texts(&rows(&b, "SELECT name FROM Person ORDER BY name")),
+            ["Bob", "Dan", "Fay"]
+        );
         // a failing statement changes nothing: the second row exists already
         assert!(run(&b, "u", "db", "INSERT INTO Person (id, name) VALUES ('http://ex.org/gus', 'Gus'), ('http://ex.org/bob', 'Bob')")
             .unwrap_err()
             .contains("already exists"));
-        assert_eq!(rows(&b, "SELECT id FROM Person WHERE name = 'Gus'").len(), 0);
-        assert!(run(&b, "u", "db", "UPDATE Person SET age = 'old' WHERE name = 'Bob'").unwrap_err().contains("not a valid"));
+        assert_eq!(
+            rows(&b, "SELECT id FROM Person WHERE name = 'Gus'").len(),
+            0
+        );
+        assert!(
+            run(
+                &b,
+                "u",
+                "db",
+                "UPDATE Person SET age = 'old' WHERE name = 'Bob'"
+            )
+            .unwrap_err()
+            .contains("not a valid")
+        );
         assert!(run(&b, "u", "db", "UPDATE Person SET id = 'x'").is_err());
-        assert!(run(&b, "u", "db", "INSERT INTO Person VALUES ('x')").unwrap_err().contains("name the columns"));
-        assert!(run(&b, "u", "db", "INSERT INTO Robot (name) VALUES ('R2')").unwrap_err().contains("Unknown type"));
+        assert!(
+            run(&b, "u", "db", "INSERT INTO Person VALUES ('x')")
+                .unwrap_err()
+                .contains("name the columns")
+        );
+        assert!(
+            run(&b, "u", "db", "INSERT INTO Robot (name) VALUES ('R2')")
+                .unwrap_err()
+                .contains("Unknown type")
+        );
         assert_eq!(tag("DELETE FROM Company"), "DELETE 2");
     }
 
@@ -4772,7 +6312,10 @@ mod tests {
                     LAG(name, 1, 'none') OVER (ORDER BY age DESC) AS prev_person
              FROM Person ORDER BY rn",
         );
-        assert_eq!(texts(&r), ["Cy O'Neil|40|1|none", "Ann|31|2|Cy O'Neil", "Bob|25|3|Ann"]);
+        assert_eq!(
+            texts(&r),
+            ["Cy O'Neil|40|1|none", "Ann|31|2|Cy O'Neil", "Bob|25|3|Ann"]
+        );
 
         // Set operations (UNION / INTERSECT / EXCEPT)
         let r = rows(
@@ -4787,9 +6330,15 @@ mod tests {
         assert_eq!(texts(&r), ["Bob", "Cy O'Neil"]);
 
         // RETURNING on INSERT/UPDATE/DELETE
-        let r = rows(&b, "INSERT INTO Company (id, name) VALUES ('http://ex.org/globex', 'Globex') RETURNING name");
+        let r = rows(
+            &b,
+            "INSERT INTO Company (id, name) VALUES ('http://ex.org/globex', 'Globex') RETURNING name",
+        );
         assert_eq!(texts(&r), ["Globex"]);
-        let r = rows(&b, "UPDATE Person SET age = age + 5 WHERE name = 'Bob' RETURNING name, age");
+        let r = rows(
+            &b,
+            "UPDATE Person SET age = age + 5 WHERE name = 'Bob' RETURNING name, age",
+        );
         assert_eq!(texts(&r), ["Bob|30"]);
     }
 

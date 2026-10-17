@@ -8,13 +8,13 @@ use super::*;
 #[derive(Clone, Copy, PartialEq)]
 /// Which syntax the Turtle family parser reads.
 pub enum Mode {
-/// Turtle.
+    /// Turtle.
     Turtle,
-/// TriG: Turtle plus named graphs.
+    /// TriG: Turtle plus named graphs.
     TriG,
-/// N-Quads (reused for N-Triples by the same reader).
+    /// N-Quads (reused for N-Triples by the same reader).
     NQuads,
-/// Notation3 (formulas become blank-node named graphs).
+    /// Notation3 (formulas become blank-node named graphs).
     N3,
 }
 
@@ -39,16 +39,22 @@ pub fn prefixes(text: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for line in text.lines() {
         let l = line.trim_start();
-        let rest = if l.get(..7).is_some_and(|x| x.eq_ignore_ascii_case("@prefix")) {
+        let rest = if l
+            .get(..7)
+            .is_some_and(|x| x.eq_ignore_ascii_case("@prefix"))
+        {
             &l[7..]
         } else if l.get(..6).is_some_and(|x| x.eq_ignore_ascii_case("prefix")) {
             &l[6..]
         } else {
             continue;
         };
-        let Some((name, after)) = rest.trim_start().split_once(':') else { continue };
+        let Some((name, after)) = rest.trim_start().split_once(':') else {
+            continue;
+        };
         let after = after.trim_start();
-        if let (Some(after), true) = (after.strip_prefix('<'), !name.contains(char::is_whitespace)) {
+        if let (Some(after), true) = (after.strip_prefix('<'), !name.contains(char::is_whitespace))
+        {
             if let Some(end) = after.find('>') {
                 out.push((name.to_string(), after[..end].to_string()));
             }
@@ -131,8 +137,15 @@ impl<'a> TurtleParser<'a> {
     }
 
     fn err<T>(&self, msg: &str) -> Result<T, String> {
-        let line = self.s[..self.i.min(self.s.len())].iter().filter(|&&b| b == b'\n').count() + 1;
-        let ctx: String = String::from_utf8_lossy(&self.s[self.i.min(self.s.len())..(self.i + 30).min(self.s.len())]).into_owned();
+        let line = self.s[..self.i.min(self.s.len())]
+            .iter()
+            .filter(|&&b| b == b'\n')
+            .count()
+            + 1;
+        let ctx: String = String::from_utf8_lossy(
+            &self.s[self.i.min(self.s.len())..(self.i + 30).min(self.s.len())],
+        )
+        .into_owned();
         Err(format!("{msg} at line {line} near {ctx:?}"))
     }
 
@@ -171,7 +184,9 @@ impl<'a> TurtleParser<'a> {
         let end = self.i + kw.len();
         if end <= self.s.len()
             && self.s[self.i..end].eq_ignore_ascii_case(kw.as_bytes())
-            && self.s.get(end).is_none_or(|c| !(c.is_ascii_alphanumeric() || *c == b'_' || *c == b':' || *c == b'-'))
+            && self.s.get(end).is_none_or(|c| {
+                !(c.is_ascii_alphanumeric() || *c == b'_' || *c == b':' || *c == b'-')
+            })
         {
             self.i = end;
             true
@@ -181,7 +196,12 @@ impl<'a> TurtleParser<'a> {
     }
 
     fn emit(&mut self, s: Term, p: Term, o: Term) {
-        self.out.push(Quad { s, p, o, g: self.graph.clone() });
+        self.out.push(Quad {
+            s,
+            p,
+            o,
+            g: self.graph.clone(),
+        });
     }
 
     fn document(&mut self) -> Result<(), String> {
@@ -190,7 +210,9 @@ impl<'a> TurtleParser<'a> {
             let Some(c) = self.peek() else { return Ok(()) };
             let (mark, graph, start) = (self.out.len(), self.graph.clone(), self.i);
             if let Err(e) = self.statement(c) {
-                let Some(list) = self.skipped.as_mut() else { return Err(e) };
+                let Some(list) = self.skipped.as_mut() else {
+                    return Err(e);
+                };
                 list.push(e);
                 // drop what the statement had produced, and resume after the next line-ending '.'
                 self.out.truncate(mark);
@@ -199,7 +221,10 @@ impl<'a> TurtleParser<'a> {
                 // from the start of the line the error is on (an unterminated string has
                 // already run past the statement's end), but never before the statement
                 let at = self.i.min(self.s.len());
-                let line_start = self.s[..at].iter().rposition(|&b| b == b'\n').map_or(0, |p| p + 1);
+                let line_start = self.s[..at]
+                    .iter()
+                    .rposition(|&b| b == b'\n')
+                    .map_or(0, |p| p + 1);
                 self.i = line_start.max(start);
                 self.skip_statement();
                 if self.i <= start {
@@ -215,7 +240,9 @@ impl<'a> TurtleParser<'a> {
             self.i += 1;
             if c == b'.' {
                 let mut j = self.i;
-                while j < self.s.len() && (self.s[j] == b' ' || self.s[j] == b'\t' || self.s[j] == b'\r') {
+                while j < self.s.len()
+                    && (self.s[j] == b' ' || self.s[j] == b'\t' || self.s[j] == b'\r')
+                {
                     j += 1;
                 }
                 if j >= self.s.len() || self.s[j] == b'\n' || self.s[j] == b'#' {
@@ -238,16 +265,31 @@ impl<'a> TurtleParser<'a> {
             if c == b'@' {
                 self.i += 1;
                 // @prefix and @base are lower case; PREFIX and BASE are case-insensitive
-                if self.s[self.i..].starts_with(b"prefix") && self.s.get(self.i + 6).is_some_and(|c| c.is_ascii_whitespace() || *c == b':') {
+                if self.s[self.i..].starts_with(b"prefix")
+                    && self
+                        .s
+                        .get(self.i + 6)
+                        .is_some_and(|c| c.is_ascii_whitespace() || *c == b':')
+                {
                     self.i += 6;
                     self.prefix_decl()?;
                     self.expect(b'.')?;
-                } else if self.s[self.i..].starts_with(b"version") && self.s.get(self.i + 7).is_some_and(|c| c.is_ascii_whitespace() || *c == b'"' || *c == b'\'') {
+                } else if self.s[self.i..].starts_with(b"version")
+                    && self
+                        .s
+                        .get(self.i + 7)
+                        .is_some_and(|c| c.is_ascii_whitespace() || *c == b'"' || *c == b'\'')
+                {
                     // RDF 1.2 version announcement: accepted, not interpreted
                     self.i += 7;
                     self.version_string()?;
                     self.expect(b'.')?;
-                } else if self.s[self.i..].starts_with(b"base") && self.s.get(self.i + 4).is_some_and(|c| c.is_ascii_whitespace() || *c == b'<') {
+                } else if self.s[self.i..].starts_with(b"base")
+                    && self
+                        .s
+                        .get(self.i + 4)
+                        .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<')
+                {
                     self.i += 4;
                     self.ws();
                     let iri = self.iriref()?;
@@ -328,7 +370,9 @@ impl<'a> TurtleParser<'a> {
         }
         let name = String::from_utf8_lossy(&self.s[start..self.i]).into_owned();
         // PN_PREFIX: starts with a letter, does not end with '.'
-        if !name.is_empty() && (!name.starts_with(|c: char| c.is_alphabetic()) || name.ends_with('.')) {
+        if !name.is_empty()
+            && (!name.starts_with(|c: char| c.is_alphabetic()) || name.ends_with('.'))
+        {
             return self.err(&format!("bad prefix name '{name}'"));
         }
         self.expect(b':')?;
@@ -342,7 +386,10 @@ impl<'a> TurtleParser<'a> {
     fn triples_or_graph(&mut self) -> Result<(), String> {
         if self.mode == Mode::TriG {
             let save = self.i;
-            if matches!(self.peek(), Some(b'<') | Some(b'_')) || self.looks_like_pname() || self.peek() == Some(b'[') {
+            if matches!(self.peek(), Some(b'<') | Some(b'_'))
+                || self.looks_like_pname()
+                || self.peek() == Some(b'[')
+            {
                 let g = self.term_for_graph();
                 if let Ok(g) = g {
                     self.ws();
@@ -407,13 +454,17 @@ impl<'a> TurtleParser<'a> {
         self.ws();
         let s = if self.starts_quoted() && !self.starts_triple_term() {
             self.quoted()?
-        } else if self.s.get(self.i..self.i + 2) == Some(b"[]") || (self.peek() == Some(b'[') && self.empty_brackets()) {
+        } else if self.s.get(self.i..self.i + 2) == Some(b"[]")
+            || (self.peek() == Some(b'[') && self.empty_brackets())
+        {
             self.anon()?
         } else {
             match self.peek() {
                 Some(b'<') if !self.starts_quoted() => Term::Iri(self.iriref()?),
                 Some(b'_') => self.blank_label()?,
-                Some(b'<' | b'[' | b'(' | b'"' | b'\'') => return self.err("bad subject in a reified triple"),
+                Some(b'<' | b'[' | b'(' | b'"' | b'\'') => {
+                    return self.err("bad subject in a reified triple");
+                }
                 _ => Term::Iri(self.pname()?),
             }
         };
@@ -422,13 +473,21 @@ impl<'a> TurtleParser<'a> {
         self.ws();
         let o = self.rt_object()?;
         self.ws();
-        let reifier = if self.peek() == Some(b'~') { self.reifier()? } else { Term::fresh_blank() };
+        let reifier = if self.peek() == Some(b'~') {
+            self.reifier()?
+        } else {
+            Term::fresh_blank()
+        };
         self.ws();
         if self.s.get(self.i..self.i + 2) != Some(b">>") {
             return self.err("expected '>>' to close the reified triple");
         }
         self.i += 2;
-        self.emit(reifier.clone(), Term::iri(RDF_REIFIES), Term::triple(s, p, o));
+        self.emit(
+            reifier.clone(),
+            Term::iri(RDF_REIFIES),
+            Term::triple(s, p, o),
+        );
         Ok(reifier)
     }
 
@@ -437,7 +496,9 @@ impl<'a> TurtleParser<'a> {
         self.ws();
         match self.peek() {
             Some(b'(') => self.err("a collection cannot be part of a reified triple"),
-            Some(b'[') if !self.empty_brackets() => self.err("a blank node property list cannot be part of a reified triple"),
+            Some(b'[') if !self.empty_brackets() => {
+                self.err("a blank node property list cannot be part of a reified triple")
+            }
             Some(b'[') => self.anon(),
             _ => self.object(),
         }
@@ -458,13 +519,20 @@ impl<'a> TurtleParser<'a> {
     }
 
     fn verb(&mut self) -> Result<Term, String> {
-        if self.peek() == Some(b'a') && self.s.get(self.i + 1).is_none_or(|c| c.is_ascii_whitespace() || b"<\"[_(".contains(c)) {
+        if self.peek() == Some(b'a')
+            && self
+                .s
+                .get(self.i + 1)
+                .is_none_or(|c| c.is_ascii_whitespace() || b"<\"[_(".contains(c))
+        {
             self.i += 1;
             return Ok(Term::iri(RDF_TYPE));
         }
         match self.peek() {
             Some(b'<') => Ok(Term::Iri(self.iriref()?)),
-            Some(b'_') | Some(b'[') | Some(b'(') | Some(b'"') => self.err("a predicate must be an IRI"),
+            Some(b'_') | Some(b'[') | Some(b'(') | Some(b'"') => {
+                self.err("a predicate must be an IRI")
+            }
             _ => Ok(Term::Iri(self.pname()?)),
         }
     }
@@ -477,7 +545,9 @@ impl<'a> TurtleParser<'a> {
             Some(b'<') => Ok(Term::Iri(self.iriref()?)),
             Some(b'_') if self.s.get(self.i + 1) == Some(&b':') => self.blank_label(),
             Some(b'[') if self.empty_brackets() => self.anon(),
-            Some(c) if c.is_ascii_alphabetic() || c == b':' || c >= 0x80 => Ok(Term::Iri(self.pname()?)),
+            Some(c) if c.is_ascii_alphabetic() || c == b':' || c >= 0x80 => {
+                Ok(Term::Iri(self.pname()?))
+            }
             _ => Ok(Term::fresh_blank()),
         }
     }
@@ -495,14 +565,18 @@ impl<'a> TurtleParser<'a> {
                 Some(b'<') if !p.starts_quoted() => Term::Iri(p.iriref()?),
                 Some(b'_') => p.blank_label()?,
                 Some(b'[') if p.empty_brackets() => p.anon()?,
-                Some(b'<' | b'[' | b'(' | b'"' | b'\'') => return p.err("bad subject in a triple term"),
+                Some(b'<' | b'[' | b'(' | b'"' | b'\'') => {
+                    return p.err("bad subject in a triple term");
+                }
                 _ => Term::Iri(p.pname()?),
             };
             p.ws();
             let pr = p.verb()?;
             p.ws();
             let o = match p.peek() {
-                Some(b'<') if p.starts_quoted() && !p.starts_triple_term() => return p.err("a reified triple cannot be inside a triple term"),
+                Some(b'<') if p.starts_quoted() && !p.starts_triple_term() => {
+                    return p.err("a reified triple cannot be inside a triple term");
+                }
                 _ => p.rt_object()?,
             };
             p.ws();
@@ -519,7 +593,12 @@ impl<'a> TurtleParser<'a> {
     /// `@prefix`, `@base`, `PREFIX`, `BASE`, and the legacy `@forAll`, `@forSome` and
     /// `@keywords` (parsed, not interpreted). False when the input is not a directive.
     fn n3_directive(&mut self) -> Result<bool, String> {
-        let at = |p: &Self, kw: &str| p.s[p.i..].starts_with(kw.as_bytes()) && p.s.get(p.i + kw.len()).is_none_or(|c| !c.is_ascii_alphanumeric());
+        let at = |p: &Self, kw: &str| {
+            p.s[p.i..].starts_with(kw.as_bytes())
+                && p.s
+                    .get(p.i + kw.len())
+                    .is_none_or(|c| !c.is_ascii_alphanumeric())
+        };
         if at(self, "@prefix") {
             self.i += 7;
             self.prefix_decl()?;
@@ -531,14 +610,23 @@ impl<'a> TurtleParser<'a> {
             self.expect(b'.')?;
         } else if at(self, "@forAll") || at(self, "@forSome") || at(self, "@keywords") {
             let keywords = at(self, "@keywords");
-            self.i += if at(self, "@forAll") { 7 } else if keywords { 9 } else { 8 };
+            self.i += if at(self, "@forAll") {
+                7
+            } else if keywords {
+                9
+            } else {
+                8
+            };
             loop {
                 self.ws();
                 if matches!(self.peek(), Some(b'.') | None) {
                     break;
                 }
                 if keywords {
-                    while self.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_') {
+                    while self
+                        .peek()
+                        .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_')
+                    {
                         self.i += 1;
                     }
                 } else {
@@ -689,12 +777,19 @@ impl<'a> TurtleParser<'a> {
                 self.i += 1;
                 self.ws();
                 // `[ id <iri> ... ]`: properties of a named resource
-                if self.s[self.i..].starts_with(b"id") && self.s.get(self.i + 2).is_some_and(|c| c.is_ascii_whitespace() || *c == b'<') {
+                if self.s[self.i..].starts_with(b"id")
+                    && self
+                        .s
+                        .get(self.i + 2)
+                        .is_some_and(|c| c.is_ascii_whitespace() || *c == b'<')
+                {
                     self.i += 2;
                     self.ws();
                     let node = match self.peek() {
                         Some(b'<') => Term::Iri(self.iriref()?),
-                        Some(b'_' | b'[' | b'(' | b'{' | b'?' | b'"' | b'\'') => return self.err("`[ id ... ]` needs an IRI"),
+                        Some(b'_' | b'[' | b'(' | b'{' | b'?' | b'"' | b'\'') => {
+                            return self.err("`[ id ... ]` needs an IRI");
+                        }
                         _ => Term::Iri(self.pname()?),
                     };
                     self.ws();
@@ -733,7 +828,11 @@ impl<'a> TurtleParser<'a> {
                 let n = items.len();
                 for (k, item) in items.into_iter().enumerate() {
                     self.emit(cur.clone(), Term::iri(RDF_FIRST), item);
-                    let next = if k + 1 == n { Term::iri(RDF_NIL) } else { Term::fresh_blank() };
+                    let next = if k + 1 == n {
+                        Term::iri(RDF_NIL)
+                    } else {
+                        Term::fresh_blank()
+                    };
                     self.emit(cur.clone(), Term::iri(RDF_REST), next.clone());
                     cur = next;
                 }
@@ -759,7 +858,10 @@ impl<'a> TurtleParser<'a> {
     fn n3_variable(&mut self) -> Result<Term, String> {
         self.i += 1; // '?'
         let start = self.i;
-        while self.peek().is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c >= 0x80) {
+        while self
+            .peek()
+            .is_some_and(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c >= 0x80)
+        {
             self.i += 1;
         }
         if self.i == start {
@@ -769,7 +871,11 @@ impl<'a> TurtleParser<'a> {
             return self.err("N3 variables are not allowed in regular RDF");
         }
         let name = format!("?{}", String::from_utf8_lossy(&self.s[start..self.i]));
-        let id = self.bnodes.entry(name).or_insert_with(fresh_blank_id).clone();
+        let id = self
+            .bnodes
+            .entry(name)
+            .or_insert_with(fresh_blank_id)
+            .clone();
         Ok(Term::Blank(id))
     }
 
@@ -855,14 +961,17 @@ impl<'a> TurtleParser<'a> {
         loop {
             self.ws();
             let pred = if self.peek() == Some(b'a')
-                && self.s.get(self.i + 1).is_none_or(|c| c.is_ascii_whitespace() || *c == b'<' || *c == b'"' || *c == b'[' || *c == b'_')
-            {
+                && self.s.get(self.i + 1).is_none_or(|c| {
+                    c.is_ascii_whitespace() || *c == b'<' || *c == b'"' || *c == b'[' || *c == b'_'
+                }) {
                 self.i += 1;
                 Term::iri(RDF_TYPE)
             } else {
                 match self.peek() {
                     Some(b'<') => Term::Iri(self.iriref()?),
-                    Some(b'_') | Some(b'[') | Some(b'(') | Some(b'"') => return self.err("a predicate must be an IRI"),
+                    Some(b'_') | Some(b'[') | Some(b'(') | Some(b'"') => {
+                        return self.err("a predicate must be an IRI");
+                    }
                     _ => Term::Iri(self.pname()?),
                 }
             };
@@ -875,7 +984,9 @@ impl<'a> TurtleParser<'a> {
                 self.i += 1;
                 self.ws();
             }
-            if matches!(self.peek(), Some(b'.') | Some(b']') | Some(b'}') | None) || self.s.get(self.i..self.i + 2) == Some(b"|}") {
+            if matches!(self.peek(), Some(b'.') | Some(b']') | Some(b'}') | None)
+                || self.s.get(self.i..self.i + 2) == Some(b"|}")
+            {
                 return Ok(());
             }
         }
@@ -888,7 +999,12 @@ impl<'a> TurtleParser<'a> {
                 self.ws();
                 if self.peek() != Some(b'.') {
                     let g = self.iri_or_blank()?;
-                    self.out.push(Quad { s: subj.clone(), p: pred.clone(), o: obj, g: Some(g) });
+                    self.out.push(Quad {
+                        s: subj.clone(),
+                        p: pred.clone(),
+                        o: obj,
+                        g: Some(g),
+                    });
                     return Ok(());
                 }
             }
@@ -998,7 +1114,11 @@ impl<'a> TurtleParser<'a> {
         let n = items.len();
         for (k, item) in items.into_iter().enumerate() {
             self.emit(cur.clone(), Term::iri(RDF_FIRST), item);
-            let next = if k + 1 == n { Term::iri(RDF_NIL) } else { Term::fresh_blank() };
+            let next = if k + 1 == n {
+                Term::iri(RDF_NIL)
+            } else {
+                Term::fresh_blank()
+            };
             self.emit(cur.clone(), Term::iri(RDF_REST), next.clone());
             cur = next;
         }
@@ -1009,7 +1129,12 @@ impl<'a> TurtleParser<'a> {
         self.i += 2; // _:
         let start = self.i;
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' || c >= 0x80 || (c == b'.' && self.is_name_continue_after_dot()) {
+            if c.is_ascii_alphanumeric()
+                || c == b'_'
+                || c == b'-'
+                || c >= 0x80
+                || (c == b'.' && self.is_name_continue_after_dot())
+            {
                 self.i += 1;
             } else {
                 break;
@@ -1022,13 +1147,24 @@ impl<'a> TurtleParser<'a> {
         if self.keep_labels {
             return Ok(Term::Blank(label));
         }
-        let id = self.bnodes.entry(label).or_insert_with(fresh_blank_id).clone();
+        let id = self
+            .bnodes
+            .entry(label)
+            .or_insert_with(fresh_blank_id)
+            .clone();
         Ok(Term::Blank(id))
     }
 
     /// A '.' inside a name is allowed only if more name characters follow.
     fn is_name_continue_after_dot(&self) -> bool {
-        self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-' || *c == b':' || *c == b'%' || *c >= 0x80)
+        self.s.get(self.i + 1).is_some_and(|c| {
+            c.is_ascii_alphanumeric()
+                || *c == b'_'
+                || *c == b'-'
+                || *c == b':'
+                || *c == b'%'
+                || *c >= 0x80
+        })
     }
 
     fn iriref(&mut self) -> Result<String, String> {
@@ -1075,8 +1211,12 @@ impl<'a> TurtleParser<'a> {
             _ => return self.err("bad escape"),
         };
         self.i += 1;
-        let hex = self.s.get(self.i..self.i + n).ok_or("short unicode escape")?;
-        let v = u32::from_str_radix(std::str::from_utf8(hex).unwrap_or("x"), 16).map_err(|_| "bad unicode escape".to_string())?;
+        let hex = self
+            .s
+            .get(self.i..self.i + n)
+            .ok_or("short unicode escape")?;
+        let v = u32::from_str_radix(std::str::from_utf8(hex).unwrap_or("x"), 16)
+            .map_err(|_| "bad unicode escape".to_string())?;
         self.i += n;
         char::from_u32(v).ok_or_else(|| "invalid code point".to_string())
     }
@@ -1091,7 +1231,11 @@ impl<'a> TurtleParser<'a> {
                 break;
             }
             let first = self.i == start;
-            if c.is_ascii_alphabetic() || c >= 0x80 || (!first && (c.is_ascii_digit() || c == b'_' || c == b'-')) || (!first && c == b'.' && self.dots_then_name()) {
+            if c.is_ascii_alphabetic()
+                || c >= 0x80
+                || (!first && (c.is_ascii_digit() || c == b'_' || c == b'-'))
+                || (!first && c == b'.' && self.dots_then_name())
+            {
                 self.i += 1;
             } else {
                 return self.err("expected prefixed name");
@@ -1125,7 +1269,11 @@ impl<'a> TurtleParser<'a> {
                 self.i += 3;
                 continue;
             }
-            let name_char = c.is_ascii_alphanumeric() || c == b'_' || c == b':' || c >= 0x80 || (!first && c == b'-');
+            let name_char = c.is_ascii_alphanumeric()
+                || c == b'_'
+                || c == b':'
+                || c >= 0x80
+                || (!first && c == b'-');
             if name_char || (!first && c == b'.' && self.dots_then_name()) {
                 let ch_start = self.i;
                 self.i += 1;
@@ -1142,7 +1290,10 @@ impl<'a> TurtleParser<'a> {
         match self.prefixes.get(&prefix) {
             Some(ns) => Ok(format!("{ns}{local}")),
             // N3: the empty prefix defaults to the document, `<#>`
-            None if self.mode == Mode::N3 && prefix.is_empty() => Ok(format!("{}#{local}", self.base.split('#').next().unwrap_or(""))),
+            None if self.mode == Mode::N3 && prefix.is_empty() => Ok(format!(
+                "{}#{local}",
+                self.base.split('#').next().unwrap_or("")
+            )),
             None => self.err(&format!("undefined prefix '{prefix}:'")),
         }
     }
@@ -1154,7 +1305,15 @@ impl<'a> TurtleParser<'a> {
         while self.s.get(j) == Some(&b'.') {
             j += 1;
         }
-        self.s.get(j).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_' || *c == b'-' || *c == b':' || *c == b'%' || *c == b'\\' || *c >= 0x80)
+        self.s.get(j).is_some_and(|c| {
+            c.is_ascii_alphanumeric()
+                || *c == b'_'
+                || *c == b'-'
+                || *c == b':'
+                || *c == b'%'
+                || *c == b'\\'
+                || *c >= 0x80
+        })
     }
 
     fn literal(&mut self) -> Result<Term, String> {
@@ -1220,7 +1379,12 @@ impl<'a> TurtleParser<'a> {
             if self.i == start {
                 return self.err("bad language tag");
             }
-            while self.peek() == Some(b'-') && self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_alphanumeric()) {
+            while self.peek() == Some(b'-')
+                && self
+                    .s
+                    .get(self.i + 1)
+                    .is_some_and(|c| c.is_ascii_alphanumeric())
+            {
                 self.i += 1;
                 while self.peek().is_some_and(|c| c.is_ascii_alphanumeric()) {
                     self.i += 1;
@@ -1252,7 +1416,9 @@ impl<'a> TurtleParser<'a> {
                 _ => self.pname()?,
             };
             if dt == RDF_LANGSTRING || dt == RDF_DIRLANGSTRING {
-                return self.err("rdf:langString and rdf:dirLangString need a language tag, not a datatype");
+                return self.err(
+                    "rdf:langString and rdf:dirLangString need a language tag, not a datatype",
+                );
             }
             return Ok(Term::typed(val, &dt));
         }
@@ -1273,8 +1439,12 @@ impl<'a> TurtleParser<'a> {
         };
         let int_digits = digits(self);
         let mut dt = XSD_INTEGER;
-        let dot_exponent = int_digits > 0 && self.peek() == Some(b'.') && matches!(self.s.get(self.i + 1), Some(b'e' | b'E'));
-        if self.peek() == Some(b'.') && (self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_digit()) || dot_exponent) {
+        let dot_exponent = int_digits > 0
+            && self.peek() == Some(b'.')
+            && matches!(self.s.get(self.i + 1), Some(b'e' | b'E'));
+        if self.peek() == Some(b'.')
+            && (self.s.get(self.i + 1).is_some_and(|c| c.is_ascii_digit()) || dot_exponent)
+        {
             self.i += 1;
             digits(self);
             dt = XSD_DECIMAL;
@@ -1303,17 +1473,47 @@ mod tests {
     #[test]
     fn n3_formulas_paths_and_variables() {
         let doc = "@prefix : <http://ex/> . { ?x :p ?y } => { ?y :q ?x } . :a!:b :c [ id :d :e 1 ] . :s is :p of :o ; = :t . :k :v {} .";
-        assert!(parse_n3(doc, "http://ex/doc", false).unwrap_err().contains("variables"));
+        assert!(
+            parse_n3(doc, "http://ex/doc", false)
+                .unwrap_err()
+                .contains("variables")
+        );
         let q = parse_n3(doc, "http://ex/doc", true).unwrap();
-        let implies = q.iter().find(|q| q.p == Term::iri(format!("{LOG}implies"))).unwrap();
-        assert_eq!(q.iter().filter(|x| x.g.as_ref() == Some(&implies.s)).count(), 1, "antecedent formula is a graph");
-        assert!(q.iter().any(|x| x.s == Term::iri("http://ex/a") && x.p == Term::iri("http://ex/b") && x.g.is_none()));
-        assert!(q.iter().any(|x| x.s == Term::iri("http://ex/d") && x.p == Term::iri("http://ex/e")));
-        assert!(q.iter().any(|x| x.s == Term::iri("http://ex/o") && x.p == Term::iri("http://ex/p") && x.o == Term::iri("http://ex/s")));
-        assert!(q.iter().any(|x| x.p == Term::iri(OWL_SAME_AS) && x.o == Term::iri("http://ex/t")));
-        assert!(q.iter().any(|x| x.p == Term::iri("http://ex/v") && x.o == Term::boolean(true)));
+        let implies = q
+            .iter()
+            .find(|q| q.p == Term::iri(format!("{LOG}implies")))
+            .unwrap();
+        assert_eq!(
+            q.iter()
+                .filter(|x| x.g.as_ref() == Some(&implies.s))
+                .count(),
+            1,
+            "antecedent formula is a graph"
+        );
+        assert!(q.iter().any(|x| x.s == Term::iri("http://ex/a")
+            && x.p == Term::iri("http://ex/b")
+            && x.g.is_none()));
+        assert!(
+            q.iter()
+                .any(|x| x.s == Term::iri("http://ex/d") && x.p == Term::iri("http://ex/e"))
+        );
+        assert!(q.iter().any(|x| x.s == Term::iri("http://ex/o")
+            && x.p == Term::iri("http://ex/p")
+            && x.o == Term::iri("http://ex/s")));
+        assert!(
+            q.iter()
+                .any(|x| x.p == Term::iri(OWL_SAME_AS) && x.o == Term::iri("http://ex/t"))
+        );
+        assert!(
+            q.iter()
+                .any(|x| x.p == Term::iri("http://ex/v") && x.o == Term::boolean(true))
+        );
         let q = parse_n3(":x :y :z .", "http://ex/doc", false).unwrap();
-        assert_eq!(q[0].s, Term::iri("http://ex/doc#x"), "the empty prefix defaults to <#>");
+        assert_eq!(
+            q[0].s,
+            Term::iri("http://ex/doc#x"),
+            "the empty prefix defaults to <#>"
+        );
     }
 
     #[test]
@@ -1338,27 +1538,67 @@ line""" .
         // reified triple: a reifier node described by rdf:reifies <<( s p o )>>
         let q = parse("@prefix ex: <http://ex.org/> .\n<< ex:alice ex:knows ex:bob ~ ex:r1 >> ex:since 2020 .", "", Mode::Turtle).unwrap();
         assert_eq!(q.len(), 2);
-        assert!(q.iter().any(|q| q.s == Term::iri("http://ex.org/r1") && q.p == reifies && q.o.is_triple()));
-        assert!(q.iter().any(|q| q.s == Term::iri("http://ex.org/r1") && q.p == Term::iri("http://ex.org/since")));
+        assert!(
+            q.iter()
+                .any(|q| q.s == Term::iri("http://ex.org/r1") && q.p == reifies && q.o.is_triple())
+        );
+        assert!(q.iter().any(
+            |q| q.s == Term::iri("http://ex.org/r1") && q.p == Term::iri("http://ex.org/since")
+        ));
         // annotation: asserted triple, one reifier per block, a named reifier for `~`
         let q = parse("@prefix ex: <http://ex.org/> .\nex:a ex:b ex:c ~ ex:r {| ex:source ex:doc |} {| ex:conf 0.9 |} .", "", Mode::Turtle).unwrap();
         assert_eq!(q.iter().filter(|q| q.p == reifies).count(), 2);
-        assert!(q.iter().any(|q| q.s == Term::iri("http://ex.org/r") && q.p == Term::iri("http://ex.org/source")));
+        assert!(q.iter().any(
+            |q| q.s == Term::iri("http://ex.org/r") && q.p == Term::iri("http://ex.org/source")
+        ));
         assert!(q.iter().any(|q| q.s == Term::iri("http://ex.org/a") && q.o == Term::iri("http://ex.org/c")));
         // triple terms only as objects; base direction
-        let q = parse("<http://s> <http://p> <<( <http://a> <http://b> \"x\"@en--rtl )>> .", "", Mode::Turtle).unwrap();
+        let q = parse(
+            "<http://s> <http://p> <<( <http://a> <http://b> \"x\"@en--rtl )>> .",
+            "",
+            Mode::Turtle,
+        )
+        .unwrap();
         assert!(matches!(&q[0].o, Term::Triple(t) if t[2] == Term::dir_lang("x", "en", "rtl")));
-        assert!(parse("<<( <http://a> <http://b> <http://c> )>> <http://p> 1 .", "", Mode::Turtle).is_err());
+        assert!(
+            parse(
+                "<<( <http://a> <http://b> <http://c> )>> <http://p> 1 .",
+                "",
+                Mode::Turtle
+            )
+            .is_err()
+        );
         assert!(parse("<http://s> <http://p> \"x\"@en--LTR .", "", Mode::Turtle).is_err());
-        assert!(parse("VERSION \"1.2\"\n@version \"1.2\" .\n<http://s> <http://p> 1 .", "", Mode::Turtle).is_ok());
+        assert!(
+            parse(
+                "VERSION \"1.2\"\n@version \"1.2\" .\n<http://s> <http://p> 1 .",
+                "",
+                Mode::Turtle
+            )
+            .is_ok()
+        );
         // the store's own log keeps RDF-star triples as subjects
-        assert!(parse_nquads_raw("<< <http://a> <http://b> <http://c> >> <http://p> \"x\" .\n").unwrap()[0].s.is_triple());
+        assert!(
+            parse_nquads_raw("<< <http://a> <http://b> <http://c> >> <http://p> \"x\" .\n")
+                .unwrap()[0]
+                .s
+                .is_triple()
+        );
     }
 
     #[test]
     fn prefix_scan() {
-        let p = prefixes("@prefix ex: <http://ex.org/> .\nPREFIX foaf:<http://xmlns.com/foaf/0.1/>\n@prefix : <http://d/> .");
-        assert_eq!(p, vec![("ex".into(), "http://ex.org/".into()), ("foaf".into(), "http://xmlns.com/foaf/0.1/".into()), ("".into(), "http://d/".into())]);
+        let p = prefixes(
+            "@prefix ex: <http://ex.org/> .\nPREFIX foaf:<http://xmlns.com/foaf/0.1/>\n@prefix : <http://d/> .",
+        );
+        assert_eq!(
+            p,
+            vec![
+                ("ex".into(), "http://ex.org/".into()),
+                ("foaf".into(), "http://xmlns.com/foaf/0.1/".into()),
+                ("".into(), "http://d/".into())
+            ]
+        );
     }
 
     #[test]

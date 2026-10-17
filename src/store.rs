@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::fts;
 use crate::lsm::{BlockCache, Index, Key};
-use crate::rdf::{turtle, Quad, Term};
+use crate::rdf::{Quad, Term, turtle};
 use crate::reason::{Facts, Reasoner, Triple};
 
 pub use crate::dict::{Dict, Id};
@@ -73,7 +73,7 @@ pub struct WalSync {
 }
 
 impl WalSync {
-/// Wait until the log is fsynced up to `seq` (one fsync may cover many commits).
+    /// Wait until the log is fsynced up to `seq` (one fsync may cover many commits).
     pub fn wait(&self, seq: u64) -> io::Result<()> {
         use std::sync::atomic::Ordering::SeqCst;
         if self.synced.load(SeqCst) >= seq {
@@ -103,14 +103,18 @@ pub struct FtsPrepared {
 }
 
 impl FtsPrepared {
-/// Whether nothing is indexed yet.
+    /// Whether nothing is indexed yet.
     pub fn is_empty(&self) -> bool {
         self.forms[0].0.is_empty()
     }
 
     /// The first form of the query that matches `doc` (for highlighting).
     pub fn matching(&self, doc: &fts::Doc) -> &fts::FtsQuery {
-        self.forms.iter().map(|(q, _)| q).find(|q| q.score(doc, None, &[]).is_some()).unwrap_or(&self.forms[0].0)
+        self.forms
+            .iter()
+            .map(|(q, _)| q)
+            .find(|q| q.score(doc, None, &[]).is_some())
+            .unwrap_or(&self.forms[0].0)
     }
 }
 
@@ -185,7 +189,9 @@ struct History {
 const HISTORY: &str = "history.log";
 
 fn now_millis() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 /// The commit time in a log line `c <time>` (None for other lines; Some(None) for a bare `c`).
@@ -224,8 +230,12 @@ impl Manifest {
             let mut parts = line.split_whitespace();
             match parts.next() {
                 Some("dict") => m.dict = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                Some("explicit") => m.explicit = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
-                Some("inferred") => m.inferred = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0),
+                Some("explicit") => {
+                    m.explicit = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                }
+                Some("inferred") => {
+                    m.inferred = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0)
+                }
                 Some("ruleset") => {
                     m.ruleset = parts.next().unwrap_or("empty").to_string();
                     m.same_as = parts.next() != Some("0");
@@ -273,7 +283,14 @@ impl Manifest {
     fn write(&self, path: &Path) -> io::Result<()> {
         let mut text = format!(
             "graphrd-manifest 1\ndict {}\nexplicit {}\ninferred {}\nruleset {} {}\nfts {}\ngeo {}\nvec {}\n",
-            self.dict, self.explicit, self.inferred, self.ruleset, self.same_as as u8, if self.fts { 2 } else { 0 }, self.geo as u8, self.vec as u8
+            self.dict,
+            self.explicit,
+            self.inferred,
+            self.ruleset,
+            self.same_as as u8,
+            if self.fts { 2 } else { 0 },
+            self.geo as u8,
+            self.vec as u8
         );
         for (i, runs) in self.runs.iter().enumerate() {
             text.push_str(&format!("index {} {}\n", NAMES[i], runs.join(" ")));
@@ -408,14 +425,16 @@ impl Store {
             fts_stats: Default::default(),
             fts_vocab: HashMap::new(),
             geo: Index::open(dir, "geo", &m.geo_runs, cache.clone())?,
-            vectors: Arc::new(std::sync::RwLock::new(match crate::vector::Hnsw::load(&dir.join(VECTORS)) {
-                Ok(h) => h,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => Default::default(),
-                Err(e) => {
-                    eprintln!("graphrd: {e}; the vector index is rebuilt");
-                    Default::default()
-                }
-            })),
+            vectors: Arc::new(std::sync::RwLock::new(
+                match crate::vector::Hnsw::load(&dir.join(VECTORS)) {
+                    Ok(h) => h,
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => Default::default(),
+                    Err(e) => {
+                        eprintln!("graphrd: {e}; the vector index is rebuilt");
+                        Default::default()
+                    }
+                },
+            )),
             connectors: Default::default(),
             feed: None,
             capture: None,
@@ -485,7 +504,9 @@ impl Store {
                 }
                 let (op, rest) = line.split_at(line.len().min(2));
                 // A torn final line from a crash is ignored.
-                let Ok(qs) = turtle::parse_nquads_raw(rest) else { continue };
+                let Ok(qs) = turtle::parse_nquads_raw(rest) else {
+                    continue;
+                };
                 match op {
                     "+ " => txn.push((true, qs)),
                     "- " => txn.push((false, qs)),
@@ -539,7 +560,9 @@ impl Store {
     /// Fold the memtables into run files, persist the dictionary, and
     /// truncate the write-ahead log.
     pub fn checkpoint(&mut self) -> io::Result<()> {
-        let Some(dir) = self.dir.clone() else { return Ok(()) };
+        let Some(dir) = self.dir.clone() else {
+            return Ok(());
+        };
         if let Some(w) = &mut self.wal {
             w.flush()?;
         }
@@ -566,7 +589,11 @@ impl Store {
             }
         }
         self.manifest().write(&dir.join("MANIFEST"))?;
-        let wal = OpenOptions::new().create(true).write(true).truncate(true).open(dir.join("wal.log"))?;
+        let wal = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(dir.join("wal.log"))?;
         preallocate(&wal, 0, WAL_PREALLOC)?;
         wal.sync_all()?;
         self.wal_alloc = WAL_PREALLOC;
@@ -575,7 +602,9 @@ impl Store {
             use std::sync::atomic::Ordering::SeqCst;
             let mut f = self.wal_sync.file.lock().unwrap_or_else(|e| e.into_inner());
             *f = Some(wal.try_clone()?);
-            self.wal_sync.synced.fetch_max(self.wal_sync.logged.load(SeqCst), SeqCst);
+            self.wal_sync
+                .synced
+                .fetch_max(self.wal_sync.logged.load(SeqCst), SeqCst);
         }
         self.wal = Some(BufWriter::new(wal));
         self.wal_bytes = 0;
@@ -603,7 +632,13 @@ impl Store {
         if q[G] == DEFAULT_GRAPH {
             format!("{} {} {} .", d.term(q[S]), d.term(q[P]), d.term(q[O]))
         } else {
-            format!("{} {} {} {} .", d.term(q[S]), d.term(q[P]), d.term(q[O]), d.term(q[G]))
+            format!(
+                "{} {} {} {} .",
+                d.term(q[S]),
+                d.term(q[P]),
+                d.term(q[O]),
+                d.term(q[G])
+            )
         }
     }
 
@@ -673,7 +708,12 @@ impl Store {
         r
     }
 
-    fn apply_inner(&mut self, remove: &[Quad], insert: &[Quad], log: &mut String) -> (usize, usize) {
+    fn apply_inner(
+        &mut self,
+        remove: &[Quad],
+        insert: &[Quad],
+        log: &mut String,
+    ) -> (usize, usize) {
         let logging = self.wal.is_some();
         let (mut r, mut a) = (0, 0);
         // DRed: find what may depend on the removed triples while they still exist.
@@ -751,7 +791,9 @@ impl Store {
             }
         }
         if self.reasoner.is_some() {
-            if self.touches_rule_schema(removed_triples.iter().chain(&added)) && self.compile_rules() {
+            if self.touches_rule_schema(removed_triples.iter().chain(&added))
+                && self.compile_rules()
+            {
                 // the data's OWL list axioms changed the rules: derive everything again
                 self.recompute_inferences();
             } else {
@@ -768,7 +810,9 @@ impl Store {
 
     /// Whether changed triples belong to OWL axioms that `Reasoner::compile` turns into rules.
     fn touches_rule_schema<'t>(&self, changed: impl Iterator<Item = &'t Triple>) -> bool {
-        let Some(base) = &self.reasoner_base else { return false };
+        let Some(base) = &self.reasoner_base else {
+            return false;
+        };
         let preds = base.schema_predicates();
         !preds.is_empty() && changed.into_iter().any(|t| preds.contains(&t[1]))
     }
@@ -776,9 +820,16 @@ impl Store {
     /// Compile the rules of the data's OWL list axioms into the reasoner; true when they
     /// differ from the rules in use.
     fn compile_rules(&mut self) -> bool {
-        let Some(base) = self.reasoner_base.clone() else { return false };
-        let Some(compiled) = Reasoner::compile(&base, self) else { return false };
-        let changed = self.reasoner.as_ref().is_none_or(|r| r.signature() != compiled.signature());
+        let Some(base) = self.reasoner_base.clone() else {
+            return false;
+        };
+        let Some(compiled) = Reasoner::compile(&base, self) else {
+            return false;
+        };
+        let changed = self
+            .reasoner
+            .as_ref()
+            .is_none_or(|r| r.signature() != compiled.signature());
         if changed {
             self.reasoner = Some(Arc::new(compiled));
         }
@@ -788,7 +839,9 @@ impl Store {
     /// DRed: drop overdeleted inferences, then re-derive those that still
     /// have support and propagate from them.
     fn retract(&mut self, overdeleted: HashSet<Triple>, removed: Vec<Triple>) {
-        let Some(reasoner) = self.reasoner.take() else { return };
+        let Some(reasoner) = self.reasoner.take() else {
+            return;
+        };
         for t in &overdeleted {
             let q = [t[0], t[1], t[2], INFERRED];
             if self.has(q) {
@@ -824,7 +877,11 @@ impl Store {
                     h.file.flush()?;
                     h.oldest.get_or_insert(self.last_commit);
                 }
-                let seq = self.wal_sync.logged.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let seq = self
+                    .wal_sync
+                    .logged
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                    + 1;
                 if SYNC_COMMITS.load(std::sync::atomic::Ordering::Relaxed) {
                     self.unsynced = Some(seq);
                 }
@@ -850,15 +907,23 @@ impl Store {
     /// (version, whether memtables or the log hold anything a checkpoint would fold away):
     /// the server checkpoints a store whose version stays the same while it is dirty.
     pub fn idle_state(&self) -> (u64, bool) {
-        let dirty = self.dir.is_some() && (self.wal_bytes > 0 || self.indexes.iter().any(|i| i.mem_len() > 0) || self.fts.mem_len() > 0);
+        let dirty = self.dir.is_some()
+            && (self.wal_bytes > 0
+                || self.indexes.iter().any(|i| i.mem_len() > 0)
+                || self.fts.mem_len() > 0);
         (self.version, dirty)
     }
 
     /// The files a query reads (dictionary and index runs), most used first, for warming
     /// the operating system's cache after a start.
     pub fn warm_files(&self) -> Vec<PathBuf> {
-        let Some(dir) = &self.dir else { return Vec::new() };
-        let mut out: Vec<PathBuf> = ["terms.hash", "terms.idx", "terms.dat"].iter().map(|f| dir.join(f)).collect();
+        let Some(dir) = &self.dir else {
+            return Vec::new();
+        };
+        let mut out: Vec<PathBuf> = ["terms.hash", "terms.idx", "terms.dat"]
+            .iter()
+            .map(|f| dir.join(f))
+            .collect();
         for idx in &self.indexes {
             out.extend(idx.run_paths());
         }
@@ -872,7 +937,11 @@ impl Store {
     /// so a crash during the load leaves the store as it was. Blank node labels are kept
     /// consistent across calls through `bnodes` (label as written -> stored label).
     /// Returns the number of statements added.
-    pub fn bulk_insert(&mut self, chunks: Vec<Vec<Quad>>, bnodes: &mut HashMap<String, String>) -> io::Result<usize> {
+    pub fn bulk_insert(
+        &mut self,
+        chunks: Vec<Vec<Quad>>,
+        bnodes: &mut HashMap<String, String>,
+    ) -> io::Result<usize> {
         use std::thread;
         // start from empty memtables, so the new runs are the newest sources
         self.checkpoint()?;
@@ -903,7 +972,10 @@ impl Store {
                         };
                         let mut literal_objects = Vec::new();
                         for q in chunk {
-                            let lit = q.o.is_literal() && (fts || crate::geo::is_geometry_literal(&q.o) || crate::vector::is_vector_literal(&q.o));
+                            let lit = q.o.is_literal()
+                                && (fts
+                                    || crate::geo::is_geometry_literal(&q.o)
+                                    || crate::vector::is_vector_literal(&q.o));
                             let s = local(q.s, &mut terms);
                             let p = local(q.p, &mut terms);
                             let o = local(q.o, &mut terms);
@@ -913,11 +985,18 @@ impl Store {
                             let g = q.g.map_or(NO_GRAPH, |g| local(g, &mut terms));
                             quads.push([s, p, o, g]);
                         }
-                        Local { terms, quads, literal_objects }
+                        Local {
+                            terms,
+                            quads,
+                            literal_objects,
+                        }
                     })
                 })
                 .collect();
-            handles.into_iter().map(|h| h.join().expect("bulk load worker")).collect()
+            handles
+                .into_iter()
+                .map(|h| h.join().expect("bulk load worker"))
+                .collect()
         });
         // 2. the dictionary, one distinct term at a time
         let mut globals: Vec<Vec<Id>> = Vec::with_capacity(locals.len());
@@ -928,7 +1007,12 @@ impl Store {
                     .terms
                     .iter()
                     .map(|t| match t {
-                        Term::Blank(b) => Term::Blank(bnodes.entry(b.clone()).or_insert_with(crate::rdf::fresh_blank_id).clone()),
+                        Term::Blank(b) => Term::Blank(
+                            bnodes
+                                .entry(b.clone())
+                                .or_insert_with(crate::rdf::fresh_blank_id)
+                                .clone(),
+                        ),
                         t => t.clone(),
                     })
                     .collect();
@@ -947,7 +1031,18 @@ impl Store {
                     sc.spawn(move || {
                         l.quads
                             .iter()
-                            .map(|q| [ids[q[0] as usize], ids[q[1] as usize], ids[q[2] as usize], if q[3] == NO_GRAPH { DEFAULT_GRAPH } else { ids[q[3] as usize] }])
+                            .map(|q| {
+                                [
+                                    ids[q[0] as usize],
+                                    ids[q[1] as usize],
+                                    ids[q[2] as usize],
+                                    if q[3] == NO_GRAPH {
+                                        DEFAULT_GRAPH
+                                    } else {
+                                        ids[q[3] as usize]
+                                    },
+                                ]
+                            })
                             .collect::<Vec<_>>()
                     })
                 })
@@ -966,8 +1061,21 @@ impl Store {
             let parts = thread::available_parallelism().map_or(4, |n| n.get());
             let size = all.len().div_ceil(parts).max(1);
             all = thread::scope(|sc| {
-                let handles: Vec<_> = all.chunks(size).map(|part| sc.spawn(move || part.iter().filter(|q| !index.contains(q)).copied().collect::<Vec<_>>())).collect();
-                handles.into_iter().flat_map(|h| h.join().expect("bulk load worker")).collect()
+                let handles: Vec<_> = all
+                    .chunks(size)
+                    .map(|part| {
+                        sc.spawn(move || {
+                            part.iter()
+                                .filter(|q| !index.contains(q))
+                                .copied()
+                                .collect::<Vec<_>>()
+                        })
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .flat_map(|h| h.join().expect("bulk load worker"))
+                    .collect()
             });
             // an explicit statement supersedes an identical inferred one
             if self.inferred_count > 0 {
@@ -1002,7 +1110,9 @@ impl Store {
             h.oldest.get_or_insert(at);
         }
         if let Some(f) = &self.feed {
-            f.lock().unwrap_or_else(|e| e.into_inner()).extend(all.iter().map(|q| q[S]));
+            f.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend(all.iter().map(|q| q[S]));
         }
         // 5. one sorted run per index, built and written in parallel
         let added = all.len();
@@ -1068,10 +1178,14 @@ impl Store {
         if self.dir.is_none() {
             return Ok(());
         }
-        self.wal_sync.wait(self.wal_sync.logged.load(std::sync::atomic::Ordering::SeqCst))
+        self.wal_sync.wait(
+            self.wal_sync
+                .logged
+                .load(std::sync::atomic::Ordering::SeqCst),
+        )
     }
 
-/// The pending fsync, for the write guard to wait out after releasing the lock.
+    /// The pending fsync, for the write guard to wait out after releasing the lock.
     pub fn take_unsynced(&mut self) -> Option<(std::sync::Arc<WalSync>, u64)> {
         self.unsynced.take().map(|seq| (self.wal_sync.clone(), seq))
     }
@@ -1089,12 +1203,21 @@ impl Store {
 
     /// How much has been recorded so far (removed, inserted).
     pub fn capture_mark(&self) -> (usize, usize) {
-        self.capture.as_ref().map_or((0, 0), |(r, i)| (r.len(), i.len()))
+        self.capture
+            .as_ref()
+            .map_or((0, 0), |(r, i)| (r.len(), i.len()))
     }
 
     /// What was recorded after `mark` (removed, inserted).
     pub fn capture_since(&self, mark: (usize, usize)) -> (Vec<Quad>, Vec<Quad>) {
-        self.capture.as_ref().map_or_else(Default::default, |(r, i)| (r[mark.0.min(r.len())..].to_vec(), i[mark.1.min(i.len())..].to_vec()))
+        self.capture
+            .as_ref()
+            .map_or_else(Default::default, |(r, i)| {
+                (
+                    r[mark.0.min(r.len())..].to_vec(),
+                    i[mark.1.min(i.len())..].to_vec(),
+                )
+            })
     }
 
     /// Forgets what was recorded after `mark`.
@@ -1105,17 +1228,17 @@ impl Store {
         }
     }
 
-/// What a transaction changed, when it was captured (for SHACL and undo).
+    /// What a transaction changed, when it was captured (for SHACL and undo).
     pub fn take_capture(&mut self) -> (Vec<Quad>, Vec<Quad>) {
         self.capture.take().unwrap_or_default()
     }
 
-/// Add quads; returns how many were new.
+    /// Add quads; returns how many were new.
     pub fn insert(&mut self, quads: &[Quad]) -> io::Result<usize> {
         self.apply(&[], quads).map(|(_, a)| a)
     }
 
-/// Remove every explicit statement of a graph; returns how many went.
+    /// Remove every explicit statement of a graph; returns how many went.
     pub fn clear_graph(&mut self, g: Option<Id>) -> io::Result<usize> {
         let ids: Vec<[Id; 4]> = self.explicit_matching(None, None, None, g).collect();
         let quads: Vec<Quad> = ids.into_iter().map(|q| self.decode(q)).collect();
@@ -1143,7 +1266,10 @@ impl Store {
 
     fn clear_inferred(&mut self) {
         loop {
-            let batch: Vec<[Id; 4]> = self.quads_matching(None, None, None, Some(INFERRED)).take(REASON_CHUNK).collect();
+            let batch: Vec<[Id; 4]> = self
+                .quads_matching(None, None, None, Some(INFERRED))
+                .take(REASON_CHUNK)
+                .collect();
             if batch.is_empty() {
                 break;
             }
@@ -1158,11 +1284,18 @@ impl Store {
     /// the explicit statements through the reasoner in chunks.
     fn recompute_inferences(&mut self) {
         self.clear_inferred();
-        let Some(reasoner) = self.reasoner.take() else { return };
+        let Some(reasoner) = self.reasoner.take() else {
+            return;
+        };
         let mut from: Key = [0; 4];
         loop {
-            let chunk: Vec<Key> = self.indexes[0].range(from, [Id::MAX; 4]).take(REASON_CHUNK).collect();
-            let Some(last) = chunk.last().copied() else { break };
+            let chunk: Vec<Key> = self.indexes[0]
+                .range(from, [Id::MAX; 4])
+                .take(REASON_CHUNK)
+                .collect();
+            let Some(last) = chunk.last().copied() else {
+                break;
+            };
             let mut seen = HashSet::new();
             let delta: Vec<Triple> = chunk
                 .iter()
@@ -1180,12 +1313,14 @@ impl Store {
     }
 
     fn infer(&mut self, added: Vec<Triple>) {
-        let Some(reasoner) = self.reasoner.take() else { return };
+        let Some(reasoner) = self.reasoner.take() else {
+            return;
+        };
         reasoner.run(self, added);
         self.reasoner = Some(reasoner);
     }
 
-/// The number of inferred statements.
+    /// The number of inferred statements.
     pub fn inferred_len(&self) -> usize {
         self.inferred_count as usize
     }
@@ -1195,10 +1330,12 @@ impl Store {
     /// PageRank over explicit links between resources, normalized so the
     /// most important node scores 1.
     pub fn compute_rank(&mut self) -> usize {
-        let mut out_links: std::collections::HashMap<Id, Vec<Id>> = std::collections::HashMap::new();
+        let mut out_links: std::collections::HashMap<Id, Vec<Id>> =
+            std::collections::HashMap::new();
         let mut nodes: std::collections::HashMap<Id, f64> = std::collections::HashMap::new();
         let lit = |st: &Store, id: Id| st.dict.term(id).is_literal();
-        let mut literal_cache: std::collections::HashMap<Id, bool> = std::collections::HashMap::new();
+        let mut literal_cache: std::collections::HashMap<Id, bool> =
+            std::collections::HashMap::new();
         for q in self.explicit_matching(None, None, None, None) {
             let is_lit = *literal_cache.entry(q[O]).or_insert_with(|| lit(self, q[O]));
             nodes.entry(q[S]).or_insert(0.0);
@@ -1209,11 +1346,17 @@ impl Store {
         }
         let n = nodes.len().max(1) as f64;
         let d = 0.85;
-        let mut rank: std::collections::HashMap<Id, f64> = nodes.keys().map(|&k| (k, 1.0 / n)).collect();
+        let mut rank: std::collections::HashMap<Id, f64> =
+            nodes.keys().map(|&k| (k, 1.0 / n)).collect();
         for _ in 0..20 {
-            let dangling: f64 = rank.iter().filter(|(k, _)| !out_links.contains_key(k)).map(|(_, v)| v).sum();
+            let dangling: f64 = rank
+                .iter()
+                .filter(|(k, _)| !out_links.contains_key(k))
+                .map(|(_, v)| v)
+                .sum();
             let base = (1.0 - d) / n + d * dangling / n;
-            let mut next: std::collections::HashMap<Id, f64> = nodes.keys().map(|&k| (k, base)).collect();
+            let mut next: std::collections::HashMap<Id, f64> =
+                nodes.keys().map(|&k| (k, base)).collect();
             for (s, targets) in &out_links {
                 let share = d * rank[s] / targets.len() as f64;
                 for t in targets {
@@ -1222,8 +1365,16 @@ impl Store {
             }
             rank = next;
         }
-        let max = rank.values().cloned().fold(0.0, f64::max).max(f64::MIN_POSITIVE);
-        self.rank = Arc::new(rank.into_iter().map(|(k, v)| (k, (v / max) as f32)).collect());
+        let max = rank
+            .values()
+            .cloned()
+            .fold(0.0, f64::max)
+            .max(f64::MIN_POSITIVE);
+        self.rank = Arc::new(
+            rank.into_iter()
+                .map(|(k, v)| (k, (v / max) as f32))
+                .collect(),
+        );
         self.rank_outdated = false;
         self.save_rank();
         self.rank.len()
@@ -1234,7 +1385,9 @@ impl Store {
         let mut out = Vec::new();
         let mut from = 0;
         loop {
-            let next = self.indexes[1].range([p, from, 0, 0], [p, Id::MAX, Id::MAX, Id::MAX]).next();
+            let next = self.indexes[1]
+                .range([p, from, 0, 0], [p, Id::MAX, Id::MAX, Id::MAX])
+                .next();
             let Some(k) = next else { break };
             out.push(k[1]);
             if k[1] == Id::MAX {
@@ -1245,7 +1398,7 @@ impl Store {
         out
     }
 
-/// How many changes were made (an MVCC clock for snapshots).
+    /// How many changes were made (an MVCC clock for snapshots).
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -1265,7 +1418,9 @@ impl Store {
         for idx in [0usize, 1] {
             let mut from = 1;
             loop {
-                let next = self.indexes[idx].range([from, 0, 0, 0], [Id::MAX; 4]).next();
+                let next = self.indexes[idx]
+                    .range([from, 0, 0, 0], [Id::MAX; 4])
+                    .next();
                 let Some(k) = next else { break };
                 if k[0] >= INFERRED {
                     break;
@@ -1277,12 +1432,12 @@ impl Store {
         out
     }
 
-/// A resource's RDF Rank score.
+    /// A resource's RDF Rank score.
     pub fn rank_of(&self, id: Id) -> Option<f32> {
         self.rank.get(&id).copied()
     }
 
-/// Every ranked resource with its score.
+    /// Every ranked resource with its score.
     pub fn ranked(&self) -> impl Iterator<Item = (Id, f32)> + '_ {
         self.rank.iter().map(|(k, v)| (*k, *v))
     }
@@ -1311,7 +1466,12 @@ impl Store {
         if let Ok(buf) = fs::read(dir.join("rank.bin")) {
             self.rank = Arc::new(
                 buf.chunks_exact(8)
-                    .map(|c| (u32::from_le_bytes(c[..4].try_into().unwrap()), f32::from_le_bytes(c[4..].try_into().unwrap())))
+                    .map(|c| {
+                        (
+                            u32::from_le_bytes(c[..4].try_into().unwrap()),
+                            f32::from_le_bytes(c[4..].try_into().unwrap()),
+                        )
+                    })
                     .collect(),
             );
         }
@@ -1352,7 +1512,7 @@ impl Store {
         }
     }
 
-/// Whether the full-text index is on.
+    /// Whether the full-text index is on.
     pub fn fts_enabled(&self) -> bool {
         self.fts_enabled
     }
@@ -1393,7 +1553,9 @@ impl Store {
     /// Keep the change history for `retention` milliseconds (0: for ever), or stop keeping
     /// it (None: the history file is deleted). Needs a store on disk.
     pub fn set_history(&mut self, retention: Option<i64>) -> io::Result<()> {
-        let Some(dir) = self.dir.clone() else { return Ok(()) };
+        let Some(dir) = self.dir.clone() else {
+            return Ok(());
+        };
         match retention {
             None => {
                 if self.history.take().is_some() || dir.join(HISTORY).exists() {
@@ -1449,23 +1611,34 @@ impl Store {
             fs::rename(&tmp, &path)?;
         }
         let file = OpenOptions::new().append(true).open(&path)?;
-        self.history = Some(History { file: BufWriter::new(file), retention, oldest });
+        self.history = Some(History {
+            file: BufWriter::new(file),
+            retention,
+            oldest,
+        });
         Ok(())
     }
 
     /// Append the transactions of a write-ahead log text that the history does not have yet
     /// (those committed after its last one).
     fn history_catch_up(&mut self, wal: &str) -> io::Result<()> {
-        let Some(h) = &mut self.history else { return Ok(()) };
+        let Some(h) = &mut self.history else {
+            return Ok(());
+        };
         let text = match wal.find('\0') {
             Some(end) => &wal[..end],
             None => wal,
         };
-        let last = fs::read_to_string(self.dir.as_ref().expect("history needs a directory").join(HISTORY))?
-            .lines()
-            .rev()
-            .find_map(|l| commit_line(l).flatten())
-            .unwrap_or(i64::MIN);
+        let last = fs::read_to_string(
+            self.dir
+                .as_ref()
+                .expect("history needs a directory")
+                .join(HISTORY),
+        )?
+        .lines()
+        .rev()
+        .find_map(|l| commit_line(l).flatten())
+        .unwrap_or(i64::MIN);
         let mut txn = String::new();
         for line in text.lines() {
             txn.push_str(line);
@@ -1485,8 +1658,12 @@ impl Store {
     /// tenth of the retention, at least a minute, past it, so the file is not rewritten at every
     /// checkpoint).
     fn prune_history(&mut self) -> io::Result<()> {
-        let Some(h) = &mut self.history else { return Ok(()) };
-        let Some(oldest) = h.oldest else { return Ok(()) };
+        let Some(h) = &mut self.history else {
+            return Ok(());
+        };
+        let Some(oldest) = h.oldest else {
+            return Ok(());
+        };
         if h.retention == 0 {
             return Ok(());
         }
@@ -1495,7 +1672,11 @@ impl Store {
             return Ok(());
         }
         h.file.flush()?;
-        let path = self.dir.as_ref().expect("history needs a directory").join(HISTORY);
+        let path = self
+            .dir
+            .as_ref()
+            .expect("history needs a directory")
+            .join(HISTORY);
         let text = fs::read_to_string(&path)?;
         let mut out = format!("s {cutoff}\n");
         let mut txn = String::new();
@@ -1544,11 +1725,23 @@ impl Store {
     /// What undoes the transactions committed after `at`: runs of (was added, statements),
     /// in the order to apply them (newest change first).
     fn undo_after(&self, at: i64) -> Result<Vec<(bool, Vec<Quad>)>, String> {
-        let dir = self.dir.as_ref().ok_or("time travel needs a repository on disk")?;
-        let text = fs::read_to_string(dir.join(HISTORY)).map_err(|_| "time travel: this repository keeps no history (set historyRetention)".to_string())?;
-        let start: i64 = text.lines().next().and_then(|l| l.strip_prefix("s ")).and_then(|v| v.trim().parse().ok()).ok_or("time travel: damaged history file")?;
+        let dir = self
+            .dir
+            .as_ref()
+            .ok_or("time travel needs a repository on disk")?;
+        let text = fs::read_to_string(dir.join(HISTORY)).map_err(|_| {
+            "time travel: this repository keeps no history (set historyRetention)".to_string()
+        })?;
+        let start: i64 = text
+            .lines()
+            .next()
+            .and_then(|l| l.strip_prefix("s "))
+            .and_then(|v| v.trim().parse().ok())
+            .ok_or("time travel: damaged history file")?;
         if at < start {
-            return Err(format!("time travel: {at} is before the kept history, which starts at {start}"));
+            return Err(format!(
+                "time travel: {at} is before the kept history, which starts at {start}"
+            ));
         }
         // the changes to undo, oldest first: (added, statement lines)
         let mut undo: Vec<(bool, &str)> = Vec::new();
@@ -1574,8 +1767,13 @@ impl Store {
             while j > 0 && undo[j - 1].0 == added {
                 j -= 1;
             }
-            let text: String = undo[j..i].iter().rev().map(|(_, q)| format!("{q}\n")).collect();
-            let quads = turtle::parse_nquads_raw(&text).map_err(|e| format!("time travel: damaged history file: {e}"))?;
+            let text: String = undo[j..i]
+                .iter()
+                .rev()
+                .map(|(_, q)| format!("{q}\n"))
+                .collect();
+            let quads = turtle::parse_nquads_raw(&text)
+                .map_err(|e| format!("time travel: damaged history file: {e}"))?;
             out.push((added, quads));
             i = j;
         }
@@ -1591,7 +1789,11 @@ impl Store {
         let mut changed = (0, 0);
         let mut result = Ok(());
         for (added, quads) in undo {
-            let r = if added { self.apply(&quads, &[]) } else { self.apply(&[], &quads) };
+            let r = if added {
+                self.apply(&quads, &[])
+            } else {
+                self.apply(&[], &quads)
+            };
             match r {
                 Ok((r, a)) => {
                     changed.0 += r;
@@ -1607,7 +1809,11 @@ impl Store {
         result?;
         self.sync_log().map_err(|e| e.to_string())?;
         // the history keeps the transactions up to `at`
-        let path = self.dir.as_ref().expect("checked by undo_after").join(HISTORY);
+        let path = self
+            .dir
+            .as_ref()
+            .expect("checked by undo_after")
+            .join(HISTORY);
         let cut = (|| -> io::Result<()> {
             if let Some(h) = &mut self.history {
                 h.file.flush()?;
@@ -1690,7 +1896,9 @@ impl Store {
         if !crate::geo::is_geometry_literal(t) {
             return;
         }
-        let Some(b) = crate::geo::literal_bbox(t) else { return };
+        let Some(b) = crate::geo::literal_bbox(t) else {
+            return;
+        };
         for (z, level) in crate::geo::index_cells(b) {
             self.geo.put([(z >> 32) as u32, z as u32, level, literal]);
         }
@@ -1702,7 +1910,10 @@ impl Store {
             return;
         }
         if let Some(v) = crate::vector::parse(t) {
-            self.vectors.write().unwrap_or_else(|e| e.into_inner()).insert(literal, v);
+            self.vectors
+                .write()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(literal, v);
         }
     }
 
@@ -1727,7 +1938,11 @@ impl Store {
     /// similarity), best first.
     pub fn nearest_vectors(&self, q: &[f32], k: usize) -> Vec<(Id, f32)> {
         let v = self.vectors.read().unwrap_or_else(|e| e.into_inner());
-        v.search(q, k, &|id| self.quads_matching(None, None, Some(id), None).next().is_some())
+        v.search(q, k, &|id| {
+            self.quads_matching(None, None, Some(id), None)
+                .next()
+                .is_some()
+        })
     }
 
     /// Build the spatial index of a store written before it existed.
@@ -1753,11 +1968,22 @@ impl Store {
         let mut out = HashSet::new();
         for (from, to) in ranges {
             let last = to - 1;
-            out.extend(self.geo.range([(from >> 32) as u32, from as u32, 0, 0], [(last >> 32) as u32, last as u32, Id::MAX, Id::MAX]).map(|k| k[3]));
+            out.extend(
+                self.geo
+                    .range(
+                        [(from >> 32) as u32, from as u32, 0, 0],
+                        [(last >> 32) as u32, last as u32, Id::MAX, Id::MAX],
+                    )
+                    .map(|k| k[3]),
+            );
         }
         for (z, level) in coarse {
             let (hi, lo) = ((z >> 32) as u32, z as u32);
-            out.extend(self.geo.range([hi, lo, level, 0], [hi, lo, level, Id::MAX]).map(|k| k[3]));
+            out.extend(
+                self.geo
+                    .range([hi, lo, level, 0], [hi, lo, level, Id::MAX])
+                    .map(|k| k[3]),
+            );
         }
         out.into_iter().collect()
     }
@@ -1766,14 +1992,26 @@ impl Store {
     fn fts_corpus(&self) -> fts::Corpus {
         let mut stats = self.fts_stats.lock().unwrap();
         let (docs, total) = *stats.get_or_insert_with(|| {
-            self.fts.range([fts::STATS, 0, 0, 0], [fts::STATS, Id::MAX, Id::MAX, Id::MAX]).filter(|k| k[3] == 1).fold((0, 0), |(d, t), k| (d + 1, t + k[2] as u64))
+            self.fts
+                .range(
+                    [fts::STATS, 0, 0, 0],
+                    [fts::STATS, Id::MAX, Id::MAX, Id::MAX],
+                )
+                .filter(|k| k[3] == 1)
+                .fold((0, 0), |(d, t), k| (d + 1, t + k[2] as u64))
         });
-        fts::Corpus { docs: docs.max(1) as f64, avg_len: total as f64 / docs.max(1) as f64 }
+        fts::Corpus {
+            docs: docs.max(1) as f64,
+            avg_len: total as f64 / docs.max(1) as f64,
+        }
     }
 
     /// The literals of a posting key.
     fn fts_postings(&self, key: u32) -> impl Iterator<Item = Id> + '_ {
-        self.fts.range([key, 0, 0, 0], [key, Id::MAX, 0, 0]).filter(|k| k[2] == 0 && k[3] == 0).map(|k| k[1])
+        self.fts
+            .range([key, 0, 0, 0], [key, Id::MAX, 0, 0])
+            .filter(|k| k[2] == 0 && k[3] == 0)
+            .map(|k| k[1])
     }
 
     /// The literals a clause can match (a superset: candidates are verified against the text).
@@ -1781,7 +2019,10 @@ impl Store {
         match c.plan() {
             // read only the rarest key's postings; probe the others per candidate
             fts::Plan::All(keys) => {
-                let rarest = *keys.iter().min_by_key(|&&k| self.fts_postings(k).take(1024).count()).expect("a clause has at least one key");
+                let rarest = *keys
+                    .iter()
+                    .min_by_key(|&&k| self.fts_postings(k).take(1024).count())
+                    .expect("a clause has at least one key");
                 let mut set: HashSet<Id> = self.fts_postings(rarest).collect();
                 for &k in keys.iter().filter(|&&k| k != rarest) {
                     set.retain(|&id| self.fts.contains(&[k, id, 0, 0]));
@@ -1793,25 +2034,42 @@ impl Store {
                 // words of the vocabulary sharing enough trigrams, then their literals
                 let mut words: HashMap<u32, usize> = HashMap::new();
                 for &g in &grams {
-                    for k in self.fts.range([g, 0, 0, 2], [g, u32::MAX, 0, 2]).filter(|k| k[3] == 2) {
+                    for k in self
+                        .fts
+                        .range([g, 0, 0, 2], [g, u32::MAX, 0, 2])
+                        .filter(|k| k[3] == 2)
+                    {
                         *words.entry(k[1]).or_default() += 1;
                     }
                 }
-                words.into_iter().filter(|&(_, n)| n >= need).flat_map(|(w, _)| self.fts_postings(w).collect::<Vec<_>>()).collect()
+                words
+                    .into_iter()
+                    .filter(|&(_, n)| n >= need)
+                    .flat_map(|(w, _)| self.fts_postings(w).collect::<Vec<_>>())
+                    .collect()
             }
         }
     }
 
     /// Each positive clause's document frequency, in `FtsQuery::clauses` order.
     fn fts_dfs(&self, q: &fts::FtsQuery) -> Vec<f64> {
-        q.clauses().map(|c| self.fts_candidates(c).len() as f64).collect()
+        q.clauses()
+            .map(|c| self.fts_candidates(c).len() as f64)
+            .collect()
     }
 
     /// A full-text query with what scoring it needs: its typo-tolerant forms, the corpus
     /// statistics, and (filled on first use) their document frequencies.
     pub fn fts_prepare(&self, query: &str) -> FtsPrepared {
-        let forms = fts::parse_query(query).forms().into_iter().map(|q| (q, Default::default())).collect();
-        FtsPrepared { forms, corpus: self.fts_enabled.then(|| self.fts_corpus()) }
+        let forms = fts::parse_query(query)
+            .forms()
+            .into_iter()
+            .map(|q| (q, Default::default()))
+            .collect();
+        FtsPrepared {
+            forms,
+            corpus: self.fts_enabled.then(|| self.fts_corpus()),
+        }
     }
 
     /// The BM25 score of a literal for a prepared query, by the first of its forms that
@@ -1819,7 +2077,11 @@ impl Store {
     pub fn fts_score(&self, p: &FtsPrepared, l: &crate::rdf::Literal) -> Option<f64> {
         let doc = fts::Doc::new(&l.value, fts::lang_of(l.lang.as_deref()));
         p.forms.iter().find_map(|(q, dfs)| {
-            let dfs = if self.fts_enabled { dfs.get_or_init(|| self.fts_dfs(q)).as_slice() } else { &[] };
+            let dfs = if self.fts_enabled {
+                dfs.get_or_init(|| self.fts_dfs(q)).as_slice()
+            } else {
+                &[]
+            };
             q.score(&doc, p.corpus, dfs)
         })
     }
@@ -1830,7 +2092,7 @@ impl Store {
         self.search_prepared(&self.fts_prepare(query), limit)
     }
 
-/// The literal ids matching a prepared query, best first, at most `limit`.
+    /// The literal ids matching a prepared query, best first, at most `limit`.
     pub fn search_prepared(&self, p: &FtsPrepared, limit: usize) -> Vec<(Id, f64)> {
         if p.is_empty() || !self.fts_enabled {
             return Vec::new();
@@ -1842,12 +2104,21 @@ impl Store {
                 break;
             }
         }
-        hits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal).then(a.0.cmp(&b.0)));
+        hits.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then(a.0.cmp(&b.0))
+        });
         hits.truncate(limit);
         hits
     }
 
-    fn search_query(&self, q: &fts::FtsQuery, corpus: Option<fts::Corpus>, dfs: &std::cell::OnceCell<Vec<f64>>) -> Vec<(Id, f64)> {
+    fn search_query(
+        &self,
+        q: &fts::FtsQuery,
+        corpus: Option<fts::Corpus>,
+        dfs: &std::cell::OnceCell<Vec<f64>>,
+    ) -> Vec<(Id, f64)> {
         // each clause's candidates (their number is its document frequency); a group is the
         // union of its clauses, and groups intersect
         let mut sets: Vec<HashSet<Id>> = Vec::new();
@@ -1870,22 +2141,34 @@ impl Store {
         cands
             .into_iter()
             .filter_map(|id| {
-                let crate::rdf::Term::Literal(l) = self.dict.term(id) else { return None };
-                let score = q.score(&fts::Doc::new(&l.value, fts::lang_of(l.lang.as_deref())), corpus, dfs)?;
-                self.quads_matching(None, None, Some(id), None).next().map(|_| (id, score))
+                let crate::rdf::Term::Literal(l) = self.dict.term(id) else {
+                    return None;
+                };
+                let score = q.score(
+                    &fts::Doc::new(&l.value, fts::lang_of(l.lang.as_deref())),
+                    corpus,
+                    dfs,
+                )?;
+                self.quads_matching(None, None, Some(id), None)
+                    .next()
+                    .map(|_| (id, score))
             })
             .collect()
     }
 
     // ------------------------------------------------------------ reads
 
-/// A quad's terms from its ids.
+    /// A quad's terms from its ids.
     pub fn decode(&self, q: [Id; 4]) -> Quad {
         Quad {
             s: self.dict.term(q[S]),
             p: self.dict.term(q[P]),
             o: self.dict.term(q[O]),
-            g: if q[G] == DEFAULT_GRAPH || q[G] == INFERRED { None } else { Some(self.dict.term(q[G])) },
+            g: if q[G] == DEFAULT_GRAPH || q[G] == INFERRED {
+                None
+            } else {
+                Some(self.dict.term(q[G]))
+            },
         }
     }
 
@@ -1896,7 +2179,13 @@ impl Store {
 
     /// Quads matching a pattern (None = wildcard), including inferred ones.
     /// For the graph position, `Some(DEFAULT_GRAPH)` selects the default graph.
-    pub fn quads_matching(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>, g: Option<Id>) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
+    pub fn quads_matching(
+        &self,
+        s: Option<Id>,
+        p: Option<Id>,
+        o: Option<Id>,
+        g: Option<Id>,
+    ) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
         let pat = [s, p, o, g];
         let mut best = (0usize, 0usize);
         for (i, order) in ORDERS.iter().enumerate() {
@@ -1914,7 +2203,9 @@ impl Store {
             lo[k] = v;
             hi[k] = v;
         }
-        let iter = self.indexes[idx].range(lo, hi).map(move |k| unpermute(k, order));
+        let iter = self.indexes[idx]
+            .range(lo, hi)
+            .map(move |k| unpermute(k, order));
         if pat.iter().filter(|x| x.is_some()).count() == bound {
             Box::new(iter)
         } else {
@@ -1942,7 +2233,13 @@ impl Store {
     }
 
     /// Like `quads_matching`, but never returns inferred statements.
-    pub fn explicit_matching(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>, g: Option<Id>) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
+    pub fn explicit_matching(
+        &self,
+        s: Option<Id>,
+        p: Option<Id>,
+        o: Option<Id>,
+        g: Option<Id>,
+    ) -> Box<dyn Iterator<Item = [Id; 4]> + '_> {
         Box::new(self.quads_matching(s, p, o, g).filter(|q| q[G] != INFERRED))
     }
 
@@ -1960,11 +2257,13 @@ impl Store {
         out
     }
 
-/// The number of statements in a graph (all of them when `None`).
+    /// The number of statements in a graph (all of them when `None`).
     pub fn count_graph(&self, g: Option<Id>) -> usize {
         match g {
             None => self.len(),
-            Some(g) => self.indexes[3].range([g, 0, 0, 0], [g, Id::MAX, Id::MAX, Id::MAX]).count(),
+            Some(g) => self.indexes[3]
+                .range([g, 0, 0, 0], [g, Id::MAX, Id::MAX, Id::MAX])
+                .count(),
         }
     }
 }
@@ -1985,11 +2284,16 @@ fn next_key(k: Key) -> Key {
 impl Facts for Store {
     fn matching(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>) -> Vec<Triple> {
         let mut seen = HashSet::new();
-        self.quads_matching(s, p, o, None).map(|q| [q[0], q[1], q[2]]).filter(|t| seen.insert(*t)).collect()
+        self.quads_matching(s, p, o, None)
+            .map(|q| [q[0], q[1], q[2]])
+            .filter(|t| seen.insert(*t))
+            .collect()
     }
 
     fn contains(&self, t: &Triple) -> bool {
-        self.quads_matching(Some(t[0]), Some(t[1]), Some(t[2]), None).next().is_some()
+        self.quads_matching(Some(t[0]), Some(t[1]), Some(t[2]), None)
+            .next()
+            .is_some()
     }
 
     fn add_inferred(&mut self, t: Triple) -> bool {
@@ -2016,41 +2320,98 @@ mod tests {
     use crate::rdf::Term;
 
     fn q(s: &str, p: &str, o: &str, g: Option<&str>) -> Quad {
-        Quad { s: Term::iri(s), p: Term::iri(p), o: Term::iri(o), g: g.map(Term::iri) }
+        Quad {
+            s: Term::iri(s),
+            p: Term::iri(p),
+            o: Term::iri(o),
+            g: g.map(Term::iri),
+        }
     }
 
     #[test]
     fn vector_search_in_queries_and_across_restarts() {
         let dir = std::env::temp_dir().join(format!("graphrd-vectors-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let v = |x: [f32; 3]| format!("\"[{}, {}, {}]\"^^<{}>", x[0], x[1], x[2], crate::vector::VECTOR);
-        let docs = [("cat", [1.0, 0.1, 0.0], "small furry cat"), ("lion", [0.9, 0.3, 0.0], "big cat"), ("car", [0.0, 0.1, 1.0], "fast car"), ("bus", [0.1, 0.0, 0.9], "big bus")];
+        let v = |x: [f32; 3]| {
+            format!(
+                "\"[{}, {}, {}]\"^^<{}>",
+                x[0],
+                x[1],
+                x[2],
+                crate::vector::VECTOR
+            )
+        };
+        let docs = [
+            ("cat", [1.0, 0.1, 0.0], "small furry cat"),
+            ("lion", [0.9, 0.3, 0.0], "big cat"),
+            ("car", [0.0, 0.1, 1.0], "fast car"),
+            ("bus", [0.1, 0.0, 0.9], "big bus"),
+        ];
         let mut ttl = String::from("@prefix ex: <http://e/> . ");
         for (n, e, t) in docs {
             ttl.push_str(&format!("ex:{n} ex:emb {} ; ex:text \"{t}\" . ", v(e)));
         }
         let query = |st: &Store, q: &str| -> Vec<String> {
             let pf = std::collections::HashMap::new();
-            let opts = crate::sparql::QueryOptions { base: "", prefixes: &pf, dataset: None, timeout_secs: None, infer: true, at_query: false };
-            match crate::sparql::query(st, &format!("PREFIX ex: <http://e/> PREFIX g: <http://graphrd.org/fn#> {q}"), &opts).unwrap() {
-                crate::sparql::QueryResult::Solutions { rows, .. } => rows.iter().map(|r| r[0].as_ref().map_or(String::new(), |t| t.value().to_string())).collect(),
+            let opts = crate::sparql::QueryOptions {
+                base: "",
+                prefixes: &pf,
+                dataset: None,
+                timeout_secs: None,
+                infer: true,
+                at_query: false,
+            };
+            match crate::sparql::query(
+                st,
+                &format!("PREFIX ex: <http://e/> PREFIX g: <http://graphrd.org/fn#> {q}"),
+                &opts,
+            )
+            .unwrap()
+            {
+                crate::sparql::QueryResult::Solutions { rows, .. } => rows
+                    .iter()
+                    .map(|r| {
+                        r[0].as_ref()
+                            .map_or(String::new(), |t| t.value().to_string())
+                    })
+                    .collect(),
                 _ => panic!(),
             }
         };
-        let knn = format!("SELECT ?d WHERE {{ ?e g:knn2 {} . ?d ex:emb ?e }}", v([1.0, 0.0, 0.0]));
+        let knn = format!(
+            "SELECT ?d WHERE {{ ?e g:knn2 {} . ?d ex:emb ?e }}",
+            v([1.0, 0.0, 0.0])
+        );
         {
             let mut st = Store::open(&dir).unwrap();
             st.set_fts(true);
-            st.insert(&crate::rdf::turtle::parse(&ttl, "", crate::rdf::turtle::Mode::Turtle).unwrap()).unwrap();
+            st.insert(
+                &crate::rdf::turtle::parse(&ttl, "", crate::rdf::turtle::Mode::Turtle).unwrap(),
+            )
+            .unwrap();
             let mut near = query(&st, &knn);
             near.sort();
             assert_eq!(near, ["http://e/cat", "http://e/lion"]);
             // hybrid: full-text matches reranked by similarity
-            let hybrid = query(&st, &format!("SELECT ?d WHERE {{ ?t g:fts \"big\" . ?d ex:text ?t ; ex:emb ?e }} ORDER BY DESC(g:similarity(?e, {})) LIMIT 1", v([0.0, 0.0, 1.0])));
+            let hybrid = query(
+                &st,
+                &format!(
+                    "SELECT ?d WHERE {{ ?t g:fts \"big\" . ?d ex:text ?t ; ex:emb ?e }} ORDER BY DESC(g:similarity(?e, {})) LIMIT 1",
+                    v([0.0, 0.0, 1.0])
+                ),
+            );
             assert_eq!(hybrid, ["http://e/bus"]);
             st.checkpoint().unwrap();
             // a vector added after the checkpoint comes back from the log
-            st.insert(&crate::rdf::turtle::parse(&format!("<http://e/kitten> <http://e/emb> {} .", v([1.0, 0.05, 0.0])), "", crate::rdf::turtle::Mode::Turtle).unwrap()).unwrap();
+            st.insert(
+                &crate::rdf::turtle::parse(
+                    &format!("<http://e/kitten> <http://e/emb> {} .", v([1.0, 0.05, 0.0])),
+                    "",
+                    crate::rdf::turtle::Mode::Turtle,
+                )
+                .unwrap(),
+            )
+            .unwrap();
             std::mem::forget(st);
         }
         let st = Store::open(&dir).unwrap();
@@ -2064,7 +2425,16 @@ mod tests {
 
     #[test]
     fn owl2_rl_list_axioms_become_rules() {
-        let ttl = |t: &str| crate::rdf::turtle::parse(&format!("@prefix ex: <http://e/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . {t}"), "", crate::rdf::turtle::Mode::Turtle).unwrap();
+        let ttl = |t: &str| {
+            crate::rdf::turtle::parse(
+                &format!(
+                    "@prefix ex: <http://e/> . @prefix owl: <http://www.w3.org/2002/07/owl#> . {t}"
+                ),
+                "",
+                crate::rdf::turtle::Mode::Turtle,
+            )
+            .unwrap()
+        };
         let mut st = Store::memory();
         st.set_ruleset("owl2-rl-optimized", true);
         st.insert(&ttl("ex:ann a ex:Woman , ex:Parent . ex:x ex:hasParent ex:y . ex:y ex:hasBrother ex:z .
@@ -2075,26 +2445,58 @@ mod tests {
         }
         let rdf_type = format!("{}type", crate::rdf::RDF);
         let same = format!("{}sameAs", crate::rdf::OWL);
-        assert!(!has(&st, "http://e/ann", &rdf_type, "http://e/Mother"), "no rule yet");
+        assert!(
+            !has(&st, "http://e/ann", &rdf_type, "http://e/Mother"),
+            "no rule yet"
+        );
         // the schema arrives after the data: the rules are compiled and everything derived again
         st.insert(&ttl("ex:Mother owl:intersectionOf ( ex:Woman ex:Parent ) . ex:Pet owl:unionOf ( ex:Dog ex:Cat ) .
             ex:hasUncle owl:propertyChainAxiom ( ex:hasParent ex:hasBrother ) . ex:Person owl:hasKey ( ex:ssn ) .
             ex:Weekday owl:oneOf ( ex:Mon ex:Tue ) .")).unwrap();
-        assert!(has(&st, "http://e/ann", &rdf_type, "http://e/Mother"), "cls-int1");
-        assert!(has(&st, "http://e/dog", &rdf_type, "http://e/Pet"), "cls-uni");
-        assert!(has(&st, "http://e/Tue", &rdf_type, "http://e/Weekday"), "cls-oo");
-        assert!(has(&st, "http://e/x", "http://e/hasUncle", "http://e/z"), "prp-spo2");
+        assert!(
+            has(&st, "http://e/ann", &rdf_type, "http://e/Mother"),
+            "cls-int1"
+        );
+        assert!(
+            has(&st, "http://e/dog", &rdf_type, "http://e/Pet"),
+            "cls-uni"
+        );
+        assert!(
+            has(&st, "http://e/Tue", &rdf_type, "http://e/Weekday"),
+            "cls-oo"
+        );
+        assert!(
+            has(&st, "http://e/x", "http://e/hasUncle", "http://e/z"),
+            "prp-spo2"
+        );
         assert!(has(&st, "http://e/p1", &same, "http://e/p2"), "prp-key");
         // a member of an intersection is a member of each part (cls-int2)
         st.insert(&ttl("ex:bea a ex:Mother .")).unwrap();
-        assert!(has(&st, "http://e/bea", &rdf_type, "http://e/Woman") && has(&st, "http://e/bea", &rdf_type, "http://e/Parent"));
+        assert!(
+            has(&st, "http://e/bea", &rdf_type, "http://e/Woman")
+                && has(&st, "http://e/bea", &rdf_type, "http://e/Parent")
+        );
         // removing the axiom retracts what it derived
         let id = |st: &Store, x: &str| st.dict.lookup(&Term::iri(x)).unwrap();
-        let head: Vec<Quad> = st.explicit_matching(Some(id(&st, "http://e/Mother")), Some(id(&st, &format!("{}intersectionOf", crate::rdf::OWL))), None, None).map(|q| st.decode(q)).collect();
+        let head: Vec<Quad> = st
+            .explicit_matching(
+                Some(id(&st, "http://e/Mother")),
+                Some(id(&st, &format!("{}intersectionOf", crate::rdf::OWL))),
+                None,
+                None,
+            )
+            .map(|q| st.decode(q))
+            .collect();
         assert_eq!(head.len(), 1);
         st.apply(&head, &[]).unwrap();
-        assert!(!has(&st, "http://e/ann", &rdf_type, "http://e/Mother"), "derivation withdrawn with its axiom");
-        assert!(has(&st, "http://e/dog", &rdf_type, "http://e/Pet"), "other axioms stay");
+        assert!(
+            !has(&st, "http://e/ann", &rdf_type, "http://e/Mother"),
+            "derivation withdrawn with its axiom"
+        );
+        assert!(
+            has(&st, "http://e/dog", &rdf_type, "http://e/Pet"),
+            "other axioms stay"
+        );
     }
 
     #[test]
@@ -2103,36 +2505,89 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let rdfs = "http://www.w3.org/2000/01/rdf-schema#";
         let ty = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-        let lit = |s: &str, p: &str, o: &str| Quad { s: Term::iri(s), p: Term::iri(p), o: Term::string(o), g: None };
-        let bn = |s: &str, p: &str, o: &str| Quad { s: Term::Blank(s.into()), p: Term::iri(p), o: Term::iri(o), g: None };
+        let lit = |s: &str, p: &str, o: &str| Quad {
+            s: Term::iri(s),
+            p: Term::iri(p),
+            o: Term::string(o),
+            g: None,
+        };
+        let bn = |s: &str, p: &str, o: &str| Quad {
+            s: Term::Blank(s.into()),
+            p: Term::iri(p),
+            o: Term::iri(o),
+            g: None,
+        };
         {
             let mut st = Store::open(&dir).unwrap();
             st.set_ruleset("rdfs", false);
             st.set_fts(true);
             // existing data: a schema triple, an explicit one, and one that becomes inferred
-            st.insert(&[q("Dog", &format!("{rdfs}subClassOf"), "Animal", None), q("rex", ty, "Dog", None), q("old", "p", "o", None)]).unwrap();
-            assert!(st.has([st.dict.lookup(&Term::iri("rex")).unwrap(), st.dict.lookup(&Term::iri(ty)).unwrap(), st.dict.lookup(&Term::iri("Animal")).unwrap(), INFERRED]));
+            st.insert(&[
+                q("Dog", &format!("{rdfs}subClassOf"), "Animal", None),
+                q("rex", ty, "Dog", None),
+                q("old", "p", "o", None),
+            ])
+            .unwrap();
+            assert!(st.has([
+                st.dict.lookup(&Term::iri("rex")).unwrap(),
+                st.dict.lookup(&Term::iri(ty)).unwrap(),
+                st.dict.lookup(&Term::iri("Animal")).unwrap(),
+                INFERRED
+            ]));
             let inferred_before = st.inferred_count;
             let chunks = vec![
-                vec![q("fido", ty, "Dog", None), q("old", "p", "o", None), lit("fido", "name", "Fido the brave"), bn("b1", "knows", "rex")],
-                vec![q("fido", ty, "Dog", None), q("rex", ty, "Animal", None), q("g1", "p", "o", Some("G")), bn("b1", "likes", "fido")],
+                vec![
+                    q("fido", ty, "Dog", None),
+                    q("old", "p", "o", None),
+                    lit("fido", "name", "Fido the brave"),
+                    bn("b1", "knows", "rex"),
+                ],
+                vec![
+                    q("fido", ty, "Dog", None),
+                    q("rex", ty, "Animal", None),
+                    q("g1", "p", "o", Some("G")),
+                    bn("b1", "likes", "fido"),
+                ],
             ];
             // the same statements through the ordinary path, for comparison
             let mut plain = Store::memory();
             plain.set_ruleset("rdfs", false);
-            plain.insert(&[q("Dog", &format!("{rdfs}subClassOf"), "Animal", None), q("rex", ty, "Dog", None), q("old", "p", "o", None)]).unwrap();
+            plain
+                .insert(&[
+                    q("Dog", &format!("{rdfs}subClassOf"), "Animal", None),
+                    q("rex", ty, "Dog", None),
+                    q("old", "p", "o", None),
+                ])
+                .unwrap();
             plain.insert(&chunks.concat()).unwrap();
             let _ = inferred_before;
             let mut bnodes = HashMap::new();
             let added = st.bulk_insert(chunks, &mut bnodes).unwrap();
-            assert_eq!(added, 6, "duplicates within the load and with the store are left out");
-            assert_eq!((st.explicit_count, st.inferred_count), (plain.explicit_count, plain.inferred_count), "same as ordinary inserts");
+            assert_eq!(
+                added, 6,
+                "duplicates within the load and with the store are left out"
+            );
+            assert_eq!(
+                (st.explicit_count, st.inferred_count),
+                (plain.explicit_count, plain.inferred_count),
+                "same as ordinary inserts"
+            );
             let id = |s: &str| st.dict.lookup(&Term::iri(s)).unwrap();
-            assert!(st.has([id("fido"), id(ty), id("Animal"), INFERRED]), "inference ran on the loaded statements");
+            assert!(
+                st.has([id("fido"), id(ty), id("Animal"), INFERRED]),
+                "inference ran on the loaded statements"
+            );
             assert!(st.has([id("rex"), id(ty), id("Animal"), DEFAULT_GRAPH]));
-            assert!(!st.search("brave", 10).is_empty(), "full-text index updated");
+            assert!(
+                !st.search("brave", 10).is_empty(),
+                "full-text index updated"
+            );
             let b = st.dict.lookup(&Term::Blank(bnodes["b1"].clone())).unwrap();
-            assert_eq!(st.explicit_matching(Some(b), None, None, None).count(), 2, "one blank node across chunks");
+            assert_eq!(
+                st.explicit_matching(Some(b), None, None, None).count(),
+                2,
+                "one blank node across chunks"
+            );
             assert_eq!(st.len(), plain.len());
         }
         let st = Store::open(&dir).unwrap();
@@ -2155,21 +2610,40 @@ mod tests {
             t
         };
         let has = |st: &Store, s: &str, p: &str, o: &str| -> bool {
-            let (Some(s), Some(p), Some(o)) = (st.dict.lookup(&Term::iri(s)), st.dict.lookup(&Term::iri(p)), st.dict.lookup(&Term::iri(o))) else { return false };
-            st.quads_matching(Some(s), Some(p), Some(o), None).next().is_some()
+            let (Some(s), Some(p), Some(o)) = (
+                st.dict.lookup(&Term::iri(s)),
+                st.dict.lookup(&Term::iri(p)),
+                st.dict.lookup(&Term::iri(o)),
+            ) else {
+                return false;
+            };
+            st.quads_matching(Some(s), Some(p), Some(o), None)
+                .next()
+                .is_some()
         };
         let (t0, t1, t2, t3, snap);
         {
             let mut st = Store::open(&dir).unwrap();
-            assert!(st.as_of(now_millis()).err().unwrap().contains("keeps no history"));
+            assert!(
+                st.as_of(now_millis())
+                    .err()
+                    .unwrap()
+                    .contains("keeps no history")
+            );
             st.set_ruleset("rdfs", false);
             st.set_history(Some(0)).unwrap();
             t0 = tick();
-            st.insert(&[q("Dog", &format!("{rdfs}subClassOf"), "Animal", None), q("rex", ty, "Dog", None)]).unwrap();
+            st.insert(&[
+                q("Dog", &format!("{rdfs}subClassOf"), "Animal", None),
+                q("rex", ty, "Dog", None),
+            ])
+            .unwrap();
             t1 = tick();
-            st.apply(&[q("rex", ty, "Dog", None)], &[q("fido", ty, "Dog", None)]).unwrap();
+            st.apply(&[q("rex", ty, "Dog", None)], &[q("fido", ty, "Dog", None)])
+                .unwrap();
             t2 = tick();
-            st.bulk_insert(vec![vec![q("tom", ty, "Cat", None)]], &mut HashMap::new()).unwrap();
+            st.bulk_insert(vec![vec![q("tom", ty, "Cat", None)]], &mut HashMap::new())
+                .unwrap();
             t3 = tick();
             snap = st.snapshot();
             st.insert(&[q("late", "p", "o", None)]).unwrap();
@@ -2184,7 +2658,11 @@ mod tests {
         assert!(has(&p1, "rex", ty, "Animal"), "inference as it was");
         assert!(!has(&p1, "fido", ty, "Dog"));
         let p2 = past(t2);
-        assert!(!has(&p2, "rex", ty, "Dog") && !has(&p2, "rex", ty, "Animal") && has(&p2, "fido", ty, "Animal"));
+        assert!(
+            !has(&p2, "rex", ty, "Dog")
+                && !has(&p2, "rex", ty, "Animal")
+                && has(&p2, "fido", ty, "Animal")
+        );
         assert!(!has(&p2, "tom", ty, "Cat"));
         assert!(has(&past(t3), "tom", ty, "Cat") && !has(&past(t3), "late", "p", "o"));
         assert!(!has(&past(now_millis()), "fido", ty, "Dog"));
@@ -2194,7 +2672,12 @@ mod tests {
         assert!(has(&snap.as_of(t1).unwrap(), "rex", ty, "Dog"));
         // the live store is untouched by the views
         assert!(has(&st, "tom", ty, "Cat") && !has(&st, "rex", ty, "Dog"));
-        assert!(st.as_of(t0 - 60_000).err().unwrap().contains("before the kept history"));
+        assert!(
+            st.as_of(t0 - 60_000)
+                .err()
+                .unwrap()
+                .contains("before the kept history")
+        );
 
         // a transaction in the log but not in the history (the process stopped between the
         // two writes) is added to the history at the next start
@@ -2203,7 +2686,9 @@ mod tests {
         let path = dir.join(HISTORY);
         let text = fs::read_to_string(&path).unwrap();
         let cut = text.trim_end().rfind("\nc ").unwrap();
-        let cut = text[..cut].rfind("\nc ").map_or(0, |i| text[i + 1..].find('\n').unwrap() + i + 2);
+        let cut = text[..cut]
+            .rfind("\nc ")
+            .map_or(0, |i| text[i + 1..].find('\n').unwrap() + i + 2);
         drop(st);
         fs::write(&path, &text[..cut]).unwrap();
         let st = Store::open(&dir).unwrap();
@@ -2212,11 +2697,18 @@ mod tests {
         drop(st);
 
         // pruning past the retention
-        fs::write(&path, "s 1000\n+ <http://a> <http://b> <http://c> .\nc 2000\n").unwrap();
+        fs::write(
+            &path,
+            "s 1000\n+ <http://a> <http://b> <http://c> .\nc 2000\n",
+        )
+        .unwrap();
         let mut st = Store::open(&dir).unwrap();
         st.set_history(Some(3_600_000)).unwrap();
         let text = fs::read_to_string(&path).unwrap();
-        assert!(!text.contains("http://a") && text.starts_with("s "), "{text}");
+        assert!(
+            !text.contains("http://a") && text.starts_with("s "),
+            "{text}"
+        );
         assert!(st.as_of(1500).is_err());
         assert!(st.history_window().unwrap().0 > 2000);
         st.set_history(None).unwrap();
@@ -2229,12 +2721,24 @@ mod tests {
     fn log_survives_commits_larger_than_its_preallocation() {
         let dir = std::env::temp_dir().join(format!("graphrd-prealloc-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let big: Vec<Quad> = (0..120_000).map(|i| q(&format!("http://example.org/subject/{i}"), "http://example.org/p", "http://example.org/o", None)).collect();
+        let big: Vec<Quad> = (0..120_000)
+            .map(|i| {
+                q(
+                    &format!("http://example.org/subject/{i}"),
+                    "http://example.org/p",
+                    "http://example.org/o",
+                    None,
+                )
+            })
+            .collect();
         {
             let mut st = Store::open(&dir).unwrap();
             st.apply(&[], &big).unwrap(); // about 9 MB of log, far past the zero-filled region
             st.apply(&[], &[q("tail", "p", "o", None)]).unwrap();
-            assert!(fs::metadata(dir.join("wal.log")).unwrap().len() > st.wal_bytes, "zero-filled ahead");
+            assert!(
+                fs::metadata(dir.join("wal.log")).unwrap().len() > st.wal_bytes,
+                "zero-filled ahead"
+            );
             std::mem::forget(st);
         }
         let st = Store::open(&dir).unwrap();
@@ -2250,7 +2754,11 @@ mod tests {
         {
             let mut st = Store::open(&dir).unwrap();
             st.apply(&[], &[q("a", "p", "b", None)]).unwrap();
-            st.apply(&[q("a", "p", "b", None)], &[q("c", "p", "d", None), q("e", "p", "f", None)]).unwrap();
+            st.apply(
+                &[q("a", "p", "b", None)],
+                &[q("c", "p", "d", None), q("e", "p", "f", None)],
+            )
+            .unwrap();
             std::mem::forget(st); // a crash: no checkpoint on the way out
         }
         // simulate a crash in the middle of writing a third transaction
@@ -2261,8 +2769,17 @@ mod tests {
         bytes[end..end + torn.len()].copy_from_slice(torn);
         fs::write(&path, bytes).unwrap();
         let st = Store::open(&dir).unwrap();
-        let has = |s: &str| st.dict.lookup(&Term::iri(s)).is_some_and(|id| st.quads_matching(Some(id), None, None, None).next().is_some());
-        assert!(!has("a") && has("c") && has("e"), "committed transactions replayed");
+        let has = |s: &str| {
+            st.dict.lookup(&Term::iri(s)).is_some_and(|id| {
+                st.quads_matching(Some(id), None, None, None)
+                    .next()
+                    .is_some()
+            })
+        };
+        assert!(
+            !has("a") && has("c") && has("e"),
+            "committed transactions replayed"
+        );
         assert!(!has("x"), "the torn transaction left no trace");
         assert_eq!(st.len(), 2);
         drop(st);
@@ -2275,11 +2792,20 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         {
             let mut st = Store::open(&dir).unwrap();
-            st.insert(&[q("a", "p", "b", None), q("a", "p", "c", Some("g")), q("x", "q", "b", None)]).unwrap();
+            st.insert(&[
+                q("a", "p", "b", None),
+                q("a", "p", "c", Some("g")),
+                q("x", "q", "b", None),
+            ])
+            .unwrap();
             let p = st.dict.lookup(&Term::iri("p"));
             assert_eq!(st.quads_matching(None, p, None, None).count(), 2);
             let b = st.dict.lookup(&Term::iri("b"));
-            assert_eq!(st.quads_matching(None, None, b, Some(DEFAULT_GRAPH)).count(), 2);
+            assert_eq!(
+                st.quads_matching(None, None, b, Some(DEFAULT_GRAPH))
+                    .count(),
+                2
+            );
             assert_eq!(st.graphs().len(), 1);
             st.apply(&[q("x", "q", "b", None)], &[]).unwrap();
         }
@@ -2315,7 +2841,11 @@ mod tests {
         assert_eq!(st.quads_matching(rex, tyid, None, None).count(), 3); // Dog; Animal, Being inferred
         assert_eq!(st.len(), 3);
         assert!(st.inferred_len() >= 3);
-        st.apply(&[q("Dog", &format!("{rdfs}subClassOf"), "Animal", None)], &[]).unwrap();
+        st.apply(
+            &[q("Dog", &format!("{rdfs}subClassOf"), "Animal", None)],
+            &[],
+        )
+        .unwrap();
         assert_eq!(st.quads_matching(rex, tyid, None, None).count(), 1);
         assert_eq!(st.inferred_len(), 0);
     }
@@ -2326,8 +2856,18 @@ mod tests {
         let ty = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
         let mut st = Store::memory();
         st.set_ruleset("rdfs-optimized", true);
-        st.insert(&[q("Dog", sc, "Animal", None), q("Pet", sc, "Animal", None), q("Animal", sc, "Being", None), q("rex", ty, "Dog", None), q("rex", ty, "Pet", None)]).unwrap();
-        let (tyid, rex) = (st.dict.lookup(&Term::iri(ty)), st.dict.lookup(&Term::iri("rex")));
+        st.insert(&[
+            q("Dog", sc, "Animal", None),
+            q("Pet", sc, "Animal", None),
+            q("Animal", sc, "Being", None),
+            q("rex", ty, "Dog", None),
+            q("rex", ty, "Pet", None),
+        ])
+        .unwrap();
+        let (tyid, rex) = (
+            st.dict.lookup(&Term::iri(ty)),
+            st.dict.lookup(&Term::iri("rex")),
+        );
         let types = |st: &Store| st.quads_matching(rex, tyid, None, None).count();
         assert_eq!(types(&st), 4); // Dog, Pet, Animal, Being
         st.apply(&[q("rex", ty, "Dog", None)], &[]).unwrap();
@@ -2335,7 +2875,8 @@ mod tests {
         st.apply(&[q("Pet", sc, "Animal", None)], &[]).unwrap();
         assert_eq!(types(&st), 1);
         // a removed explicit triple that is still inferable stays visible
-        st.insert(&[q("rex", ty, "Animal", None), q("rex", ty, "Dog", None)]).unwrap();
+        st.insert(&[q("rex", ty, "Animal", None), q("rex", ty, "Dog", None)])
+            .unwrap();
         st.apply(&[q("rex", ty, "Animal", None)], &[]).unwrap();
         let animal = st.dict.lookup(&Term::iri("Animal"));
         assert_eq!(st.quads_matching(rex, tyid, animal, None).count(), 1);
@@ -2349,7 +2890,27 @@ mod tests {
         fs::write(&pie, "// family rules\nPrefices\n{\n  ex : http://ex.org/\n}\nAxioms\n{\n  <ex:ancestorOf> <ex:kind> <ex:Transitive>\n}\nRules\n{\nId: parent_is_ancestor\n  x <ex:parentOf> y\n  ------------------------\n  x <ex:ancestorOf> y\n\nId: ancestor_transitive\n  x <ex:ancestorOf> y\n  y <ex:ancestorOf> z   [Constraint x != z]\n  ------------------------\n  x <ex:ancestorOf> z\n}\n").unwrap();
         let mut st = Store::memory();
         st.set_ruleset(pie.to_str().unwrap(), true);
-        st.insert(&[q("http://ex.org/a", "http://ex.org/parentOf", "http://ex.org/b", None), q("http://ex.org/b", "http://ex.org/parentOf", "http://ex.org/c", None), q("http://ex.org/c", "http://ex.org/parentOf", "http://ex.org/a", None)]).unwrap();
+        st.insert(&[
+            q(
+                "http://ex.org/a",
+                "http://ex.org/parentOf",
+                "http://ex.org/b",
+                None,
+            ),
+            q(
+                "http://ex.org/b",
+                "http://ex.org/parentOf",
+                "http://ex.org/c",
+                None,
+            ),
+            q(
+                "http://ex.org/c",
+                "http://ex.org/parentOf",
+                "http://ex.org/a",
+                None,
+            ),
+        ])
+        .unwrap();
         let anc = st.dict.lookup(&Term::iri("http://ex.org/ancestorOf"));
         let a = st.dict.lookup(&Term::iri("http://ex.org/a"));
         // a reaches b and c but, by the constraint, never derives "a ancestorOf a"
@@ -2368,15 +2929,20 @@ mod tests {
         {
             let mut st = Store::open(&dir).unwrap();
             st.set_ruleset("rdfs-optimized", true);
-            st.insert(&[q("C", &format!("{rdfs}subClassOf"), "D", None)]).unwrap();
+            st.insert(&[q("C", &format!("{rdfs}subClassOf"), "D", None)])
+                .unwrap();
             for chunk in 0..4 {
-                let batch: Vec<Quad> = (0..5_000).map(|i| q(&format!("e{chunk}-{i}"), ty, "C", None)).collect();
+                let batch: Vec<Quad> = (0..5_000)
+                    .map(|i| q(&format!("e{chunk}-{i}"), ty, "C", None))
+                    .collect();
                 st.insert(&batch).unwrap();
                 st.checkpoint().unwrap(); // several run files per index
             }
             assert_eq!(st.inferred_len(), 20_000);
             // delete half of one batch: dependent inferences are retracted
-            let doomed: Vec<Quad> = (0..2_500).map(|i| q(&format!("e0-{i}"), ty, "C", None)).collect();
+            let doomed: Vec<Quad> = (0..2_500)
+                .map(|i| q(&format!("e0-{i}"), ty, "C", None))
+                .collect();
             st.apply(&doomed, &[]).unwrap();
             assert_eq!(st.inferred_len(), 17_500);
         }

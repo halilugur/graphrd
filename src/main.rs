@@ -134,7 +134,10 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some(cmd @ ("load" | "dump" | "query" | "update" | "convert" | "backup" | "restore" | "optimize" | "validate")) => {
+        Some(
+            cmd @ ("load" | "dump" | "query" | "update" | "convert" | "backup" | "restore"
+            | "optimize" | "validate"),
+        ) => {
             let run = match cmd {
                 "load" => cli::load,
                 "backup" => cli::backup,
@@ -155,7 +158,11 @@ fn main() -> ExitCode {
             }
         }
         Some(cmd @ ("compare" | "compare-report")) => {
-            let r = if cmd == "compare" { compare::run(&args[1..]) } else { compare::report(&args[1..]) };
+            let r = if cmd == "compare" {
+                compare::run(&args[1..])
+            } else {
+                compare::report(&args[1..])
+            };
             match r {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
@@ -205,13 +212,29 @@ fn serve(args: &[String]) -> Result<(), String> {
     let mut memory = false;
     let mut audit_log: Option<PathBuf> = None;
     let mut audit_reads = false;
-    let (mut oidc_issuer, mut oidc_audience, mut oidc_roles, mut oidc_map): (Option<String>, Option<String>, Option<String>, String) = (None, None, None, String::new());
-    let (mut ldap_url, mut ldap_user_dn, mut ldap_groups, mut ldap_map, mut ldap_roles): (Option<String>, String, Option<String>, String, String) = (None, String::new(), None, String::new(), String::new());
-    let (mut ldap_bind_dn, mut ldap_bind_pw): (Option<String>, Option<String>) = (None, std::env::var("GRAPHRD_LDAP_BIND_PASSWORD").ok());
+    let (mut oidc_issuer, mut oidc_audience, mut oidc_roles, mut oidc_map): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = (None, None, None, String::new());
+    let (mut ldap_url, mut ldap_user_dn, mut ldap_groups, mut ldap_map, mut ldap_roles): (
+        Option<String>,
+        String,
+        Option<String>,
+        String,
+        String,
+    ) = (None, String::new(), None, String::new(), String::new());
+    let (mut ldap_bind_dn, mut ldap_bind_pw): (Option<String>, Option<String>) =
+        (None, std::env::var("GRAPHRD_LDAP_BIND_PASSWORD").ok());
     let mut llm = graphrd::nlq::Settings::default();
     let mut it = args.iter();
     while let Some(flag) = it.next() {
-        let mut value = || it.next().cloned().ok_or_else(|| format!("{flag} needs a value"));
+        let mut value = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| format!("{flag} needs a value"))
+        };
         match flag.as_str() {
             "--port" => port = value()?,
             "--llm-api" => llm.api = Some(value()?),
@@ -219,7 +242,11 @@ fn serve(args: &[String]) -> Result<(), String> {
             "--llm-key" => llm.key = Some(value()?),
             "--llm-model" => llm.model = Some(value()?),
             "--llm-effort" => llm.effort = Some(value()?),
-            "--llm-timeout" => llm.timeout_secs = value()?.parse::<u64>().map_err(|_| "--llm-timeout expects seconds")?,
+            "--llm-timeout" => {
+                llm.timeout_secs = value()?
+                    .parse::<u64>()
+                    .map_err(|_| "--llm-timeout expects seconds")?
+            }
             "--host" => host = value()?,
             "--data" => data = PathBuf::from(value()?),
             "--ui-dir" => {
@@ -262,22 +289,39 @@ fn serve(args: &[String]) -> Result<(), String> {
             "--ldap-bind-dn" => ldap_bind_dn = Some(value()?),
             "--ldap-bind-password" => ldap_bind_pw = Some(value()?),
             "--cors" => cors = true,
-            "--timeout" => timeout = Some(value()?.parse::<u64>().map_err(|_| "--timeout expects seconds")?),
+            "--timeout" => {
+                timeout = Some(
+                    value()?
+                        .parse::<u64>()
+                        .map_err(|_| "--timeout expects seconds")?,
+                )
+            }
             "--default-repo" => default_repo = Some(value()?),
             "--service-cache" => {
-                let v = value()?.parse::<u64>().map_err(|_| "--service-cache expects seconds")?;
-                graphrd::sparql::eval::SERVICE_CACHE_SECS.store(v, std::sync::atomic::Ordering::Relaxed);
+                let v = value()?
+                    .parse::<u64>()
+                    .map_err(|_| "--service-cache expects seconds")?;
+                graphrd::sparql::eval::SERVICE_CACHE_SECS
+                    .store(v, std::sync::atomic::Ordering::Relaxed);
             }
             "--service-timeout" => {
-                let v = value()?.parse::<u64>().map_err(|_| "--service-timeout expects seconds")?;
-                graphrd::sparql::eval::SERVICE_TIMEOUT_SECS.store(v, std::sync::atomic::Ordering::Relaxed);
+                let v = value()?
+                    .parse::<u64>()
+                    .map_err(|_| "--service-timeout expects seconds")?;
+                graphrd::sparql::eval::SERVICE_TIMEOUT_SECS
+                    .store(v, std::sync::atomic::Ordering::Relaxed);
             }
             "--service-retries" => {
-                let v = value()?.parse::<u64>().map_err(|_| "--service-retries expects a number")?;
-                graphrd::sparql::eval::SERVICE_RETRIES.store(v, std::sync::atomic::Ordering::Relaxed);
+                let v = value()?
+                    .parse::<u64>()
+                    .map_err(|_| "--service-retries expects a number")?;
+                graphrd::sparql::eval::SERVICE_RETRIES
+                    .store(v, std::sync::atomic::Ordering::Relaxed);
             }
             "--slow-query" => {
-                let ms = value()?.parse::<u64>().map_err(|_| "--slow-query expects milliseconds")?;
+                let ms = value()?
+                    .parse::<u64>()
+                    .map_err(|_| "--slow-query expects milliseconds")?;
                 graphrd::metrics::SLOW_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
             }
             other => return Err(format!("unknown option {other}\n\n{USAGE}")),
@@ -295,7 +339,9 @@ fn serve(args: &[String]) -> Result<(), String> {
         None if oidc_issuer.is_some() || ldap_url.is_some() => Some(server::Auth::new("", "")),
         None => {
             if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-                eprintln!("warning: listening on {host} without --auth; anyone who can reach it can read and change data");
+                eprintln!(
+                    "warning: listening on {host} without --auth; anyone who can reach it can read and change data"
+                );
             }
             None
         }
@@ -303,7 +349,12 @@ fn serve(args: &[String]) -> Result<(), String> {
     let auth = match (auth, &oidc_issuer) {
         (Some(a), Some(issuer)) => {
             eprintln!("OpenID Connect: accepting access tokens of {issuer}");
-            Some(a.with_oidc(graphrd::oidc::Provider::new(issuer, oidc_audience.clone(), oidc_roles.clone(), &oidc_map)))
+            Some(a.with_oidc(graphrd::oidc::Provider::new(
+                issuer,
+                oidc_audience.clone(),
+                oidc_roles.clone(),
+                &oidc_map,
+            )))
         }
         (a, _) => a,
     };
@@ -313,12 +364,23 @@ fn serve(args: &[String]) -> Result<(), String> {
                 return Err("--ldap-url needs --ldap-user-dn with {user}, e.g. uid={user},ou=people,dc=example,dc=org".into());
             }
             eprintln!("LDAP: users that are not local sign in with {url}");
-            let search_as = match (&ldap_bind_dn, &ldap_bind_pw) {
-                (Some(dn), Some(pw)) => Some((dn.clone(), pw.clone())),
-                (Some(_), None) => return Err("--ldap-bind-dn needs --ldap-bind-password (or GRAPHRD_LDAP_BIND_PASSWORD)".into()),
-                _ => None,
-            };
-            Some(a.with_ldap(graphrd::ldap::Directory::new(url, &ldap_user_dn, ldap_groups.clone(), search_as, &ldap_map, &ldap_roles)))
+            let search_as =
+                match (&ldap_bind_dn, &ldap_bind_pw) {
+                    (Some(dn), Some(pw)) => Some((dn.clone(), pw.clone())),
+                    (Some(_), None) => return Err(
+                        "--ldap-bind-dn needs --ldap-bind-password (or GRAPHRD_LDAP_BIND_PASSWORD)"
+                            .into(),
+                    ),
+                    _ => None,
+                };
+            Some(a.with_ldap(graphrd::ldap::Directory::new(
+                url,
+                &ldap_user_dn,
+                ldap_groups.clone(),
+                search_as,
+                &ldap_map,
+                &ldap_roles,
+            )))
         }
         (a, _) => a,
     };
@@ -327,19 +389,30 @@ fn serve(args: &[String]) -> Result<(), String> {
         server::QUIET.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     if memory && cluster.is_some() {
-        return Err("--memory cannot be combined with --cluster (the Raft log lives on disk)".into());
+        return Err(
+            "--memory cannot be combined with --cluster (the Raft log lives on disk)".into(),
+        );
     }
-    let _lock = if memory { None } else { Some(cli::lock_data_dir(&data)?) };
+    let _lock = if memory {
+        None
+    } else {
+        Some(cli::lock_data_dir(&data)?)
+    };
     let mut app = if memory {
         server::App::open_memory(ui_dir, auth)
     } else {
-        server::App::open(&data, ui_dir, auth).map_err(|e| format!("opening {}: {e}", data.display()))?
+        server::App::open(&data, ui_dir, auth)
+            .map_err(|e| format!("opening {}: {e}", data.display()))?
     };
     app.read_only = read_only;
     app.cors = cors;
     app.default_timeout = timeout;
     if let Some(path) = &audit_log {
-        let f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| format!("{}: {e}", path.display()))?;
         app.audit = Some(std::sync::Mutex::new(f));
         app.audit_reads = audit_reads;
     }
@@ -363,25 +436,47 @@ fn serve(args: &[String]) -> Result<(), String> {
     }
     if let Some(list) = cluster {
         let me = node_id.ok_or("--cluster needs --node-id")?;
-        let secret = cluster_secret.filter(|s| !s.is_empty()).ok_or("--cluster needs --cluster-secret (or GRAPHRD_CLUSTER_SECRET)")?;
+        let secret = cluster_secret
+            .filter(|s| !s.is_empty())
+            .ok_or("--cluster needs --cluster-secret (or GRAPHRD_CLUSTER_SECRET)")?;
         let mut peers = Vec::new();
         let mut me_voter = None;
-        let members = list.split(',').map(|m| (m, true)).chain(learners.as_deref().unwrap_or("").split(',').map(|m| (m, false)));
+        let members = list.split(',').map(|m| (m, true)).chain(
+            learners
+                .as_deref()
+                .unwrap_or("")
+                .split(',')
+                .map(|m| (m, false)),
+        );
         for (member, voter) in members.filter(|(m, _)| !m.trim().is_empty()) {
-            let (id, host) = member.trim().split_once('=').ok_or(format!("cluster member {member:?} must be id=host:port"))?;
+            let (id, host) = member
+                .trim()
+                .split_once('=')
+                .ok_or(format!("cluster member {member:?} must be id=host:port"))?;
             if id == me {
                 me_voter = Some(voter);
             } else {
-                peers.push(raft::Peer { id: id.into(), host: host.into(), voter });
+                peers.push(raft::Peer {
+                    id: id.into(),
+                    host: host.into(),
+                    voter,
+                });
             }
         }
         let Some(voter) = me_voter else {
-            return Err(format!("--node-id {me} is not listed in --cluster or --cluster-learners"));
+            return Err(format!(
+                "--node-id {me} is not listed in --cluster or --cluster-learners"
+            ));
         };
         let n = peers.len() + 1;
-        let raft = raft::Raft::open(&data.join("cluster"), &me, peers, voter, &secret).map_err(|e| format!("cluster state: {e}"))?;
+        let raft = raft::Raft::open(&data.join("cluster"), &me, peers, voter, &secret)
+            .map_err(|e| format!("cluster state: {e}"))?;
         app.join_cluster(raft);
-        let role = if voter { "voting member" } else { "learner (read replica)" };
+        let role = if voter {
+            "voting member"
+        } else {
+            "learner (read replica)"
+        };
         eprintln!("cluster node {me}, {role}: {n} members; writes go through the elected leader");
     }
     if let Some(pg) = pg_port {
@@ -398,8 +493,15 @@ fn serve(args: &[String]) -> Result<(), String> {
     let handler: http::Handler = Arc::new(move |req| http::compress(req, app.handle(req)));
     match (tls_cert, tls_key) {
         (None, None) => {
-            let where_ = if memory { "in memory".to_string() } else { format!("data: {}", data.display()) };
-            eprintln!("GraphRD {} listening on http://{addr}/ ({where_})", server::VERSION);
+            let where_ = if memory {
+                "in memory".to_string()
+            } else {
+                format!("data: {}", data.display())
+            };
+            eprintln!(
+                "GraphRD {} listening on http://{addr}/ ({where_})",
+                server::VERSION
+            );
             http::serve(&addr, handler).map_err(|e| format!("{addr}: {e}"))
         }
         (Some(cert), Some(key)) => serve_https(&addr, handler, &cert, &key, &data),
@@ -408,12 +510,28 @@ fn serve(args: &[String]) -> Result<(), String> {
 }
 
 #[cfg(feature = "tls")]
-fn serve_https(addr: &str, handler: http::Handler, cert: &std::path::Path, key: &std::path::Path, data: &std::path::Path) -> Result<(), String> {
-    eprintln!("GraphRD {} listening on https://{addr}/ (data: {})", server::VERSION, data.display());
+fn serve_https(
+    addr: &str,
+    handler: http::Handler,
+    cert: &std::path::Path,
+    key: &std::path::Path,
+    data: &std::path::Path,
+) -> Result<(), String> {
+    eprintln!(
+        "GraphRD {} listening on https://{addr}/ (data: {})",
+        server::VERSION,
+        data.display()
+    );
     http::serve_tls(addr, handler, cert, key).map_err(|e| format!("{addr}: {e}"))
 }
 
 #[cfg(not(feature = "tls"))]
-fn serve_https(_: &str, _: http::Handler, _: &std::path::Path, _: &std::path::Path, _: &std::path::Path) -> Result<(), String> {
+fn serve_https(
+    _: &str,
+    _: http::Handler,
+    _: &std::path::Path,
+    _: &std::path::Path,
+    _: &std::path::Path,
+) -> Result<(), String> {
     Err("this build has no TLS support; rebuild with `cargo build --release --features tls`".into())
 }

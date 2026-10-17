@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::json::Json;
-use crate::rdf::{Term, RDF};
+use crate::rdf::{RDF, Term};
 use crate::store::{Id, Store};
 
 /// The predicate namespace of connector search: `?e <…/connector/NAME> "query"`.
@@ -24,11 +24,11 @@ pub const NAMESPACE: &str = "http://graphrd.org/connector/";
 #[derive(Clone, Debug)]
 /// One search connector's definition (an OpenSearch or Elasticsearch index).
 pub struct Connector {
-/// The connector's name, as queries address it.
+    /// The connector's name, as queries address it.
     pub name: String,
     /// Base URL of the engine, e.g. `http://localhost:9200`.
     pub url: String,
-/// The index documents go to.
+    /// The index documents go to.
     pub index: String,
     /// Classes whose instances are indexed.
     pub types: Vec<String>,
@@ -39,42 +39,68 @@ pub struct Connector {
 /// What a connector's thread reports.
 #[derive(Clone, Debug, Default)]
 pub struct Status {
-/// Documents sent to the index.
+    /// Documents sent to the index.
     pub indexed: u64,
-/// Documents removed from it.
+    /// Documents removed from it.
     pub deleted: u64,
-/// Subjects still waiting for a round (a first sync, or a failed one).
+    /// Subjects still waiting for a round (a first sync, or a failed one).
     pub pending: usize,
-/// The last failed call's error, if any.
+    /// The last failed call's error, if any.
     pub last_error: Option<String>,
-/// When the queue last drained, Unix seconds.
+    /// When the queue last drained, Unix seconds.
     pub last_sync: Option<i64>,
 }
 
 fn now_millis() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_millis() as i64)
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
 }
 
 impl Connector {
-/// A connector from its `PUT` body: name, URL, index, types and field mapping.
+    /// A connector from its `PUT` body: name, URL, index, types and field mapping.
     pub fn from_json(name: &str, j: &Json) -> Result<Connector, String> {
         let s = |k: &str| j.get(k).and_then(|v| v.as_str()).map(String::from);
         let kind = s("type").unwrap_or_else(|| "opensearch".into());
         if !matches!(kind.as_str(), "opensearch" | "elasticsearch") {
-            return Err(format!("unknown connector type {kind:?} (opensearch or elasticsearch)"));
+            return Err(format!(
+                "unknown connector type {kind:?} (opensearch or elasticsearch)"
+            ));
         }
-        let url = s("url").ok_or("a connector needs a url (e.g. http://localhost:9200)")?.trim_end_matches('/').to_string();
+        let url = s("url")
+            .ok_or("a connector needs a url (e.g. http://localhost:9200)")?
+            .trim_end_matches('/')
+            .to_string();
         let index = s("index").unwrap_or_else(|| name.to_ascii_lowercase());
-        if index.is_empty() || !index.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_.".contains(c)) {
-            return Err(format!("index {index:?}: lower-case letters, digits, - _ . only"));
+        if index.is_empty()
+            || !index
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_.".contains(c))
+        {
+            return Err(format!(
+                "index {index:?}: lower-case letters, digits, - _ . only"
+            ));
         }
-        let types: Vec<String> = j.get("types").and_then(|t| t.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let types: Vec<String> = j
+            .get("types")
+            .and_then(|t| t.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
         if types.is_empty() {
-            return Err("a connector needs \"types\": the classes whose instances it indexes".into());
+            return Err(
+                "a connector needs \"types\": the classes whose instances it indexes".into(),
+            );
         }
         let mut fields = Vec::new();
         for f in j.get("fields").and_then(|f| f.as_array()).unwrap_or(&[]) {
-            let (Some(n), Some(p)) = (f.get("name").and_then(|v| v.as_str()), f.get("property").and_then(|v| v.as_str())) else {
+            let (Some(n), Some(p)) = (
+                f.get("name").and_then(|v| v.as_str()),
+                f.get("property").and_then(|v| v.as_str()),
+            ) else {
                 return Err("each field needs a name and a property".into());
             };
             if n == "id" || n == "types" {
@@ -83,24 +109,53 @@ impl Connector {
             fields.push((n.to_string(), p.to_string()));
         }
         if fields.is_empty() {
-            return Err("a connector needs \"fields\": [{\"name\": ..., \"property\": ...}]".into());
+            return Err(
+                "a connector needs \"fields\": [{\"name\": ..., \"property\": ...}]".into(),
+            );
         }
-        Ok(Connector { name: name.into(), url, index, types, fields })
+        Ok(Connector {
+            name: name.into(),
+            url,
+            index,
+            types,
+            fields,
+        })
     }
 
-/// The definition as it goes back to the client.
+    /// The definition as it goes back to the client.
     pub fn to_json(&self) -> Json {
         Json::obj()
             .with("type", "opensearch")
             .with("url", self.url.as_str())
             .with("index", self.index.as_str())
-            .with("types", Json::Arr(self.types.iter().map(|t| Json::from(t.as_str())).collect()))
-            .with("fields", Json::Arr(self.fields.iter().map(|(n, p)| Json::obj().with("name", n.as_str()).with("property", p.as_str())).collect()))
+            .with(
+                "types",
+                Json::Arr(self.types.iter().map(|t| Json::from(t.as_str())).collect()),
+            )
+            .with(
+                "fields",
+                Json::Arr(
+                    self.fields
+                        .iter()
+                        .map(|(n, p)| {
+                            Json::obj()
+                                .with("name", n.as_str())
+                                .with("property", p.as_str())
+                        })
+                        .collect(),
+                ),
+            )
     }
 
     fn call(&self, method: &str, path: &str, body: Option<(&str, &[u8])>) -> Result<Json, String> {
         let url = format!("{}/{}", self.url, path.trim_start_matches('/'));
-        let (_, resp) = crate::http::fetch_with(&url, method, "application/json", body, Duration::from_secs(60))?;
+        let (_, resp) = crate::http::fetch_with(
+            &url,
+            method,
+            "application/json",
+            body,
+            Duration::from_secs(60),
+        )?;
         Json::parse(&String::from_utf8_lossy(&resp)).map_err(|e| format!("{url}: {e}"))
     }
 
@@ -111,17 +166,34 @@ impl Connector {
         }
         let mut props = Json::obj().with("types", Json::obj().with("type", "keyword"));
         for (n, _) in &self.fields {
-            props.set(n, Json::obj().with("type", "text").with("fields", Json::obj().with("raw", Json::obj().with("type", "keyword").with("ignore_above", 256usize))));
+            props.set(
+                n,
+                Json::obj().with("type", "text").with(
+                    "fields",
+                    Json::obj().with(
+                        "raw",
+                        Json::obj()
+                            .with("type", "keyword")
+                            .with("ignore_above", 256usize),
+                    ),
+                ),
+            );
         }
-        let body = Json::obj().with("mappings", Json::obj().with("properties", props)).to_string();
-        match self.call("PUT", &self.index, Some(("application/json", body.as_bytes()))) {
+        let body = Json::obj()
+            .with("mappings", Json::obj().with("properties", props))
+            .to_string();
+        match self.call(
+            "PUT",
+            &self.index,
+            Some(("application/json", body.as_bytes())),
+        ) {
             Ok(_) => Ok(()),
             Err(e) if e.contains("resource_already_exists") => Ok(()),
             Err(e) => Err(e),
         }
     }
 
-/// Delete the index (the connector's data only).
+    /// Delete the index (the connector's data only).
     pub fn drop_index(&self) -> Result<(), String> {
         self.call("DELETE", &self.index, None).map(|_| ())
     }
@@ -129,14 +201,27 @@ impl Connector {
     /// The document of an entity, or None when it is not (or no longer) one of the classes.
     pub fn document(&self, store: &Store, subject: Id) -> Option<Json> {
         let ty = store.dict.lookup(&Term::Iri(format!("{RDF}type")))?;
-        let types: Vec<String> = store.quads_matching(Some(subject), Some(ty), None, None).map(|q| store.dict.term(q[2]).value().to_string()).collect();
+        let types: Vec<String> = store
+            .quads_matching(Some(subject), Some(ty), None, None)
+            .map(|q| store.dict.term(q[2]).value().to_string())
+            .collect();
         if !types.iter().any(|t| self.types.contains(t)) {
             return None;
         }
-        let mut doc = Json::obj().with("id", store.dict.term(subject).value()).with("types", Json::Arr(types.iter().map(|t| Json::from(t.as_str())).collect()));
+        let mut doc = Json::obj()
+            .with("id", store.dict.term(subject).value())
+            .with(
+                "types",
+                Json::Arr(types.iter().map(|t| Json::from(t.as_str())).collect()),
+            );
         for (name, prop) in &self.fields {
-            let Some(p) = store.dict.lookup(&Term::Iri(prop.clone())) else { continue };
-            let mut vals: Vec<String> = store.quads_matching(Some(subject), Some(p), None, None).map(|q| store.dict.term(q[2]).value().to_string()).collect();
+            let Some(p) = store.dict.lookup(&Term::Iri(prop.clone())) else {
+                continue;
+            };
+            let mut vals: Vec<String> = store
+                .quads_matching(Some(subject), Some(p), None, None)
+                .map(|q| store.dict.term(q[2]).value().to_string())
+                .collect();
             vals.sort();
             vals.dedup();
             match vals.len() {
@@ -155,8 +240,19 @@ impl Connector {
         for part in subjects.chunks(1000) {
             let mut bulk = String::new();
             for &s in part {
-                let Term::Iri(iri) = store.dict.term(s) else { continue };
-                let meta = |op: &str| Json::obj().with(op, Json::obj().with("_index", self.index.as_str()).with("_id", iri.as_str())).to_string();
+                let Term::Iri(iri) = store.dict.term(s) else {
+                    continue;
+                };
+                let meta = |op: &str| {
+                    Json::obj()
+                        .with(
+                            op,
+                            Json::obj()
+                                .with("_index", self.index.as_str())
+                                .with("_id", iri.as_str()),
+                        )
+                        .to_string()
+                };
                 match self.document(store, s) {
                     Some(doc) => {
                         bulk.push_str(&meta("index"));
@@ -175,17 +271,27 @@ impl Connector {
             if bulk.is_empty() {
                 continue;
             }
-            let r = self.call("POST", "_bulk?refresh=wait_for", Some(("application/x-ndjson", bulk.as_bytes())))?;
+            let r = self.call(
+                "POST",
+                "_bulk?refresh=wait_for",
+                Some(("application/x-ndjson", bulk.as_bytes())),
+            )?;
             if r.get("errors") == Some(&Json::Bool(true)) {
                 // deleting a document that is not there is not an error
-                let real = r.get("items").and_then(|i| i.as_array()).unwrap_or(&[]).iter().find_map(|it| {
-                    let (op, v) = match it {
-                        Json::Obj(f) => f.first()?,
-                        _ => return None,
-                    };
-                    let status = v.get("status").and_then(|s| s.as_f64()).unwrap_or(0.0) as u32;
-                    (status >= 300 && !(op == "delete" && status == 404)).then(|| v.get("error").map(|e| e.to_string()).unwrap_or_default())
-                });
+                let real = r
+                    .get("items")
+                    .and_then(|i| i.as_array())
+                    .unwrap_or(&[])
+                    .iter()
+                    .find_map(|it| {
+                        let (op, v) = match it {
+                            Json::Obj(f) => f.first()?,
+                            _ => return None,
+                        };
+                        let status = v.get("status").and_then(|s| s.as_f64()).unwrap_or(0.0) as u32;
+                        (status >= 300 && !(op == "delete" && status == 404))
+                            .then(|| v.get("error").map(|e| e.to_string()).unwrap_or_default())
+                    });
                 if let Some(e) = real {
                     return Err(format!("{}: bulk indexing failed: {e}", self.index));
                 }
@@ -196,11 +302,17 @@ impl Connector {
 
     /// Every entity of the connector's classes, for the first sync.
     pub fn entities(&self, store: &Store) -> Vec<Id> {
-        let Some(ty) = store.dict.lookup(&Term::Iri(format!("{RDF}type"))) else { return Vec::new() };
+        let Some(ty) = store.dict.lookup(&Term::Iri(format!("{RDF}type"))) else {
+            return Vec::new();
+        };
         let mut out = HashSet::new();
         for t in &self.types {
             if let Some(c) = store.dict.lookup(&Term::Iri(t.clone())) {
-                out.extend(store.quads_matching(None, Some(ty), Some(c), None).map(|q| q[0]));
+                out.extend(
+                    store
+                        .quads_matching(None, Some(ty), Some(c), None)
+                        .map(|q| q[0]),
+                );
             }
         }
         out.into_iter().collect()
@@ -211,33 +323,60 @@ impl Connector {
         let body = Json::obj()
             .with("size", size)
             .with("_source", false)
-            .with("query", Json::obj().with("query_string", Json::obj().with("query", query)))
+            .with(
+                "query",
+                Json::obj().with("query_string", Json::obj().with("query", query)),
+            )
             .to_string();
-        let r = self.call("POST", &format!("{}/_search", self.index), Some(("application/json", body.as_bytes())))?;
-        let hits = r.get("hits").and_then(|h| h.get("hits")).and_then(|h| h.as_array()).unwrap_or(&[]);
-        Ok(hits.iter().filter_map(|h| Some((h.get("_id")?.as_str()?.to_string(), h.get("_score").and_then(|s| s.as_f64()).unwrap_or(0.0)))).collect())
+        let r = self.call(
+            "POST",
+            &format!("{}/_search", self.index),
+            Some(("application/json", body.as_bytes())),
+        )?;
+        let hits = r
+            .get("hits")
+            .and_then(|h| h.get("hits"))
+            .and_then(|h| h.as_array())
+            .unwrap_or(&[]);
+        Ok(hits
+            .iter()
+            .filter_map(|h| {
+                Some((
+                    h.get("_id")?.as_str()?.to_string(),
+                    h.get("_score").and_then(|s| s.as_f64()).unwrap_or(0.0),
+                ))
+            })
+            .collect())
     }
 }
 
 /// A connector at work: its definition, the subjects waiting to be synced, and its status.
 pub struct Running {
-/// The connector's definition.
+    /// The connector's definition.
     pub def: Connector,
-/// Counters and the last error, for the status page.
+    /// Counters and the last error, for the status page.
     pub status: Mutex<Status>,
     /// Subjects still to sync (a first full sync, or a round that failed).
     pub pending: Mutex<HashSet<Id>>,
 }
 
 impl Running {
-/// A running connector: definition plus state.
+    /// A running connector: definition plus state.
     pub fn new(def: Connector) -> Arc<Running> {
-        Arc::new(Running { def, status: Mutex::default(), pending: Mutex::default() })
+        Arc::new(Running {
+            def,
+            status: Mutex::default(),
+            pending: Mutex::default(),
+        })
     }
 
-/// The status as the REST API shows it.
+    /// The status as the REST API shows it.
     pub fn status_json(&self) -> Json {
-        let s = self.status.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let s = self
+            .status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Json::obj()
             .with("name", self.def.name.as_str())
             .with("definition", self.def.to_json())
@@ -259,7 +398,10 @@ impl Running {
         if subjects.is_empty() {
             return;
         }
-        let r = self.def.ensure_index().and_then(|()| self.def.sync(store, &subjects));
+        let r = self
+            .def
+            .ensure_index()
+            .and_then(|()| self.def.sync(store, &subjects));
         let mut s = self.status.lock().unwrap_or_else(|e| e.into_inner());
         match r {
             Ok((i, d)) => {
@@ -274,7 +416,10 @@ impl Running {
                 s.pending = subjects.len();
                 drop(s);
                 // tried again next round
-                self.pending.lock().unwrap_or_else(|e| e.into_inner()).extend(subjects);
+                self.pending
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend(subjects);
             }
         }
     }
