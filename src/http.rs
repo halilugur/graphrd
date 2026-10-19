@@ -402,6 +402,99 @@ pub fn serve_tls(
     serve_tls_config(addr, handler, Arc::new(config))
 }
 
+/// The request header in which handlers find the client certificate verified during the TLS
+/// handshake (DER, base64), when serving with client authentication.
+pub const CLIENT_CERT_HEADER: &str = "x-graphrd-client-cert";
+
+#[cfg(feature = "tls")]
+fn base64_std(data: &[u8]) -> String {
+    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for c in data.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            out.push(if i <= c.len() { B64[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
+}
+
+/// Serve HTTPS with mutual TLS: clients present certificates issued by one of the
+/// certificate authorities in `client_ca_pem`; with `required` false, clients without a
+/// certificate are served too. Handlers find the verified certificate in
+/// [`CLIENT_CERT_HEADER`].
+#[cfg(feature = "tls")]
+pub fn serve_tls_client_auth(
+    addr: &str,
+    handler: Handler,
+    cert_pem: &std::path::Path,
+    key_pem: &std::path::Path,
+    client_ca_pem: &std::path::Path,
+    required: bool,
+) -> io::Result<()> {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    let bad = |e: String| io::Error::new(io::ErrorKind::InvalidInput, e);
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_pem)
+        .map_err(|e| bad(format!("{}: {e}", cert_pem.display())))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| bad(format!("{}: {e}", cert_pem.display())))?;
+    let key = PrivateKeyDer::from_pem_file(key_pem)
+        .map_err(|e| bad(format!("{}: {e}", key_pem.display())))?;
+    let mut roots = rustls::RootCertStore::empty();
+    for c in CertificateDer::pem_file_iter(client_ca_pem)
+        .map_err(|e| bad(format!("{}: {e}", client_ca_pem.display())))?
+    {
+        let c = c.map_err(|e| bad(format!("{}: {e}", client_ca_pem.display())))?;
+        roots
+            .add(c)
+            .map_err(|e| bad(format!("{}: {e}", client_ca_pem.display())))?;
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::server::WebPkiClientVerifier::builder_with_provider(
+        Arc::new(roots),
+        provider.clone(),
+    );
+    let verifier = if required {
+        builder.build()
+    } else {
+        builder.allow_unauthenticated().build()
+    }
+    .map_err(|e| bad(e.to_string()))?;
+    let config = rustls::ServerConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| bad(e.to_string()))?
+        .with_client_cert_verifier(verifier)
+        .with_single_cert(certs, key)
+        .map_err(|e| bad(e.to_string()))?;
+    serve_tls_config(addr, handler, Arc::new(config))
+}
+
+/// The certificate and key this process presents when a server asks for one (mutual TLS)
+/// on outbound HTTPS requests.
+#[cfg(feature = "tls")]
+static CLIENT_IDENTITY: std::sync::OnceLock<(
+    Vec<rustls::pki_types::CertificateDer<'static>>,
+    rustls::pki_types::PrivateKeyDer<'static>,
+)> = std::sync::OnceLock::new();
+
+/// Sets the client certificate (chain) and key for outbound HTTPS (PEM files), once per process.
+#[cfg(feature = "tls")]
+pub fn set_client_identity(cert_pem: &std::path::Path, key_pem: &std::path::Path) -> io::Result<()> {
+    use rustls::pki_types::pem::PemObject;
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+    let bad = |e: String| io::Error::new(io::ErrorKind::InvalidInput, e);
+    let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_file_iter(cert_pem)
+        .map_err(|e| bad(format!("{}: {e}", cert_pem.display())))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| bad(format!("{}: {e}", cert_pem.display())))?;
+    let key = PrivateKeyDer::from_pem_file(key_pem)
+        .map_err(|e| bad(format!("{}: {e}", key_pem.display())))?;
+    CLIENT_IDENTITY
+        .set((certs, key))
+        .map_err(|_| bad("the client certificate is already set".into()))
+}
+
 /// Serve HTTPS with a prepared TLS configuration (for example one that picks certificates by
 /// server name; see `acme::serve_tls_with`).
 #[cfg(feature = "tls")]
@@ -422,10 +515,18 @@ pub fn serve_tls_config(
             if prepare(&stream).is_err() {
                 return;
             }
-            let Ok(conn) = rustls::ServerConnection::new(config) else {
+            let Ok(mut conn) = rustls::ServerConnection::new(config) else {
                 return;
             };
-            let _ = connection(rustls::StreamOwned::new(conn, stream), handler);
+            // finish the handshake first, to know the client's certificate (mutual TLS)
+            let mut stream = stream;
+            while conn.is_handshaking() {
+                if conn.complete_io(&mut stream).is_err() {
+                    return;
+                }
+            }
+            let client_cert = conn.peer_certificates().and_then(|c| c.first()).map(|c| base64_std(c.as_ref()));
+            let _ = connection_with(rustls::StreamOwned::new(conn, stream), handler, client_cert);
         });
     }
     Ok(())
@@ -454,6 +555,13 @@ fn read_line<R: BufRead>(r: &mut R, budget: &mut usize) -> io::Result<Option<Str
 }
 
 fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
+    connection_with(stream, handler, None)
+}
+
+/// Serves the requests of one connection; `client_cert` is the certificate (DER, base64) the
+/// client presented and the TLS layer verified, handed to the handler in
+/// [`CLIENT_CERT_HEADER`]. A header of that name sent by the client is always removed.
+fn connection_with<S: Read + Write>(stream: S, handler: Handler, client_cert: Option<String>) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     loop {
         let mut budget = MAX_HEADER_BYTES;
@@ -484,6 +592,10 @@ fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
             if let Some((k, v)) = h.split_once(':') {
                 headers.push((k.trim().to_ascii_lowercase(), v.trim().to_string()));
             }
+        }
+        headers.retain(|(k, _)| k != CLIENT_CERT_HEADER);
+        if let Some(c) = &client_cert {
+            headers.push((CLIENT_CERT_HEADER.to_string(), c.clone()));
         }
         let hdr = |n: &str| headers.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
         if hdr("expect").is_some_and(|e| e.eq_ignore_ascii_case("100-continue")) {
@@ -1020,8 +1132,13 @@ fn https_request(
     ))
     .with_safe_default_protocol_versions()
     .map_err(|e| io::Error::other(e.to_string()))?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
+    .with_root_certificates(roots);
+    let config = match CLIENT_IDENTITY.get() {
+        Some((certs, key)) => config
+            .with_client_auth_cert(certs.clone(), key.clone_key())
+            .map_err(|e| io::Error::other(e.to_string()))?,
+        None => config.with_no_client_auth(),
+    };
     let name = rustls::pki_types::ServerName::try_from(host_only.to_string())
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
     let conn = rustls::ClientConnection::new(Arc::new(config), name)
