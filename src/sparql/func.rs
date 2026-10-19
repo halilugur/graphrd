@@ -877,6 +877,32 @@ fn cached_regex(pat: &str, flags: &str) -> Option<std::rc::Rc<Regex>> {
     })
 }
 
+/// Whether CONTAINS, STRSTARTS, STRENDS or REGEX holds for the string `s` and the other
+/// arguments (None for an error, or another function). Shared by `call` and the evaluator,
+/// which tests a term where it lies instead of copying it into an argument list.
+pub(crate) fn string_test(name: &str, s: &Term, rest: [Option<&Term>; 2]) -> Option<bool> {
+    let (s, l1) = str_arg(s)?;
+    match name {
+        "CONTAINS" | "STRSTARTS" | "STRENDS" => {
+            let (t, l2) = str_arg(rest[0]?)?;
+            if !compatible(l1, l2) {
+                return None;
+            }
+            Some(match name {
+                "CONTAINS" => s.contains(t),
+                "STRSTARTS" => s.starts_with(t),
+                _ => s.ends_with(t),
+            })
+        }
+        "REGEX" => {
+            let pat = str_arg(rest[0]?)?.0;
+            let flags = rest[1].and_then(str_arg).map_or("", |f| f.0);
+            Some(cached_regex(pat, flags)?.is_match(s))
+        }
+        _ => None,
+    }
+}
+
 /// Evaluate an eager built-in or cast. `args` are already evaluated
 /// (None = error/unbound). Returns None on error.
 pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
@@ -961,17 +987,8 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
             same_kind_string(s.to_lowercase(), l)
         }
         "ENCODE_FOR_URI" => Term::string(crate::http::percent_encode(str_arg(a(0)?)?.0)),
-        "CONTAINS" | "STRSTARTS" | "STRENDS" => {
-            let (s, l1) = str_arg(a(0)?)?;
-            let (t, l2) = str_arg(a(1)?)?;
-            if !compatible(l1, l2) {
-                return None;
-            }
-            Term::boolean(match name {
-                "CONTAINS" => s.contains(t),
-                "STRSTARTS" => s.starts_with(t),
-                _ => s.ends_with(t),
-            })
+        "CONTAINS" | "STRSTARTS" | "STRENDS" | "REGEX" => {
+            Term::boolean(string_test(name, a(0)?, [a(1), a(2)])?)
         }
         "STRBEFORE" | "STRAFTER" => {
             let (s, l1) = str_arg(a(0)?)?;
@@ -1027,12 +1044,6 @@ pub fn call(name: &str, args: &[Option<Term>], base: &str) -> Option<Term> {
                 String::new()
             };
             same_kind_string(out, l)
-        }
-        "REGEX" => {
-            let (s, _) = str_arg(a(0)?)?;
-            let pat = str_arg(a(1)?)?.0;
-            let flags = a(2).and_then(|f| str_arg(f)).map_or("", |f| f.0);
-            Term::boolean(cached_regex(pat, flags)?.is_match(s))
         }
         "REPLACE" => {
             let (s, l) = str_arg(a(0)?)?;
