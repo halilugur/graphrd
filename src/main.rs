@@ -57,6 +57,10 @@ OPTIONS:
   --audit-reads       Also log reads in the audit log
   --slow-query <ms>   Log queries and updates slower than this to standard error
                       (one JSON line each; also at /rest/monitor/slow-queries)
+  --max-body <mb>     Largest request body accepted, in megabytes (default 2048);
+                      larger ones are answered 413
+  --max-connections <n> Most connections served at once (default: no limit); further
+                      ones are answered 503
   --llm-url <url>     Answer questions in plain language with SPARQL a language
                       model writes: its server (also GRAPHRD_LLM_URL). With only
                       ANTHROPIC_API_KEY or OPENAI_API_KEY set, that provider's API
@@ -317,6 +321,20 @@ fn serve(args: &[String]) -> Result<(), String> {
                     .map_err(|_| "--service-retries expects a number")?;
                 graphrd::sparql::eval::SERVICE_RETRIES
                     .store(v, std::sync::atomic::Ordering::Relaxed);
+            }
+            "--max-body" => {
+                let mb = value()?
+                    .parse::<usize>()
+                    .map_err(|_| "--max-body expects megabytes")?;
+                graphrd::http::set_max_request_body(mb.saturating_mul(1 << 20));
+            }
+            "--max-connections" => {
+                let n = value()?
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or("--max-connections expects a positive number")?;
+                graphrd::http::set_max_connections(n);
             }
             "--slow-query" => {
                 let ms = value()?

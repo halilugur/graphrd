@@ -20,9 +20,18 @@ static OPEN_CONNECTIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 /// Sets the largest request body (bytes) and the most connections served at once; further
 /// connections are answered 503 and closed.
 pub fn set_limits(max_request_body: usize, max_connections: usize) {
-    use std::sync::atomic::Ordering::Relaxed;
-    MAX_REQUEST_BODY.store(max_request_body, Relaxed);
-    MAX_CONNECTIONS.store(max_connections, Relaxed);
+    set_max_request_body(max_request_body);
+    set_max_connections(max_connections);
+}
+
+/// Sets the largest request body (bytes); larger ones are answered 413.
+pub fn set_max_request_body(bytes: usize) {
+    MAX_REQUEST_BODY.store(bytes, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Sets the most connections served at once; further ones are answered 503 and closed.
+pub fn set_max_connections(n: usize) {
+    MAX_CONNECTIONS.store(n, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Counts a connection while it is served.
@@ -490,9 +499,18 @@ fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
                 MAX_REQUEST_BODY.load(std::sync::atomic::Ordering::Relaxed),
             )?
         } else {
-            let len: usize = hdr("content-length")
-                .and_then(|l| l.parse().ok())
-                .unwrap_or(0);
+            // an unreadable length would leave the connection out of step with the client
+            let len: usize = match hdr("content-length").map(|l| l.trim().parse()) {
+                None => 0,
+                Some(Ok(len)) => len,
+                Some(Err(_)) => {
+                    return write_response(
+                        reader.get_mut(),
+                        Response::text(400, "bad Content-Length"),
+                        false,
+                    );
+                }
+            };
             if len > MAX_REQUEST_BODY.load(std::sync::atomic::Ordering::Relaxed) {
                 return write_response(
                     reader.get_mut(),
@@ -500,9 +518,7 @@ fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
                     false,
                 );
             }
-            let mut body = vec![0u8; len];
-            reader.read_exact(&mut body)?;
-            body
+            read_body(&mut reader, len)?
         };
         let keep_alive = match hdr("connection").map(|c| c.to_ascii_lowercase()) {
             Some(c) if c.contains("close") => false,
@@ -522,14 +538,34 @@ fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
         if head_only {
             let len = resp.body.len();
             resp.body.clear();
-            resp.headers
-                .push(("Content-Length".into(), len.to_string()));
+            if !resp
+                .headers
+                .iter()
+                .any(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+            {
+                resp.headers
+                    .push(("Content-Length".into(), len.to_string()));
+            }
         }
         write_response(reader.get_mut(), resp, keep_alive)?;
         if !keep_alive {
             return Ok(());
         }
     }
+}
+
+/// A body of `len` bytes, read as it arrives: the buffer grows with what the client actually
+/// sent, not with the length it announced.
+fn read_body<R: Read>(r: &mut R, len: usize) -> io::Result<Vec<u8>> {
+    let mut body = Vec::with_capacity(len.min(1 << 20));
+    r.take(len as u64).read_to_end(&mut body)?;
+    if body.len() < len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "body shorter than its length",
+        ));
+    }
+    Ok(body)
 }
 
 fn read_chunked<R: BufRead>(r: &mut R, max: usize) -> io::Result<Vec<u8>> {
@@ -553,11 +589,12 @@ fn read_chunked<R: BufRead>(r: &mut R, max: usize) -> io::Result<Vec<u8>> {
         if body.len().saturating_add(size) > max {
             return Err(io::Error::new(io::ErrorKind::InvalidData, "body too large"));
         }
-        let start = body.len();
-        body.resize(start + size, 0);
-        r.read_exact(&mut body[start..])?;
+        body.extend(read_body(r, size)?);
         let mut crlf = [0u8; 2];
         r.read_exact(&mut crlf)?;
+        if &crlf != b"\r\n" {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "bad chunk end"));
+        }
     }
 }
 
@@ -1022,4 +1059,80 @@ pub fn encode_form(pairs: &[(String, String)]) -> String {
         .map(|(k, v)| format!("{}={}", percent_encode(k), percent_encode(v)))
         .collect::<Vec<_>>()
         .join("&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A connection whose client has sent `input` and then waits.
+    struct Conn {
+        input: io::Cursor<Vec<u8>>,
+        output: Vec<u8>,
+    }
+
+    impl Read for Conn {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.input.read(buf)
+        }
+    }
+
+    impl Write for Conn {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.output.write(buf)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Serve `input` on one connection; the handler answers with the body's length.
+    fn exchange(input: &[u8]) -> (io::Result<()>, String) {
+        let handler: Handler = Arc::new(|r: &Request| {
+            Response::text(200, r.body.len().to_string()).with_header("Content-Length", "1")
+        });
+        let mut conn = Conn {
+            input: io::Cursor::new(input.to_vec()),
+            output: Vec::new(),
+        };
+        let r = connection(&mut conn, handler);
+        (r, String::from_utf8_lossy(&conn.output).into_owned())
+    }
+
+    #[test]
+    fn unreadable_content_length_is_refused() {
+        let (_, out) = exchange(b"POST / HTTP/1.1\r\nContent-Length: 12abc\r\n\r\nhello");
+        assert!(out.starts_with("HTTP/1.1 400"), "{out}");
+    }
+
+    #[test]
+    fn announced_length_is_not_allocated_up_front() {
+        // a client that announces far more than it sends gets an error, not a 2 GB buffer
+        let (r, out) = exchange(b"POST / HTTP/1.1\r\nContent-Length: 2000000000\r\n\r\nabc");
+        assert!(r.is_err() && out.is_empty(), "{out}");
+        let (_, out) =
+            exchange(b"POST / HTTP/1.1\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc");
+        assert!(
+            out.starts_with("HTTP/1.1 200") && out.ends_with("\r\n\r\n3"),
+            "{out}"
+        );
+    }
+
+    #[test]
+    fn chunked_body_must_end_its_chunks_properly() {
+        let (_, out) = exchange(
+            b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\n0\r\n\r\n",
+        );
+        assert!(out.starts_with("HTTP/1.1 200"), "{out}");
+        let (r, _) =
+            exchange(b"POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcXY0\r\n\r\n");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn head_keeps_a_single_content_length() {
+        let (_, out) = exchange(b"HEAD / HTTP/1.1\r\nConnection: close\r\n\r\n");
+        let n = out.to_ascii_lowercase().matches("content-length").count();
+        assert_eq!(n, 1, "{out}");
+    }
 }
