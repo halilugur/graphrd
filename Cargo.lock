@@ -37,7 +37,7 @@ dependencies = [
 
 [[package]]
 name = "graphrd"
-version = "1.0.2"
+version = "1.0.3"
 dependencies = [
  "ring",
  "rustls",
