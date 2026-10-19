@@ -994,6 +994,110 @@ mod tests {
     }
 
     #[test]
+    fn string_tests_in_place_match_the_general_path() {
+        let mut st = Store::memory();
+        update(
+            &mut st,
+            r#"INSERT DATA {
+                <http://e/s1> <http://e/p> "abc" . <http://e/s2> <http://e/p> "abc"@en .
+                <http://e/s3> <http://e/p> "ABC" . <http://e/s4> <http://e/p> 5 .
+                <http://e/s5> <http://e/p> <http://e/abc> .
+                <http://e/s6> <http://e/p> "xyz"^^<http://www.w3.org/2001/XMLSchema#string> .
+                <http://e/s7> <http://e/p> "abcabc"@fr . <http://e/s1> <http://e/q> "zab" }"#,
+            "",
+            &HashMap::new(),
+        )
+        .unwrap();
+        let subjects = |filter: &str| {
+            let q = format!(
+                "SELECT ?s {{ ?s <http://e/p> ?o OPTIONAL {{ ?s <http://e/q> ?u }} FILTER({filter}) }}"
+            );
+            let mut v: Vec<String> = run(&st, &q)
+                .into_iter()
+                .map(|r| r[0].as_ref().unwrap().value().to_string())
+                .collect();
+            v.sort();
+            v
+        };
+        // constant arguments take the in-place path; CONCAT(...) makes the same test go
+        // through the general one
+        let pairs = [
+            (r#"CONTAINS(?o, "b")"#, r#"CONTAINS(?o, CONCAT("b"))"#),
+            (r#"CONTAINS(?o, "b"@en)"#, r#"CONTAINS(?o, CONCAT("b"@en))"#),
+            (r#"STRSTARTS(?o, "a")"#, r#"STRSTARTS(?o, CONCAT("a"))"#),
+            (r#"STRENDS(?o, "c")"#, r#"STRENDS(?o, CONCAT("c"))"#),
+            (r#"REGEX(?o, "^a", "i")"#, r#"REGEX(?o, CONCAT("^a"), "i")"#),
+            (r#"REGEX(?o, "b")"#, r#"REGEX(?o, CONCAT("b"))"#),
+            (r#"!CONTAINS(?o, "b")"#, r#"!CONTAINS(?o, CONCAT("b"))"#),
+            (r#"CONTAINS(?u, "a")"#, r#"CONTAINS(?u, CONCAT("a"))"#),
+            (r#"!CONTAINS(?u, "a")"#, r#"!CONTAINS(?u, CONCAT("a"))"#),
+        ];
+        for (fast, slow) in pairs {
+            assert_eq!(subjects(fast), subjects(slow), "{fast} vs {slow}");
+        }
+        let e = |s: &[&str]| {
+            s.iter()
+                .map(|x| format!("http://e/{x}"))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(subjects(r#"CONTAINS(?o, "b")"#), e(&["s1", "s2", "s7"]));
+        assert_eq!(
+            subjects(r#"CONTAINS(?o, "b"@en)"#),
+            e(&["s2"]),
+            "a language must match"
+        );
+        assert_eq!(
+            subjects(r#"REGEX(?o, "^a", "i")"#),
+            e(&["s1", "s2", "s3", "s7"])
+        );
+        // numbers and IRIs are no strings: an error, so false, and false under ! as well
+        assert_eq!(subjects(r#"!CONTAINS(?o, "b")"#), e(&["s3", "s6"]));
+        assert_eq!(
+            subjects(r#"CONTAINS(?u, "a")"#),
+            e(&["s1"]),
+            "unbound ?u: an error"
+        );
+    }
+
+    #[test]
+    fn large_order_by_with_offset_on_disk() {
+        // a sort over more rows than the term cache holds, keyed by a variable's id
+        let dir = std::env::temp_dir().join(format!("graphrd-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = Store::open(&dir).unwrap();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..60_000u32 {
+            let k = i.wrapping_mul(7919) % 60_000; // inserted out of order
+            data.push_str(&format!(" <http://e/{k}> <http://e/n> \"n{k:05}\" ."));
+        }
+        data.push_str(r#" <http://e/a> <http://e/m> 1 . <http://e/b> <http://e/m> "1" ."#);
+        data.push_str(r#" <http://e/c> <http://e/m> "0" . <http://e/d> <http://e/m> 2 }"#);
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        st.checkpoint().unwrap();
+        let st = Store::open(&dir).unwrap();
+        let col = |q: &str| -> Vec<String> {
+            run(&st, q)
+                .into_iter()
+                .map(|r| r.last().unwrap().as_ref().unwrap().value().to_string())
+                .collect()
+        };
+        assert_eq!(
+            col("SELECT ?n { ?s <http://e/n> ?n } ORDER BY ?n OFFSET 30000 LIMIT 3"),
+            ["n30000", "n30001", "n30002"]
+        );
+        assert_eq!(
+            col("SELECT ?n { ?s <http://e/n> ?n } ORDER BY DESC(?n) LIMIT 2"),
+            ["n59999", "n59998"]
+        );
+        // a key that reads one variable: two terms with equal values share a rank
+        let keys =
+            col("SELECT ?k { ?s <http://e/m> ?m BIND(STR(?m) AS ?k) } ORDER BY STR(?m) LIMIT 3");
+        assert_eq!(keys, ["0", "1", "1"]);
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn huge_limit_does_not_overflow() {
         let mut st = Store::memory();
         update(

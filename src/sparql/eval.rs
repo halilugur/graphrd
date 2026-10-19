@@ -1116,10 +1116,57 @@ impl<'a> Ctx<'a> {
     }
 
     fn filter(&self, e: &Expr, s: &Sol, g: Active) -> bool {
+        if let Some(r) = self.string_test(e, s) {
+            return r.unwrap_or(false);
+        }
         self.expr(e, s, g)
             .as_ref()
             .and_then(func::ebv)
             .unwrap_or(false)
+    }
+
+    /// `CONTAINS`, `STRSTARTS`, `STRENDS` or `REGEX` of a variable and constants, tested on
+    /// the variable's term where it lies (read in bulk, or query-local) rather than on a copy:
+    /// a filter over many strings would otherwise copy each. None when `e` has another shape;
+    /// Some(None) for an error (an unbound variable, a term that is not a string).
+    fn string_test(&self, e: &Expr, s: &Sol) -> Option<Option<bool>> {
+        let Expr::Call(name, args) = e else {
+            return None;
+        };
+        if !matches!(
+            name.as_str(),
+            "CONTAINS" | "STRSTARTS" | "STRENDS" | "REGEX"
+        ) {
+            return None;
+        }
+        let (Some(Expr::Var(v)), rest) = (args.first(), args.get(1..).unwrap_or(&[])) else {
+            return None;
+        };
+        let constant = |i: usize| match rest.get(i) {
+            Some(Expr::Const(t)) => Some(Some(t)),
+            None => Some(None),
+            Some(_) => None,
+        };
+        let consts = [constant(0)?, constant(1)?];
+        if rest.len() > 2 {
+            return None;
+        }
+        let Some(id) = s[*v] else {
+            return Some(None);
+        };
+        Some(self.with_term(id, |t| func::string_test(name, t, consts)))
+    }
+
+    /// Call `f` with the term an id stands for, borrowed where the query holds it (its own
+    /// terms, or those read in bulk) and from the dictionary otherwise.
+    fn with_term<T>(&self, id: Id, f: impl FnOnce(&Term) -> T) -> T {
+        if id >= LOCAL {
+            return f(&self.local.borrow()[(id - LOCAL) as usize]);
+        }
+        if let Some(t) = self.bulk.borrow().get(&id) {
+            return f(t);
+        }
+        f(&self.store.dict.term(id))
     }
 
     /// The store id of a constant, memoized for this query.
@@ -2160,6 +2207,9 @@ impl<'a> Ctx<'a> {
                     self.fts_function(name, &vals)
                 }
                 _ => {
+                    if let Some(r) = self.string_test(e, s) {
+                        return r.map(Term::boolean);
+                    }
                     let vals: Vec<Option<Term>> = args.iter().map(|a| self.expr(a, s, g)).collect();
                     func::call(name, &vals, &self.base)
                 }
@@ -2302,6 +2352,14 @@ impl<'a> Ctx<'a> {
                     idx.push(i);
                     continue;
                 }
+                // the key reads one variable, so its value follows from the variable's id: no
+                // map by term (hashing and copying each). Ids with equal values get slots of
+                // their own, which rank equal below.
+                let i = vals.len() as u32;
+                vals.push(self.expr(first, s, Active::Default));
+                by_id.insert(s[v], i);
+                idx.push(i);
+                continue;
             }
             let t = self.expr(first, s, Active::Default);
             let i = match by_term.get(&t) {
@@ -2312,9 +2370,6 @@ impl<'a> Ctx<'a> {
                     vals.len() as u32 - 1
                 }
             };
-            if let Some(v) = first_var {
-                by_id.insert(s[v], i);
-            }
             idx.push(i);
         }
         let cmp0 = |a: &u32, b: &u32| {
