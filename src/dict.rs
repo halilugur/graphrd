@@ -113,16 +113,16 @@ fn hash_bytes(b: &[u8]) -> u64 {
     h ^ (h >> 33)
 }
 
-struct Lru<K, V> {
-    map: HashMap<K, V>,
+struct Lru<K, V, S = std::collections::hash_map::RandomState> {
+    map: HashMap<K, V, S>,
     order: VecDeque<K>,
     cap: usize,
 }
 
-impl<K: std::hash::Hash + Eq + Clone, V: Clone> Lru<K, V> {
+impl<K: std::hash::Hash + Eq + Clone, V: Clone, S: std::hash::BuildHasher + Default> Lru<K, V, S> {
     fn new(cap: usize) -> Self {
         Lru {
-            map: HashMap::new(),
+            map: HashMap::default(),
             order: VecDeque::new(),
             cap,
         }
@@ -156,7 +156,8 @@ struct DiskDict {
 /// behind a short-held lock; decoded terms are cached in sharded LRUs.
 pub struct Dict {
     inner: RwLock<DictInner>,
-    by_id: Sharded<Id, Term>,
+    /// Keyed by ids, which the dictionary hands out: the fast hash suits them (see `fastmap`).
+    by_id: Sharded<Id, Term, std::hash::BuildHasherDefault<crate::fastmap::FxHasher>>,
     by_term: Sharded<Term, Id>,
 }
 
@@ -173,11 +174,13 @@ const SHARDS: usize = 16;
 /// FIFO-evicting cache split across independently locked shards. Lookups take a shared lock
 /// (they do not reorder anything), so hot terms such as common predicates do not serialize
 /// concurrent queries.
-struct Sharded<K, V> {
-    shards: Vec<RwLock<Lru<K, V>>>,
+struct Sharded<K, V, S = std::collections::hash_map::RandomState> {
+    shards: Vec<RwLock<Lru<K, V, S>>>,
 }
 
-impl<K: std::hash::Hash + Eq + Clone, V: Clone> Sharded<K, V> {
+impl<K: std::hash::Hash + Eq + Clone, V: Clone, S: std::hash::BuildHasher + Default>
+    Sharded<K, V, S>
+{
     fn new(cap: usize) -> Self {
         Sharded {
             shards: (0..SHARDS)
@@ -185,7 +188,7 @@ impl<K: std::hash::Hash + Eq + Clone, V: Clone> Sharded<K, V> {
                 .collect(),
         }
     }
-    fn shard(&self, k: &K) -> &RwLock<Lru<K, V>> {
+    fn shard(&self, k: &K) -> &RwLock<Lru<K, V, S>> {
         use std::hash::{BuildHasher, Hasher};
         let mut hasher = FIXED.build_hasher();
         k.hash(&mut hasher);
@@ -473,7 +476,7 @@ impl Dict {
     /// them one by one; they bypass the cache, so a large scan does not evict the hot terms.
     /// They are read in a few large pieces: the ids sorted, near ones grouped, each group's
     /// offsets and bytes taken with one read each (rather than two reads a term).
-    pub fn read_many(&self, ids: &mut Vec<Id>, out: &mut HashMap<Id, Term>) {
+    pub fn read_many(&self, ids: &mut Vec<Id>, out: &mut crate::fastmap::FastMap<Id, Term>) {
         const GAP: Id = 64; // ids further apart start a new group
         const SPAN: Id = 16_384; // ids per group at most
         const BYTES: u64 = 4 << 20; // a group whose bytes are larger reads its terms singly
@@ -750,7 +753,7 @@ mod tests {
             .chain([ids[39_999], ids[5], ids[5], ids[20_000]])
             .collect();
         let _ = d.term(ids[14]); // a cached term is left to the cache
-        let mut out = HashMap::new();
+        let mut out = crate::fastmap::FastMap::default();
         d.read_many(&mut want, &mut out);
         assert_eq!(out.len(), 40_000 / 7 + 1 + 3 - 1);
         for (id, t) in &out {

@@ -13,7 +13,9 @@
 //! Nothing is stored: answers follow the schema as it is when the query starts.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use crate::fastmap::{FastMap, FastSet};
 
 use crate::rdf::{OWL, RDF, RDFS};
 use crate::sparql::ast::Path;
@@ -24,22 +26,22 @@ pub struct AtQuery {
     /// `rdf:type`.
     pub ty: Id,
     /// C -> its direct subclasses (equivalences both ways); and the other direction.
-    sub_class: HashMap<Id, Vec<Id>>,
-    super_class: HashMap<Id, Vec<Id>>,
-    sub_prop: HashMap<Id, Vec<Id>>,
+    sub_class: FastMap<Id, Vec<Id>>,
+    super_class: FastMap<Id, Vec<Id>>,
+    sub_prop: FastMap<Id, Vec<Id>>,
     /// (property, class) pairs of rdfs:domain / rdfs:range.
     domains: Vec<(Id, Id)>,
     ranges: Vec<(Id, Id)>,
-    inverse: HashMap<Id, Vec<Id>>,
-    symmetric: HashSet<Id>,
-    transitive: HashSet<Id>,
-    closure_down: RefCell<HashMap<Id, Vec<Id>>>,
-    closure_up: RefCell<HashMap<Id, Vec<Id>>>,
-    props_down: RefCell<HashMap<Id, Vec<Id>>>,
+    inverse: FastMap<Id, Vec<Id>>,
+    symmetric: FastSet<Id>,
+    transitive: FastSet<Id>,
+    closure_down: RefCell<FastMap<Id, Vec<Id>>>,
+    closure_up: RefCell<FastMap<Id, Vec<Id>>>,
+    props_down: RefCell<FastMap<Id, Vec<Id>>>,
 }
 
-fn reach(edges: &HashMap<Id, Vec<Id>>, from: Id) -> Vec<Id> {
-    let mut seen = HashSet::from([from]);
+fn reach(edges: &FastMap<Id, Vec<Id>>, from: Id) -> Vec<Id> {
+    let mut seen: FastSet<Id> = [from].into_iter().collect();
     let mut queue = VecDeque::from([from]);
     while let Some(n) = queue.pop_front() {
         for &m in edges.get(&n).map_or(&[][..], |v| v.as_slice()) {
@@ -61,14 +63,14 @@ impl AtQuery {
         let ty = id(format!("{RDF}type"))?;
         let mut q = AtQuery {
             ty,
-            sub_class: HashMap::new(),
-            super_class: HashMap::new(),
-            sub_prop: HashMap::new(),
+            sub_class: FastMap::default(),
+            super_class: FastMap::default(),
+            sub_prop: FastMap::default(),
             domains: Vec::new(),
             ranges: Vec::new(),
-            inverse: HashMap::new(),
-            symmetric: HashSet::new(),
-            transitive: HashSet::new(),
+            inverse: FastMap::default(),
+            symmetric: FastSet::default(),
+            transitive: FastSet::default(),
             closure_down: RefCell::default(),
             closure_up: RefCell::default(),
             props_down: RefCell::default(),
@@ -82,10 +84,10 @@ impl AtQuery {
                 None => Vec::new(),
             }
         };
-        let edge = |down: &mut HashMap<Id, Vec<Id>>, sup: Id, sub: Id| {
+        let edge = |down: &mut FastMap<Id, Vec<Id>>, sup: Id, sub: Id| {
             down.entry(sup).or_default().push(sub)
         };
-        let (mut down, mut up) = (HashMap::new(), HashMap::new());
+        let (mut down, mut up) = (FastMap::default(), FastMap::default());
         for (a, b) in pairs(id(format!("{RDFS}subClassOf"))) {
             edge(&mut down, b, a);
             edge(&mut up, a, b);
@@ -98,7 +100,7 @@ impl AtQuery {
         }
         q.sub_class = down;
         q.super_class = up;
-        let mut props = HashMap::new();
+        let mut props = FastMap::default();
         for (a, b) in pairs(id(format!("{RDFS}subPropertyOf"))) {
             edge(&mut props, b, a);
         }
@@ -113,13 +115,13 @@ impl AtQuery {
             q.inverse.entry(a).or_default().push(b);
             q.inverse.entry(b).or_default().push(a);
         }
-        let typed = |class: String| -> HashSet<Id> {
+        let typed = |class: String| -> FastSet<Id> {
             match id(class) {
                 Some(c) => store
                     .explicit_matching(None, Some(ty), Some(c), None)
                     .map(|t| t[0])
                     .collect(),
-                None => HashSet::new(),
+                None => FastSet::default(),
             }
         };
         q.symmetric = typed(format!("{OWL}SymmetricProperty"));
@@ -156,7 +158,7 @@ impl AtQuery {
 
     /// Properties whose subjects (`domain`) or objects (`range`) are instances of C.
     pub fn typing_properties(&self, c: Id, range: bool) -> Vec<Id> {
-        let below: HashSet<Id> = self.subclasses(c).into_iter().collect();
+        let below: FastSet<Id> = self.subclasses(c).into_iter().collect();
         let mut out = Vec::new();
         for &(p, d) in if range { &self.ranges } else { &self.domains } {
             if below.contains(&d) {

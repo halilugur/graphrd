@@ -7,7 +7,7 @@
 //! in a footer, and blocks are read on demand through a shared LRU cache, so
 //! memory use is bounded by the memtable and the cache, not the data size.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::ops::Bound;
@@ -97,7 +97,7 @@ const CACHE_SHARDS: usize = 16;
 
 struct CacheInner {
     /// Each block with whether it was read since eviction last passed it.
-    map: HashMap<(u64, u32), (Block, std::sync::atomic::AtomicBool)>,
+    map: crate::fastmap::FastMap<(u64, u32), (Block, std::sync::atomic::AtomicBool)>,
     order: VecDeque<(u64, u32)>,
     capacity: usize,
 }
@@ -110,7 +110,7 @@ impl BlockCache {
             shards: (0..CACHE_SHARDS)
                 .map(|_| {
                     RwLock::new(CacheInner {
-                        map: HashMap::new(),
+                        map: Default::default(),
                         order: VecDeque::new(),
                         capacity: per,
                     })

@@ -10,6 +10,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::fastmap::{FastMap, FastSet};
 use crate::fts;
 use crate::lsm::{BlockCache, Index, Key};
 use crate::rdf::{Quad, Term, turtle};
@@ -770,7 +771,7 @@ impl Store {
         let logging = self.wal.is_some();
         let (mut r, mut a) = (0, 0);
         // DRed: find what may depend on the removed triples while they still exist.
-        let mut overdeleted: HashSet<Triple> = HashSet::new();
+        let mut overdeleted: crate::fastmap::FastSet<Triple> = Default::default();
         let mut removed_triples: Vec<Triple> = Vec::new();
         if let Some(reasoner) = self.reasoner.take() {
             let gone: Vec<Triple> = remove
@@ -891,7 +892,7 @@ impl Store {
 
     /// DRed: drop overdeleted inferences, then re-derive those that still
     /// have support and propagate from them.
-    fn retract(&mut self, overdeleted: HashSet<Triple>, removed: Vec<Triple>) {
+    fn retract(&mut self, overdeleted: crate::fastmap::FastSet<Triple>, removed: Vec<Triple>) {
         let Some(reasoner) = self.reasoner.take() else {
             return;
         };
@@ -1236,7 +1237,7 @@ impl Store {
                 self.rank_outdated = true;
             }
         }
-        let mut seen = HashSet::new();
+        let mut seen = FastSet::default();
         for (l, ids) in locals.iter().zip(&globals) {
             for &o in &l.literal_objects {
                 let id = ids[o as usize];
@@ -1388,7 +1389,7 @@ impl Store {
             let Some(last) = chunk.last().copied() else {
                 break;
             };
-            let mut seen = HashSet::new();
+            let mut seen = FastSet::default();
             let delta: Vec<Triple> = chunk
                 .iter()
                 .filter(|k| k[3] != INFERRED)
@@ -1422,12 +1423,10 @@ impl Store {
     /// PageRank over explicit links between resources, normalized so the
     /// most important node scores 1.
     pub fn compute_rank(&mut self) -> usize {
-        let mut out_links: std::collections::HashMap<Id, Vec<Id>> =
-            std::collections::HashMap::new();
-        let mut nodes: std::collections::HashMap<Id, f64> = std::collections::HashMap::new();
+        let mut out_links: FastMap<Id, Vec<Id>> = FastMap::default();
+        let mut nodes: FastMap<Id, f64> = FastMap::default();
         let lit = |st: &Store, id: Id| st.dict.term(id).is_literal();
-        let mut literal_cache: std::collections::HashMap<Id, bool> =
-            std::collections::HashMap::new();
+        let mut literal_cache: FastMap<Id, bool> = FastMap::default();
         for q in self.explicit_matching(None, None, None, None) {
             let is_lit = *literal_cache.entry(q[O]).or_insert_with(|| lit(self, q[O]));
             nodes.entry(q[S]).or_insert(0.0);
@@ -1438,8 +1437,7 @@ impl Store {
         }
         let n = nodes.len().max(1) as f64;
         let d = 0.85;
-        let mut rank: std::collections::HashMap<Id, f64> =
-            nodes.keys().map(|&k| (k, 1.0 / n)).collect();
+        let mut rank: FastMap<Id, f64> = nodes.keys().map(|&k| (k, 1.0 / n)).collect();
         for _ in 0..20 {
             let dangling: f64 = rank
                 .iter()
@@ -1447,8 +1445,7 @@ impl Store {
                 .map(|(_, v)| v)
                 .sum();
             let base = (1.0 - d) / n + d * dangling / n;
-            let mut next: std::collections::HashMap<Id, f64> =
-                nodes.keys().map(|&k| (k, base)).collect();
+            let mut next: FastMap<Id, f64> = nodes.keys().map(|&k| (k, base)).collect();
             for (s, targets) in &out_links {
                 let share = d * rank[s] / targets.len() as f64;
                 for t in targets {
@@ -1497,7 +1494,7 @@ impl Store {
 
     /// Distinct IRIs used as subject, predicate or class, for autocomplete.
     pub fn resource_iris(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FastSet::default();
         let mut out = Vec::new();
         let mut add = |id: Id, st: &Store, out: &mut Vec<String>| {
             if seen.insert(id) {
@@ -2074,7 +2071,7 @@ impl Store {
     /// that do, in no particular order.
     pub fn geo_candidates(&self, b: crate::geo::Bbox) -> Vec<Id> {
         let (ranges, coarse) = crate::geo::query_cells(b);
-        let mut out = HashSet::new();
+        let mut out = FastSet::default();
         for (from, to) in ranges {
             let last = to - 1;
             out.extend(
@@ -2124,7 +2121,7 @@ impl Store {
     }
 
     /// The literals a clause can match (a superset: candidates are verified against the text).
-    fn fts_candidates(&self, c: &fts::Clause) -> HashSet<Id> {
+    fn fts_candidates(&self, c: &fts::Clause) -> FastSet<Id> {
         match c.plan() {
             // read only the rarest key's postings; probe the others per candidate
             fts::Plan::All(keys) => {
@@ -2132,7 +2129,7 @@ impl Store {
                     .iter()
                     .min_by_key(|&&k| self.fts_postings(k).take(1024).count())
                     .expect("a clause has at least one key");
-                let mut set: HashSet<Id> = self.fts_postings(rarest).collect();
+                let mut set: FastSet<Id> = self.fts_postings(rarest).collect();
                 for &k in keys.iter().filter(|&&k| k != rarest) {
                     set.retain(|&id| self.fts.contains(&[k, id, 0, 0]));
                 }
@@ -2230,10 +2227,10 @@ impl Store {
     ) -> Vec<(Id, f64)> {
         // each clause's candidates (their number is its document frequency); a group is the
         // union of its clauses, and groups intersect
-        let mut sets: Vec<HashSet<Id>> = Vec::new();
+        let mut sets: Vec<FastSet<Id>> = Vec::new();
         let mut counts = Vec::new();
         for g in &q.groups {
-            let mut union = HashSet::new();
+            let mut union = FastSet::default();
             for c in g {
                 let set = self.fts_candidates(c);
                 counts.push(set.len() as f64);
@@ -2392,7 +2389,7 @@ fn next_key(k: Key) -> Key {
 /// The reasoner sees the store as one graph-agnostic set of triples.
 impl Facts for Store {
     fn matching(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>) -> Vec<Triple> {
-        let mut seen = HashSet::new();
+        let mut seen = FastSet::default();
         self.quads_matching(s, p, o, None)
             .map(|q| [q[0], q[1], q[2]])
             .filter(|t| seen.insert(*t))
