@@ -2275,10 +2275,12 @@ impl<'a> Ctx<'a> {
         }
         let start = q.offset.min(projected.len());
         let end = match q.limit {
-            Some(l) => (start + l).min(projected.len()),
+            Some(l) => start.saturating_add(l).min(projected.len()),
             None => projected.len(),
         };
-        Ok((vars, projected[start..end].to_vec()))
+        projected.truncate(end);
+        projected.drain(..start);
+        Ok((vars, projected))
     }
 
     /// ORDER BY. The first key is computed once per distinct value (once per distinct id when

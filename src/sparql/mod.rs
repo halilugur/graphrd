@@ -910,6 +910,27 @@ mod tests {
     }
 
     #[test]
+    fn huge_limit_does_not_overflow() {
+        let mut st = Store::memory();
+        update(
+            &mut st,
+            "INSERT DATA { <http://e/a> <http://e/p> 1, 2, 3 }",
+            "",
+            &HashMap::new(),
+        )
+        .unwrap();
+        let max = u64::MAX;
+        for q in [
+            format!("SELECT * {{ ?s ?p ?o }} OFFSET 1 LIMIT {max}"),
+            format!("SELECT * {{ ?s ?p ?o }} ORDER BY ?o OFFSET 1 LIMIT {max}"),
+            format!("SELECT (SUM(?o) AS ?x) {{ ?s ?p ?o }} LIMIT {max} OFFSET 2"),
+        ] {
+            let expected = if q.contains("SUM") { 0 } else { 2 };
+            assert_eq!(run(&st, &q).len(), expected, "{q}");
+        }
+    }
+
+    #[test]
     fn single_variable_filters_are_decided_once_per_value() {
         let mut st = Store::memory();
         let mut data = String::from("INSERT DATA {");
