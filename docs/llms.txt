@@ -23,7 +23,8 @@ Docs:
 - [Administration](https://graphrd.org/admin.md)
 - [Cluster](https://graphrd.org/cluster.md): Several GraphRD servers form a cluster with the Raft consensus protocol. Every node holds all the
 - [Storage](https://graphrd.org/storage.md): This page describes how a repository keeps its data: the files, the indexes, the dictionary,
-- [Performance](https://graphrd.org/performance.md)
+- [Performance](https://graphrd.org/performance.md): All figures are GraphRD 1.0.2 unless a column says otherwise. Query latency is measured natively
+- [Comparison](https://graphrd.org/compare.md): GraphRD 1.0.2 measured against two well-known RDF stores — Oxigraph 0.5.11 and
 - [Security](https://graphrd.org/security.md)
 
 - [Full documentation](https://graphrd.org/llms-full.txt): every page in one file
