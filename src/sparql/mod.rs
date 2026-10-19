@@ -910,6 +910,55 @@ mod tests {
     }
 
     #[test]
+    fn minus_and_optional_are_hash_joins() {
+        let mut st = Store::memory();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..40_000 {
+            data.push_str(&format!(" <http://e/{i}> <http://p/a> {i} ."));
+            if i % 2 == 0 {
+                data.push_str(&format!(" <http://e/{i}> <http://p/b> \"x\" ."));
+            }
+            if i % 5 == 0 {
+                data.push_str(&format!(" <http://e/{i}> <http://p/c> \"y\" ."));
+            }
+        }
+        data.push_str(" }");
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        let count = |q: &str| run(&st, q)[0][0].as_ref().unwrap().value().to_string();
+        let t0 = std::time::Instant::now();
+        // right sides whose rows bind different variables (one table per shape)
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 OPTIONAL { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?y } } }"
+            ),
+            "44000" // a row per b (20000) and per c (8000), and the 16000 with neither
+        );
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 MINUS { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?y } } }"
+            ),
+            "16000"
+        );
+        // MINUS removes nothing when no variable is shared
+        assert_eq!(
+            count("SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o MINUS { ?t <http://p/b> ?x } }"),
+            "40000"
+        );
+        // a group join with a filter on both sides
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 OPTIONAL { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?x } } FILTER(!BOUND(?x)) }"
+            ),
+            "16000"
+        );
+        // these were nested loops: 40000 x 28000 comparisons took tens of seconds
+        assert!(t0.elapsed().as_secs() < 5, "{:?}", t0.elapsed());
+    }
+
+    #[test]
     fn huge_limit_does_not_overflow() {
         let mut st = Store::memory();
         update(

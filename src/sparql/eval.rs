@@ -666,16 +666,17 @@ impl<'a> Ctx<'a> {
                     }
                 } else {
                     let right = self.eval(b, g, seed)?;
+                    let mut index = Compatible::new(&right);
                     for l in left {
                         let mut any = false;
-                        for r in &right {
-                            if let Some(m) = merge(&l, r) {
-                                if cond.as_ref().is_none_or(|c| self.filter(c, &m, g)) {
-                                    out.push(m);
-                                    any = true;
-                                }
+                        index.each(&l, false, |r| {
+                            let m = merge(&l, r).expect("compatible solutions merge");
+                            if cond.as_ref().is_none_or(|c| self.filter(c, &m, g)) {
+                                out.push(m);
+                                any = true;
                             }
-                        }
+                            true
+                        });
                         if !any {
                             out.push(l);
                         }
@@ -691,20 +692,16 @@ impl<'a> Ctx<'a> {
             Pattern::Minus(a, b) => {
                 let left = self.eval(a, g, seed)?;
                 let right = self.eval(b, g, &self.empty_sol())?;
+                // a row goes when a compatible right row shares a variable with it
+                let mut index = Compatible::new(&right);
                 left.into_iter()
                     .filter(|l| {
-                        !right.iter().any(|r| {
-                            let mut shared = false;
-                            for i in 0..l.len() {
-                                if let (Some(x), Some(y)) = (l[i], r[i]) {
-                                    if x != y {
-                                        return false;
-                                    }
-                                    shared = true;
-                                }
-                            }
-                            shared
-                        })
+                        let mut found = false;
+                        index.each(l, true, |_| {
+                            found = true;
+                            false
+                        });
+                        !found
                     })
                     .collect()
             }
@@ -2996,38 +2993,81 @@ fn join(left: Vec<Sol>, right: Vec<Sol>) -> Vec<Sol> {
     if left.is_empty() || right.is_empty() {
         return Vec::new();
     }
-    // Hash join on a variable bound in every solution of both sides.
-    let n = left[0].len();
-    let key = (0..n)
-        .find(|&v| left.iter().all(|s| s[v].is_some()) && right.iter().all(|s| s[v].is_some()));
     let mut out = Vec::new();
-    match key {
-        Some(k) => {
-            let mut table: HashMap<Id, Vec<&Sol>> = HashMap::new();
-            for r in &right {
-                table.entry(r[k].unwrap()).or_default().push(r);
-            }
-            for l in &left {
-                if let Some(rs) = table.get(&l[k].unwrap()) {
-                    for r in rs {
-                        if let Some(m) = merge(l, r) {
-                            out.push(m);
-                        }
+    let mut index = Compatible::new(&right);
+    for l in &left {
+        index.each(l, false, |r| {
+            out.push(merge(l, r).expect("compatible solutions merge"));
+            true
+        });
+    }
+    out
+}
+
+/// Solutions indexed for finding those compatible with another solution (equal wherever
+/// both are bound) without comparing against each: they are grouped by the variables they
+/// bind, and each group is hashed on the variables it shares with the probing solution (one
+/// table per group and set of shared variables, built on first use).
+struct Compatible<'a> {
+    /// (bound variables, solutions binding exactly those)
+    groups: Vec<(Vec<Var>, Vec<&'a Sol>)>,
+    tables: HashMap<(usize, Vec<Var>), HashMap<Vec<Id>, Vec<usize>>>,
+}
+
+impl<'a> Compatible<'a> {
+    fn new(sols: &'a [Sol]) -> Self {
+        let mut by_vars: HashMap<Vec<Var>, usize> = HashMap::new();
+        let mut groups: Vec<(Vec<Var>, Vec<&'a Sol>)> = Vec::new();
+        for s in sols {
+            let vars: Vec<Var> = (0..s.len()).filter(|&v| s[v].is_some()).collect();
+            let i = *by_vars.entry(vars.clone()).or_insert_with(|| {
+                groups.push((vars, Vec::new()));
+                groups.len() - 1
+            });
+            groups[i].1.push(s);
+        }
+        Compatible {
+            groups,
+            tables: HashMap::new(),
+        }
+    }
+
+    /// Call `f` with each solution compatible with `l`, until it returns false. With
+    /// `sharing`, only those binding at least one variable `l` binds too (as MINUS needs).
+    fn each(&mut self, l: &Sol, sharing: bool, mut f: impl FnMut(&Sol) -> bool) {
+        for (gi, (vars, rows)) in self.groups.iter().enumerate() {
+            let shared: Vec<Var> = vars.iter().copied().filter(|&v| l[v].is_some()).collect();
+            if shared.is_empty() {
+                if sharing {
+                    continue;
+                }
+                for r in rows {
+                    if !f(r) {
+                        return;
                     }
                 }
+                continue;
             }
-        }
-        None => {
-            for l in &left {
-                for r in &right {
-                    if let Some(m) = merge(l, r) {
-                        out.push(m);
+            let key: Vec<Id> = shared.iter().map(|&v| l[v].unwrap()).collect();
+            let table = self
+                .tables
+                .entry((gi, shared))
+                .or_insert_with_key(|(_, shared)| {
+                    let mut t: HashMap<Vec<Id>, Vec<usize>> = HashMap::new();
+                    for (i, r) in rows.iter().enumerate() {
+                        t.entry(shared.iter().map(|&v| r[v].unwrap()).collect())
+                            .or_default()
+                            .push(i);
                     }
+                    t
+                });
+            for &i in table.get(&key).into_iter().flatten() {
+                if !f(rows[i]) {
+                    return;
                 }
             }
         }
     }
-    out
 }
 
 /// In-scope, user-visible variables of a pattern, in first-seen order.
