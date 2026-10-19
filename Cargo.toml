@@ -1,6 +1,6 @@
 [package]
 name = "graphrd"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2024"
 homepage = "https://graphrd.org"
 repository = "https://github.com/halilugur/graphrd"
