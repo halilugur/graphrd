@@ -901,6 +901,7 @@ fn mirror(from: &Path, to: &Path, n: &mut (u64, u64)) -> io::Result<()> {
         }
         drop(f);
         fs::rename(&tmp, &dst)?;
+        crate::store::sync_dir(dst.parent().unwrap_or(Path::new(".")))?;
         n.0 += 1;
     }
     for e in fs::read_dir(to)? {

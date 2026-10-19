@@ -212,6 +212,17 @@ fn read_log(path: &Path) -> io::Result<String> {
     })
 }
 
+/// Make renames and new files in `dir` durable (a file's own fsync does not cover its entry
+/// in the directory). Directories cannot be opened for syncing on Windows; there the rename
+/// is durable once it returns.
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
+}
+
 /// The commit time in a log line `c <time>` (None for other lines; Some(None) for a bare `c`).
 fn commit_line(line: &str) -> Option<Option<i64>> {
     match line.strip_prefix('c') {
@@ -321,7 +332,8 @@ impl Manifest {
             f.write_all(text.as_bytes())?;
             f.sync_all()?;
         }
-        fs::rename(&tmp, path)
+        fs::rename(&tmp, path)?;
+        sync_dir(path.parent().unwrap_or(Path::new(".")))
     }
 }
 
@@ -626,6 +638,9 @@ impl Store {
                 v.save(&dir.join(VECTORS))?;
             }
         }
+        // run files, the dictionary's table and the vector graph renamed into place above
+        // must be durable before the manifest names them
+        sync_dir(&dir)?;
         self.manifest().write(&dir.join("MANIFEST"))?;
         let wal = OpenOptions::new()
             .create(true)
@@ -1701,6 +1716,7 @@ impl Store {
             fs::write(&tmp, format!("s {}\n", now_millis()))?;
             OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
             fs::rename(&tmp, &path)?;
+            sync_dir(dir)?;
         }
         let file = OpenOptions::new().append(true).open(&path)?;
         self.history = Some(History {
@@ -1790,6 +1806,7 @@ impl Store {
             f.sync_all()?;
         }
         fs::rename(&tmp, &path)?;
+        sync_dir(path.parent().unwrap_or(Path::new(".")))?;
         h.file = BufWriter::new(OpenOptions::new().append(true).open(&path)?);
         h.oldest = new_oldest;
         Ok(())
@@ -1933,6 +1950,7 @@ impl Store {
                 f.sync_all()?;
             }
             fs::rename(&tmp, &path)?;
+            sync_dir(path.parent().unwrap_or(Path::new(".")))?;
             if let Some(h) = &mut self.history {
                 h.file = BufWriter::new(OpenOptions::new().append(true).open(&path)?);
             }
@@ -2876,6 +2894,24 @@ mod tests {
         );
         assert!(!has("x"), "the torn transaction left no trace");
         assert_eq!(st.len(), 2);
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn directory_sync_really_syncs() {
+        let dir = std::env::temp_dir().join(format!("graphrd-dirsync-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        sync_dir(&dir).unwrap();
+        assert!(
+            sync_dir(&dir.join("missing")).is_err(),
+            "it opens the directory, not a no-op"
+        );
+        let mut st = Store::open(&dir).unwrap();
+        st.apply(&[], &[q("a", "p", "b", None)]).unwrap();
+        st.checkpoint().unwrap();
         drop(st);
         let _ = fs::remove_dir_all(&dir);
     }

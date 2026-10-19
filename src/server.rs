@@ -67,7 +67,8 @@ fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         std::io::Write::write_all(&mut f, bytes)?;
         f.sync_all()?;
     }
-    fs::rename(&tmp, path)
+    fs::rename(&tmp, path)?;
+    crate::store::sync_dir(path.parent().unwrap_or(Path::new(".")))
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -992,9 +993,8 @@ impl Auth {
                     .with("created", k.created)
             })
             .collect();
-        let tmp = path.with_extension("tmp");
-        if fs::write(&tmp, Json::Arr(list).to_string()).is_ok() {
-            let _ = fs::rename(&tmp, &path);
+        if let Err(e) = write_private(&path, Json::Arr(list).to_string().as_bytes()) {
+            eprintln!("cannot save {}: {e}", path.display());
         }
     }
 
@@ -1029,9 +1029,8 @@ impl Auth {
                     )
             })
             .collect();
-        let tmp = path.with_extension("tmp");
-        if fs::write(&tmp, Json::Arr(list).to_string()).is_ok() {
-            let _ = fs::rename(&tmp, &path);
+        if let Err(e) = write_private(&path, Json::Arr(list).to_string().as_bytes()) {
+            eprintln!("cannot save {}: {e}", path.display());
         }
     }
 
