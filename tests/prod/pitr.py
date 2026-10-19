@@ -24,7 +24,11 @@ def update(srv, text):
     st, b = srv.req("POST", "/repositories/r/statements", urllib.parse.urlencode({"update": text}).encode(), "application/x-www-form-urlencoded")
     check(st == 204, f"update: {st} {b[:200]!r}")
     time.sleep(0.02)
-    return int(time.time() * 1000)
+    t = int(time.time() * 1000)
+    # the next write must commit after t: a state "at t" includes what committed in t's
+    # millisecond, and a quick request lands in the same one
+    time.sleep(0.02)
+    return t
 
 
 def names(data):
