@@ -86,6 +86,30 @@ GraphRD's memory is bounded by its memtables, block cache and dictionary caches 
 grow with the data, and data larger than memory keeps working from the block cache and the
 page cache.
 
+## The interface
+
+All three answer the same protocols, so any client works against any of them. What differs is
+what you get in the box before you install anything — and what it costs to serve it.
+
+| | GraphRD | Oxigraph | GraphDB |
+|---|---|---|---|
+| Web UI in the box | **yes — inside the same 6 MB binary** ✅ | none | yes — a bundled Java webapp |
+| Extra install for the UI | nothing | a third-party client | nothing (it ships in the image) |
+| Query editor | SPARQL with syntax coloring by RDF role, autocomplete, saved queries, execution plan, inference toggle, time travel | — | SPARQL editor with autocomplete |
+| AI assistant | plain-language questions; the model writes the SPARQL live in the editor, checked and run | — | — |
+| Data exploration | resource view with properties, types and references; autocomplete search by local name | — | resource inspection |
+| Visual graph | canvas with pan/zoom, minimap, legend, fullscreen, node context menus | — | graph view |
+| Loading data | drag-and-drop import with format detection | — | import wizards |
+| Management | repositories, namespaces, named graphs, users, monitoring, cluster map — same binary | — | workbench: repositories, users, connectors, monitoring |
+| Theme & layout | dark/light, responsive to phones (off-canvas navigation) | — | workbench UI |
+| Cost of the UI | static files from the same process; no second runtime | — | served by the JVM/Tomcat that also serves queries |
+
+The point is not that the others have no interface — GraphDB's workbench is a mature product —
+but what it weighs. GraphRD's UI is part of the one binary you already run: no webapp to
+deploy, no second process to monitor, nothing extra in the image. An engine you can point a
+browser at the moment it starts, on a machine with two cores and two gigabytes, is the same
+engine that answered the queries above.
+
 ## Notes on method
 
 - Versions: GraphRD 1.0.2, Oxigraph 0.5.11 (official image), GraphDB Free 10.8.5 (the
