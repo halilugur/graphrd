@@ -2509,6 +2509,8 @@ impl<'a> Ctx<'a> {
             let mut probe = self.empty_sol();
             let mut memo: HashMap<Id, bool> = HashMap::new();
             let mut use_memo = true;
+            // without grouping every row is in the one group: no key to build and hash per row
+            let mut single: (u64, Vec<HashSet<Id>>) = (0, vec![HashSet::new(); agg_slots.len()]);
             // without the memo (values hardly repeat), the filtered column's terms are read from
             // the dictionary in bulk, a chunk ahead
             let bulk = &std::cell::Cell::new(false);
@@ -2544,14 +2546,18 @@ impl<'a> Ctx<'a> {
                         continue;
                     }
                 }
-                let key: Vec<Id> = group_slots.iter().map(|&(_, i)| row[i]).collect();
-                let entry = match groups.get_mut(&key) {
-                    Some(e) => e,
-                    None => {
-                        order.push(key.clone());
-                        groups
-                            .entry(key)
-                            .or_insert_with(|| (0, vec![HashSet::new(); agg_slots.len()]))
+                let entry = if group_slots.is_empty() {
+                    &mut single
+                } else {
+                    let key: Vec<Id> = group_slots.iter().map(|&(_, i)| row[i]).collect();
+                    match groups.get_mut(&key) {
+                        Some(e) => e,
+                        None => {
+                            order.push(key.clone());
+                            groups
+                                .entry(key)
+                                .or_insert_with(|| (0, vec![HashSet::new(); agg_slots.len()]))
+                        }
                     }
                 };
                 entry.0 += 1;
@@ -2562,6 +2568,10 @@ impl<'a> Ctx<'a> {
                         }
                     }
                 }
+            }
+            if group_slots.is_empty() && single.0 > 0 {
+                order.push(Vec::new());
+                groups.insert(Vec::new(), single);
             }
         }
         if q.group_by.is_empty() && order.is_empty() {
