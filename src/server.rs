@@ -175,6 +175,12 @@ impl Drop for StoreWrite<'_> {
     fn drop(&mut self) {
         // Safety: this guard still holds the writer lock.
         let store = unsafe { &mut *self.lock.data.get() };
+        if store.batching() {
+            // part of a larger write (a cluster leader's, until the cluster has it): readers
+            // see it once the batch ends
+            self.guard = None;
+            return;
+        }
         let pending = store.take_unsynced();
         let snap = Arc::new(store.snapshot());
         *self.lock.current.write().unwrap_or_else(|e| e.into_inner()) = snap;
@@ -348,6 +354,40 @@ enum Abort {
     Undo(String),
 }
 
+/// A cluster leader's write starts: its changes are recorded for replication, and held back
+/// from the log and from readers until the cluster has them (see `end_replicated`).
+fn begin_replicated(repo: &Repo) {
+    let mut st = repo.store.write();
+    st.start_capture();
+    st.begin_batch();
+}
+
+/// A cluster leader's write ends. Committed by the cluster (`keep`): logged as one
+/// transaction and shown to readers. Otherwise undone, so that no node, this one included
+/// after a crash, holds a change the cluster never committed.
+fn end_replicated(
+    repo: &Repo,
+    removed: &[Quad],
+    inserted: &[Quad],
+    keep: bool,
+) -> std::io::Result<()> {
+    let mut st = repo.store.write();
+    if !keep && !(removed.is_empty() && inserted.is_empty()) {
+        st.apply(inserted, removed)?;
+    }
+    st.end_batch(keep)
+}
+
+/// `end_replicated` without keeping the write.
+fn undo_replicated(repo: &Repo, removed: &[Quad], inserted: &[Quad]) {
+    if let Err(e) = end_replicated(repo, removed, inserted, false) {
+        eprintln!(
+            "cluster: undoing a write to {} that was not replicated failed: {e}",
+            repo.id
+        );
+    }
+}
+
 /// Run `f` as one all-or-nothing write: what it changes is recorded, and undone if
 /// it fails (or SHACL refuses the result). A recording that is already running (a
 /// cluster's, which replicates the change) goes on; only this write's part of it is undone.
@@ -360,6 +400,8 @@ fn transaction<T>(
     if own {
         st.start_capture();
     }
+    // every operation of the write is logged as one transaction, so a crash keeps all or none
+    let own_batch = st.begin_batch();
     let mark = st.capture_mark();
     let result = f(st);
     let (removed, inserted) = st.capture_since(mark);
@@ -392,6 +434,15 @@ fn transaction<T>(
     };
     if own {
         st.take_capture();
+    }
+    if own_batch {
+        // an undone write leaves the store as it was: nothing to log
+        let keep = !matches!(out, Err(Abort::Failed(_)) | Err(Abort::Shacl(_)));
+        if let Err(e) = st.end_batch(keep) {
+            return Err(Abort::Failed(format!(
+                "writing the transaction log failed: {e}"
+            )));
+        }
     }
     out
 }
@@ -3927,10 +3978,12 @@ impl App {
                 return self.dispatch(segs, req);
             };
             let _serial = lock(&self.cluster_write);
-            repo.store.write().start_capture();
+            begin_replicated(&repo);
             let resp = self.dispatch(segs, req);
             let (removed, inserted) = repo.store.write().take_capture();
             if resp.status >= 300 || (removed.is_empty() && inserted.is_empty()) {
+                // nothing to replicate; a failed request leaves nothing behind
+                undo_replicated(&repo, &removed, &inserted);
                 return resp;
             }
             let nq = |q: &[Quad]| rdf::write::serialize(q, Format::NQuads, &[]).unwrap_or_default();
@@ -3940,11 +3993,14 @@ impl App {
                 .with("remove", nq(&removed))
                 .with("insert", nq(&inserted));
             if raft.propose(op, timeout).is_err() {
-                let _ = repo.store.write().apply(&inserted, &removed); // undo: not committed
+                undo_replicated(&repo, &removed, &inserted); // undo: not committed
                 return Response::text(
                     503,
                     "The write could not be replicated to a majority of the cluster and was undone",
                 );
+            }
+            if let Err(e) = end_replicated(&repo, &removed, &inserted, true) {
+                return Response::text(500, format!("writing the transaction log failed: {e}"));
             }
             return resp;
         }
@@ -4692,10 +4748,12 @@ impl crate::pgwire::Backend for App {
             });
         }
         let _serial = lock(&self.cluster_write);
-        repo.store.write().start_capture();
+        begin_replicated(&repo);
         let result = run();
         let (removed, inserted) = repo.store.write().take_capture();
-        if result.is_ok() && !(removed.is_empty() && inserted.is_empty()) {
+        if result.is_err() || (removed.is_empty() && inserted.is_empty()) {
+            undo_replicated(&repo, &removed, &inserted);
+        } else {
             let nq = |q: &[Quad]| rdf::write::serialize(q, Format::NQuads, &[]).unwrap_or_default();
             let op = Json::obj()
                 .with("kind", "apply")
@@ -4706,12 +4764,14 @@ impl crate::pgwire::Backend for App {
                 .propose(op, std::time::Duration::from_secs(10))
                 .is_err()
             {
-                let _ = repo.store.write().apply(&inserted, &removed);
+                undo_replicated(&repo, &removed, &inserted);
                 return Err(
                     "The write could not be replicated to a majority of the cluster and was undone"
                         .into(),
                 );
             }
+            end_replicated(&repo, &removed, &inserted, true)
+                .map_err(|e| format!("writing the transaction log failed: {e}"))?;
         }
         result
     }
@@ -4995,6 +5055,58 @@ mod tests {
     }
 
     const JSON_CT: (&str, &str) = ("Content-Type", "application/json");
+
+    #[test]
+    fn multi_operation_update_is_one_logged_transaction() {
+        let t = app("one-commit", None);
+        let (s, _) = call(
+            &t,
+            "POST",
+            "/rest/repositories",
+            &[JSON_CT],
+            r#"{"id":"atom"}"#,
+        );
+        assert_eq!(s, 201);
+        let wal = t.dir.join("repositories/atom/storage/wal.log");
+        let commits = || {
+            let bytes = fs::read(&wal).unwrap();
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            String::from_utf8_lossy(&bytes[..end])
+                .lines()
+                .filter(|l| l.starts_with("c "))
+                .count()
+        };
+        let before = commits();
+        let update = |u: &str| {
+            call(
+                &t,
+                "POST",
+                "/repositories/atom/statements",
+                &[("Content-Type", "application/sparql-update")],
+                u,
+            )
+            .0
+        };
+        let s = update(
+            "INSERT DATA { <http://x/a> <http://x/p> 1 } ; \
+             INSERT DATA { <http://x/b> <http://x/p> 2 } ; \
+             DELETE DATA { <http://x/a> <http://x/p> 1 }",
+        );
+        assert_eq!(s, 204);
+        assert_eq!(commits(), before + 1, "three operations, one commit marker");
+        // a failing update is undone and logs nothing at all
+        let s = update(
+            "INSERT DATA { <http://x/c> <http://x/p> 3 } ; LOAD <http://127.0.0.1:9/missing>",
+        );
+        assert!(s >= 400, "{s}");
+        assert_eq!(
+            commits(),
+            before + 1,
+            "nothing logged for the undone update"
+        );
+        let (_, n) = call(&t, "GET", "/repositories/atom/size", &[], "");
+        assert_eq!(n, "1");
+    }
 
     #[test]
     fn repository_lifecycle_and_protocol() {

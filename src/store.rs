@@ -173,6 +173,9 @@ pub struct Store {
     last_commit: i64,
     /// The change history kept for time travel, when enabled.
     history: Option<History>,
+    /// While a batch is open (`begin_batch`), the log lines of its changes: they reach the log
+    /// as one transaction when it ends, so a crash keeps all of them or none.
+    batch: Option<String>,
 }
 
 /// `history.log`: every committed transaction as in the write-ahead log (`+ ` / `- ` N-Quads
@@ -389,6 +392,7 @@ impl Store {
             unsynced: None,
             last_commit: 0,
             history: None,
+            batch: None,
         }
     }
 
@@ -425,6 +429,7 @@ impl Store {
             unsynced: None,
             last_commit: self.last_commit,
             history: None,
+            batch: None,
         }
     }
 
@@ -477,6 +482,7 @@ impl Store {
             unsynced: None,
             last_commit: 0,
             history: None,
+            batch: None,
         };
         st.load_rank();
         st.reasoner_base = Reasoner::new(&m.ruleset, m.same_as, &st.dict).map(Arc::new);
@@ -590,6 +596,11 @@ impl Store {
         let Some(dir) = self.dir.clone() else {
             return Ok(());
         };
+        if self.batch.is_some() {
+            // the batch's changes are in the memtables but not yet in the log: folding them
+            // into run files now would make part of the transaction durable
+            return Ok(());
+        }
         if let Some(w) = &mut self.wal {
             w.flush()?;
         }
@@ -893,8 +904,47 @@ impl Store {
     pub fn apply(&mut self, remove: &[Quad], insert: &[Quad]) -> io::Result<(usize, usize)> {
         let mut log = String::new();
         let res = self.apply_inner(remove, insert, &mut log);
+        if let Some(batch) = &mut self.batch {
+            // logged when the batch ends; no checkpoint meanwhile, or the run files would
+            // hold part of a transaction the log does not have yet
+            batch.push_str(&log);
+            return Ok(res);
+        }
+        self.log_commit(&log)?;
+        Ok(res)
+    }
+
+    /// Start collecting the changes of the following `apply` calls into one logged transaction
+    /// (see `end_batch`). False when a batch is already open: it goes on, and the caller must
+    /// not end it.
+    pub fn begin_batch(&mut self) -> bool {
+        if self.batch.is_some() {
+            return false;
+        }
+        self.batch = Some(String::new());
+        true
+    }
+
+    /// Whether a batch is open.
+    pub fn batching(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// End the open batch: with `keep`, log its changes as one transaction; without, forget
+    /// them (the caller has already undone them in memory, so the log matches the store).
+    pub fn end_batch(&mut self, keep: bool) -> io::Result<()> {
+        let Some(log) = self.batch.take() else {
+            return Ok(());
+        };
+        self.log_commit(if keep { &log } else { "" })
+    }
+
+    /// Write a transaction's log lines with its commit marker, then checkpoint when the
+    /// memtables or the log have grown large.
+    fn log_commit(&mut self, log: &str) -> io::Result<()> {
         if let Some(w) = &mut self.wal {
             if !log.is_empty() {
+                let mut log = log.to_string();
                 self.last_commit = now_millis().max(self.last_commit + 1);
                 log.push_str(&format!("c {}\n", self.last_commit));
                 w.write_all(log.as_bytes())?;
@@ -928,7 +978,7 @@ impl Store {
         if self.dir.is_some() && (mem > MEM_LIMIT || self.wal_bytes > WAL_LIMIT) {
             self.checkpoint()?;
         }
-        Ok(res)
+        Ok(())
     }
 
     /// (version, whether memtables or the log hold anything a checkpoint would fold away):
@@ -1924,6 +1974,7 @@ impl Store {
             unsynced: None,
             last_commit: self.last_commit,
             history: None,
+            batch: None,
         }
     }
 
@@ -2825,6 +2876,40 @@ mod tests {
         );
         assert!(!has("x"), "the torn transaction left no trace");
         assert_eq!(st.len(), 2);
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn batch_reaches_the_log_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("graphrd-batch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.apply(&[], &[q("a", "p", "b", None)]).unwrap();
+            assert!(st.begin_batch());
+            assert!(!st.begin_batch(), "a batch does not nest");
+            st.apply(&[q("a", "p", "b", None)], &[]).unwrap();
+            st.apply(&[], &[q("c", "p", "d", None)]).unwrap();
+            st.checkpoint().unwrap(); // must not make part of the batch durable
+            std::mem::forget(st); // a crash before the batch ends
+        }
+        {
+            let mut st = Store::open(&dir).unwrap();
+            assert_eq!(st.len(), 1, "none of the batch survived");
+            assert!(st.begin_batch());
+            st.apply(&[q("a", "p", "b", None)], &[]).unwrap();
+            st.apply(&[], &[q("c", "p", "d", None)]).unwrap();
+            st.end_batch(true).unwrap();
+            std::mem::forget(st);
+        }
+        let st = Store::open(&dir).unwrap();
+        assert_eq!(st.len(), 1);
+        assert!(st.dict.lookup(&Term::iri("c")).is_some_and(|id| {
+            st.quads_matching(Some(id), None, None, None)
+                .next()
+                .is_some()
+        }));
         drop(st);
         let _ = fs::remove_dir_all(&dir);
     }
