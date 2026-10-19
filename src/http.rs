@@ -1169,6 +1169,58 @@ fn https_request(
     ))
 }
 
+/// A byte stream: a TCP connection, or one wrapped in TLS.
+pub trait Stream: Read + Write + Send {}
+impl<T: Read + Write + Send> Stream for T {}
+
+/// A TLS client connection to `addr` (`host:port`), checked against the web's certificate
+/// authorities and those of `SSL_CERT_FILE`, presenting the client certificate set with
+/// `set_client_identity` when the server asks for one. For protocols other than HTTP.
+#[cfg(feature = "tls")]
+pub fn tls_connect(addr: &str, timeout: Duration) -> io::Result<Box<dyn Stream>> {
+    let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h).trim_matches(['[', ']']).to_string();
+    let mut roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    if let Ok(file) = std::env::var("SSL_CERT_FILE") {
+        use rustls::pki_types::pem::PemObject;
+        let certs = rustls::pki_types::CertificateDer::pem_file_iter(&file)
+            .map_err(|e| io::Error::other(format!("SSL_CERT_FILE {file}: {e}")))?;
+        for c in certs.flatten() {
+            roots
+                .add(c)
+                .map_err(|e| io::Error::other(format!("SSL_CERT_FILE {file}: {e}")))?;
+        }
+    }
+    let config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| io::Error::other(e.to_string()))?
+    .with_root_certificates(roots);
+    let config = match CLIENT_IDENTITY.get() {
+        Some((certs, key)) => config
+            .with_client_auth_cert(certs.clone(), key.clone_key())
+            .map_err(|e| io::Error::other(e.to_string()))?,
+        None => config.with_no_client_auth(),
+    };
+    let name = rustls::pki_types::ServerName::try_from(host)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+    let conn = rustls::ClientConnection::new(Arc::new(config), name)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let tcp = connect(addr, timeout)?;
+    Ok(Box::new(rustls::StreamOwned::new(conn, tcp)))
+}
+
+/// Without the `tls` feature: always an error.
+#[cfg(not(feature = "tls"))]
+pub fn tls_connect(_: &str, _: Duration) -> io::Result<Box<dyn Stream>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "TLS needs a build with `--features tls`",
+    ))
+}
+
 /// `application/x-www-form-urlencoded` body for the given pairs.
 pub fn encode_form(pairs: &[(String, String)]) -> String {
     pairs
