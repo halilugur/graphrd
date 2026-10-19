@@ -25,6 +25,39 @@ CSV results over HTTP:
 Bulk loading the same file offline: `load` takes 0.6 s (about 1.5 million lines/s), 1.8 s
 including container start. The concurrency, cluster and durability measurements are below.
 
+## Effect of the query engine changes
+
+The table above predates these changes and has not been measured again. To see their effect, the
+build before them (commit `ad12df5`, version 1.0.0) and the build after ran side by side on an
+Apple M2 Pro (10 cores, 16 GB), each on its own copy of the same data: the `graphrd compare`
+graph with 100,000 persons (~600,000 triples). Every request alternated between the two servers,
+so background load hit both alike; the figure is the median of 40 runs (15 for the slowest
+queries), JSON results over HTTP. The machine was busy (load average about 10), so the absolute
+times run high; the ratios are what to read.
+
+| Query (`graphrd compare` suite) | Before (ms) | After (ms) | Change |
+|---|---:|---:|---:|
+| `MINUS` | 3.03 | 1.16 | −62% |
+| Large result: every name, 100,000 rows | 205.6 | 87.3 | −58% |
+| `COUNT(DISTINCT ?o)` | 6.47 | 2.99 | −54% |
+| `COUNT(*)` over every triple | 27.9 | 13.1 | −53% |
+| `CONTAINS` filter over all bios | 7.09 | 4.87 | −31% |
+| Join of three patterns, counted | 33.2 | 24.1 | −27% |
+| `GROUP BY` with `AVG` over all people | 36.1 | 26.9 | −26% |
+| `UNION` of two classes, counted | 0.76 | 0.57 | −26% |
+| Join: colleagues of a person | 0.28 | 0.23 | −18% |
+
+Point lookups, star joins, `ASK`, `VALUES`, `CONSTRUCT` and the property paths stay within the
+noise of this run (0.1–0.3 ms either way), as do `REGEX` and `ORDER BY` with a deep `OFFSET`.
+Single writes, measured in separate `graphrd compare` runs, take about 3 ms either way: the fsync
+bounds them. The largest change is outside the suite: an `OPTIONAL` over a `UNION` on 40,000
+rows took 19.7 s and now takes 0.02 s (one run each, `graphrd query`).
+
+What changed: `MINUS` and `OPTIONAL` over a group hash the right side instead of comparing every
+pair of rows; results larger than the term cache read their terms in bulk; an ungrouped `COUNT`
+builds no group key per row; maps keyed by dictionary ids use a faster hash; and the block cache
+gives blocks in use a second chance before evicting them.
+
 ## Tuning
 
 | Setting | Effect |
