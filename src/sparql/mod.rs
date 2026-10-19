@@ -1060,6 +1060,44 @@ mod tests {
     }
 
     #[test]
+    fn large_order_by_with_offset_on_disk() {
+        // a sort over more rows than the term cache holds, keyed by a variable's id
+        let dir = std::env::temp_dir().join(format!("graphrd-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = Store::open(&dir).unwrap();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..60_000u32 {
+            let k = i.wrapping_mul(7919) % 60_000; // inserted out of order
+            data.push_str(&format!(" <http://e/{k}> <http://e/n> \"n{k:05}\" ."));
+        }
+        data.push_str(r#" <http://e/a> <http://e/m> 1 . <http://e/b> <http://e/m> "1" ."#);
+        data.push_str(r#" <http://e/c> <http://e/m> "0" . <http://e/d> <http://e/m> 2 }"#);
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        st.checkpoint().unwrap();
+        let st = Store::open(&dir).unwrap();
+        let col = |q: &str| -> Vec<String> {
+            run(&st, q)
+                .into_iter()
+                .map(|r| r.last().unwrap().as_ref().unwrap().value().to_string())
+                .collect()
+        };
+        assert_eq!(
+            col("SELECT ?n { ?s <http://e/n> ?n } ORDER BY ?n OFFSET 30000 LIMIT 3"),
+            ["n30000", "n30001", "n30002"]
+        );
+        assert_eq!(
+            col("SELECT ?n { ?s <http://e/n> ?n } ORDER BY DESC(?n) LIMIT 2"),
+            ["n59999", "n59998"]
+        );
+        // a key that reads one variable: two terms with equal values share a rank
+        let keys =
+            col("SELECT ?k { ?s <http://e/m> ?m BIND(STR(?m) AS ?k) } ORDER BY STR(?m) LIMIT 3");
+        assert_eq!(keys, ["0", "1", "1"]);
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn huge_limit_does_not_overflow() {
         let mut st = Store::memory();
         update(

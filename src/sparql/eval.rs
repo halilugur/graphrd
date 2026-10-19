@@ -2352,6 +2352,14 @@ impl<'a> Ctx<'a> {
                     idx.push(i);
                     continue;
                 }
+                // the key reads one variable, so its value follows from the variable's id: no
+                // map by term (hashing and copying each). Ids with equal values get slots of
+                // their own, which rank equal below.
+                let i = vals.len() as u32;
+                vals.push(self.expr(first, s, Active::Default));
+                by_id.insert(s[v], i);
+                idx.push(i);
+                continue;
             }
             let t = self.expr(first, s, Active::Default);
             let i = match by_term.get(&t) {
@@ -2362,9 +2370,6 @@ impl<'a> Ctx<'a> {
                     vals.len() as u32 - 1
                 }
             };
-            if let Some(v) = first_var {
-                by_id.insert(s[v], i);
-            }
             idx.push(i);
         }
         let cmp0 = |a: &u32, b: &u32| {
