@@ -95,6 +95,8 @@ nothing. `graphrd optimize` (server stopped) merges each index into one file.
 
 ## Limits for exposed servers
 
-`graphrd::http::set_limits(max_body, max_connections)` (when embedding) bounds request bodies
-(default 2 GB) and concurrent connections. `--read-only` refuses every change, `--timeout` bounds
+`serve --max-body <mb>` bounds request bodies (default 2048 MB) and `--max-connections <n>`
+concurrent connections (default: no limit); when embedding, `graphrd::http::set_limits(max_body,
+max_connections)` does the same. A request body is read before the request is authorized, so a
+server reachable from untrusted networks should set both. `--read-only` refuses every change, `--timeout` bounds
 queries, and `--cors` lets web pages on other origins call the API.

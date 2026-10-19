@@ -81,7 +81,6 @@ pub struct QuadPattern {
     pub g: Option<VarOrTerm>,
 }
 
-#[allow(dead_code)] // SERVICE endpoint is parsed but federation is unsupported
 #[derive(Debug, Clone)]
 /// A solution-producing part of a query, in algebra form.
 pub enum Pattern {

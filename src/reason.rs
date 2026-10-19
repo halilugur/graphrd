@@ -7,6 +7,8 @@
 
 use std::collections::HashSet;
 
+use crate::fastmap::{FastMap, FastSet};
+
 use crate::rdf::{OWL, RDF, RDFS};
 use crate::store::{Dict, Id};
 
@@ -610,17 +612,15 @@ impl Reasoner {
         }
         while !delta.is_empty() {
             let mut fresh: Vec<Triple> = Vec::new();
-            let mut fresh_set: HashSet<Triple> = HashSet::new();
+            let mut fresh_set: FastSet<Triple> = FastSet::default();
             // the new triples by predicate, so an atom with a fixed predicate sees only its own
-            let mut by_pred: std::collections::HashMap<Id, Vec<Triple>> =
-                std::collections::HashMap::new();
+            let mut by_pred: FastMap<Id, Vec<Triple>> = FastMap::default();
             for t in &delta {
                 by_pred.entry(t[1]).or_default().push(*t);
             }
             // a rule with another atom that no triple matches, even ignoring its variables,
             // cannot fire (the common case of instance data without schema triples)
-            let mut known: std::collections::HashMap<[Option<Id>; 3], bool> =
-                std::collections::HashMap::new();
+            let mut known: FastMap<[Option<Id>; 3], bool> = FastMap::default();
             for rule in &self.rules {
                 for (i, atom) in rule.body.iter().enumerate() {
                     let rest: Vec<&[T; 3]> = rule
@@ -827,8 +827,8 @@ impl Reasoner {
     /// DRed step 1: everything that could have been derived (directly or
     /// transitively) through the `deleted` triples, evaluated while they are
     /// still in `facts`.
-    pub fn overdelete(&self, facts: &dyn Facts, deleted: &[Triple]) -> HashSet<Triple> {
-        let mut out: HashSet<Triple> = HashSet::new();
+    pub fn overdelete(&self, facts: &dyn Facts, deleted: &[Triple]) -> FastSet<Triple> {
+        let mut out: FastSet<Triple> = FastSet::default();
         let mut delta: Vec<Triple> = deleted.to_vec();
         while !delta.is_empty() {
             let mut next = Vec::new();

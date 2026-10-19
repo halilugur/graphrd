@@ -10,6 +10,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::fastmap::{FastMap, FastSet};
 use crate::fts;
 use crate::lsm::{BlockCache, Index, Key};
 use crate::rdf::{Quad, Term, turtle};
@@ -173,6 +174,9 @@ pub struct Store {
     last_commit: i64,
     /// The change history kept for time travel, when enabled.
     history: Option<History>,
+    /// While a batch is open (`begin_batch`), the log lines of its changes: they reach the log
+    /// as one transaction when it ends, so a crash keeps all of them or none.
+    batch: Option<String>,
 }
 
 /// `history.log`: every committed transaction as in the write-ahead log (`+ ` / `- ` N-Quads
@@ -192,6 +196,32 @@ fn now_millis() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_millis() as i64)
+}
+
+/// The text of a log file (write-ahead log or history) up to its zero-filled tail. A crash can
+/// tear the last write anywhere, even inside a multi-byte character, so invalid UTF-8 is
+/// replaced instead of failing: it can only be in the torn transaction, which has no commit
+/// marker and is dropped.
+fn read_log(path: &Path) -> io::Result<String> {
+    let mut bytes = fs::read(path)?;
+    if let Some(end) = bytes.iter().position(|&b| b == 0) {
+        bytes.truncate(end);
+    }
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    })
+}
+
+/// Make renames and new files in `dir` durable (a file's own fsync does not cover its entry
+/// in the directory). Directories cannot be opened for syncing on Windows; there the rename
+/// is durable once it returns.
+pub(crate) fn sync_dir(dir: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    File::open(dir)?.sync_all()?;
+    #[cfg(not(unix))]
+    let _ = dir;
+    Ok(())
 }
 
 /// The commit time in a log line `c <time>` (None for other lines; Some(None) for a bare `c`).
@@ -303,7 +333,8 @@ impl Manifest {
             f.write_all(text.as_bytes())?;
             f.sync_all()?;
         }
-        fs::rename(&tmp, path)
+        fs::rename(&tmp, path)?;
+        sync_dir(path.parent().unwrap_or(Path::new(".")))
     }
 }
 
@@ -374,6 +405,7 @@ impl Store {
             unsynced: None,
             last_commit: 0,
             history: None,
+            batch: None,
         }
     }
 
@@ -410,6 +442,7 @@ impl Store {
             unsynced: None,
             last_commit: self.last_commit,
             history: None,
+            batch: None,
         }
     }
 
@@ -462,6 +495,7 @@ impl Store {
             unsynced: None,
             last_commit: 0,
             history: None,
+            batch: None,
         };
         st.load_rank();
         st.reasoner_base = Reasoner::new(&m.ruleset, m.same_as, &st.dict).map(Arc::new);
@@ -484,11 +518,7 @@ impl Store {
         // Replay changes made after the last checkpoint, in order.
         let wal_path = dir.join("wal.log");
         if wal_path.exists() {
-            let mut text = fs::read_to_string(&wal_path)?;
-            // the preallocated tail is zeros
-            if let Some(end) = text.find('\0') {
-                text.truncate(end);
-            }
+            let text = read_log(&wal_path)?;
             // Every transaction ends with a "c" line; a transaction whose marker is missing was
             // torn by a crash and is dropped whole. (Logs written before markers existed have
             // none at all; their lines are taken one by one.)
@@ -550,7 +580,7 @@ impl Store {
         if dir.join(HISTORY).exists() {
             st.open_history(0)?;
             // transactions logged but not yet in the history when the process stopped
-            st.history_catch_up(&fs::read_to_string(&wal_path).unwrap_or_default())?;
+            st.history_catch_up(&read_log(&wal_path).unwrap_or_default())?;
         }
         st.checkpoint()?;
         Ok(st)
@@ -579,6 +609,11 @@ impl Store {
         let Some(dir) = self.dir.clone() else {
             return Ok(());
         };
+        if self.batch.is_some() {
+            // the batch's changes are in the memtables but not yet in the log: folding them
+            // into run files now would make part of the transaction durable
+            return Ok(());
+        }
         if let Some(w) = &mut self.wal {
             w.flush()?;
         }
@@ -604,6 +639,9 @@ impl Store {
                 v.save(&dir.join(VECTORS))?;
             }
         }
+        // run files, the dictionary's table and the vector graph renamed into place above
+        // must be durable before the manifest names them
+        sync_dir(&dir)?;
         self.manifest().write(&dir.join("MANIFEST"))?;
         let wal = OpenOptions::new()
             .create(true)
@@ -733,7 +771,7 @@ impl Store {
         let logging = self.wal.is_some();
         let (mut r, mut a) = (0, 0);
         // DRed: find what may depend on the removed triples while they still exist.
-        let mut overdeleted: HashSet<Triple> = HashSet::new();
+        let mut overdeleted: crate::fastmap::FastSet<Triple> = Default::default();
         let mut removed_triples: Vec<Triple> = Vec::new();
         if let Some(reasoner) = self.reasoner.take() {
             let gone: Vec<Triple> = remove
@@ -854,7 +892,7 @@ impl Store {
 
     /// DRed: drop overdeleted inferences, then re-derive those that still
     /// have support and propagate from them.
-    fn retract(&mut self, overdeleted: HashSet<Triple>, removed: Vec<Triple>) {
+    fn retract(&mut self, overdeleted: crate::fastmap::FastSet<Triple>, removed: Vec<Triple>) {
         let Some(reasoner) = self.reasoner.take() else {
             return;
         };
@@ -882,8 +920,47 @@ impl Store {
     pub fn apply(&mut self, remove: &[Quad], insert: &[Quad]) -> io::Result<(usize, usize)> {
         let mut log = String::new();
         let res = self.apply_inner(remove, insert, &mut log);
+        if let Some(batch) = &mut self.batch {
+            // logged when the batch ends; no checkpoint meanwhile, or the run files would
+            // hold part of a transaction the log does not have yet
+            batch.push_str(&log);
+            return Ok(res);
+        }
+        self.log_commit(&log)?;
+        Ok(res)
+    }
+
+    /// Start collecting the changes of the following `apply` calls into one logged transaction
+    /// (see `end_batch`). False when a batch is already open: it goes on, and the caller must
+    /// not end it.
+    pub fn begin_batch(&mut self) -> bool {
+        if self.batch.is_some() {
+            return false;
+        }
+        self.batch = Some(String::new());
+        true
+    }
+
+    /// Whether a batch is open.
+    pub fn batching(&self) -> bool {
+        self.batch.is_some()
+    }
+
+    /// End the open batch: with `keep`, log its changes as one transaction; without, forget
+    /// them (the caller has already undone them in memory, so the log matches the store).
+    pub fn end_batch(&mut self, keep: bool) -> io::Result<()> {
+        let Some(log) = self.batch.take() else {
+            return Ok(());
+        };
+        self.log_commit(if keep { &log } else { "" })
+    }
+
+    /// Write a transaction's log lines with its commit marker, then checkpoint when the
+    /// memtables or the log have grown large.
+    fn log_commit(&mut self, log: &str) -> io::Result<()> {
         if let Some(w) = &mut self.wal {
             if !log.is_empty() {
+                let mut log = log.to_string();
                 self.last_commit = now_millis().max(self.last_commit + 1);
                 log.push_str(&format!("c {}\n", self.last_commit));
                 w.write_all(log.as_bytes())?;
@@ -917,7 +994,7 @@ impl Store {
         if self.dir.is_some() && (mem > MEM_LIMIT || self.wal_bytes > WAL_LIMIT) {
             self.checkpoint()?;
         }
-        Ok(res)
+        Ok(())
     }
 
     /// (version, whether memtables or the log hold anything a checkpoint would fold away):
@@ -1160,7 +1237,7 @@ impl Store {
                 self.rank_outdated = true;
             }
         }
-        let mut seen = HashSet::new();
+        let mut seen = FastSet::default();
         for (l, ids) in locals.iter().zip(&globals) {
             for &o in &l.literal_objects {
                 let id = ids[o as usize];
@@ -1312,7 +1389,7 @@ impl Store {
             let Some(last) = chunk.last().copied() else {
                 break;
             };
-            let mut seen = HashSet::new();
+            let mut seen = FastSet::default();
             let delta: Vec<Triple> = chunk
                 .iter()
                 .filter(|k| k[3] != INFERRED)
@@ -1346,12 +1423,10 @@ impl Store {
     /// PageRank over explicit links between resources, normalized so the
     /// most important node scores 1.
     pub fn compute_rank(&mut self) -> usize {
-        let mut out_links: std::collections::HashMap<Id, Vec<Id>> =
-            std::collections::HashMap::new();
-        let mut nodes: std::collections::HashMap<Id, f64> = std::collections::HashMap::new();
+        let mut out_links: FastMap<Id, Vec<Id>> = FastMap::default();
+        let mut nodes: FastMap<Id, f64> = FastMap::default();
         let lit = |st: &Store, id: Id| st.dict.term(id).is_literal();
-        let mut literal_cache: std::collections::HashMap<Id, bool> =
-            std::collections::HashMap::new();
+        let mut literal_cache: FastMap<Id, bool> = FastMap::default();
         for q in self.explicit_matching(None, None, None, None) {
             let is_lit = *literal_cache.entry(q[O]).or_insert_with(|| lit(self, q[O]));
             nodes.entry(q[S]).or_insert(0.0);
@@ -1362,8 +1437,7 @@ impl Store {
         }
         let n = nodes.len().max(1) as f64;
         let d = 0.85;
-        let mut rank: std::collections::HashMap<Id, f64> =
-            nodes.keys().map(|&k| (k, 1.0 / n)).collect();
+        let mut rank: FastMap<Id, f64> = nodes.keys().map(|&k| (k, 1.0 / n)).collect();
         for _ in 0..20 {
             let dangling: f64 = rank
                 .iter()
@@ -1371,8 +1445,7 @@ impl Store {
                 .map(|(_, v)| v)
                 .sum();
             let base = (1.0 - d) / n + d * dangling / n;
-            let mut next: std::collections::HashMap<Id, f64> =
-                nodes.keys().map(|&k| (k, base)).collect();
+            let mut next: FastMap<Id, f64> = nodes.keys().map(|&k| (k, base)).collect();
             for (s, targets) in &out_links {
                 let share = d * rank[s] / targets.len() as f64;
                 for t in targets {
@@ -1421,7 +1494,7 @@ impl Store {
 
     /// Distinct IRIs used as subject, predicate or class, for autocomplete.
     pub fn resource_iris(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FastSet::default();
         let mut out = Vec::new();
         let mut add = |id: Id, st: &Store, out: &mut Vec<String>| {
             if seen.insert(id) {
@@ -1609,7 +1682,7 @@ impl Store {
         let path = dir.join(HISTORY);
         let mut oldest = None;
         if path.exists() {
-            let text = fs::read_to_string(&path)?;
+            let text = read_log(&path)?;
             for line in text.lines() {
                 if let Some(Some(at)) = commit_line(line) {
                     oldest = Some(at);
@@ -1619,12 +1692,28 @@ impl Store {
             if let Some(at) = text.lines().rev().find_map(|l| commit_line(l).flatten()) {
                 self.last_commit = self.last_commit.max(at);
             }
+            // a crash can leave a torn transaction at the end; cut it off, or the next one
+            // appended would continue its unfinished line
+            let (mut keep, mut pos) = (0, 0);
+            for line in text.split_inclusive('\n') {
+                pos += line.len();
+                let l = line.trim_end_matches(['\n', '\r']);
+                if line.ends_with('\n') && (l.starts_with("s ") || commit_line(l).is_some()) {
+                    keep = pos;
+                }
+            }
+            if keep > 0 && (keep as u64) < fs::metadata(&path)?.len() {
+                let f = OpenOptions::new().write(true).open(&path)?;
+                f.set_len(keep as u64)?;
+                f.sync_all()?;
+            }
         } else {
             // complete from now on: written before any transaction can reach it
             let tmp = path.with_extension("tmp");
             fs::write(&tmp, format!("s {}\n", now_millis()))?;
             OpenOptions::new().write(true).open(&tmp)?.sync_all()?;
             fs::rename(&tmp, &path)?;
+            sync_dir(dir)?;
         }
         let file = OpenOptions::new().append(true).open(&path)?;
         self.history = Some(History {
@@ -1641,12 +1730,10 @@ impl Store {
         let Some(h) = &mut self.history else {
             return Ok(());
         };
-        let text = match wal.find('\0') {
-            Some(end) => &wal[..end],
-            None => wal,
-        };
-        let last = fs::read_to_string(
-            self.dir
+        let text = wal;
+        let last = read_log(
+            &self
+                .dir
                 .as_ref()
                 .expect("history needs a directory")
                 .join(HISTORY),
@@ -1693,7 +1780,7 @@ impl Store {
             .as_ref()
             .expect("history needs a directory")
             .join(HISTORY);
-        let text = fs::read_to_string(&path)?;
+        let text = read_log(&path)?;
         let mut out = format!("s {cutoff}\n");
         let mut txn = String::new();
         let mut new_oldest = None;
@@ -1716,6 +1803,7 @@ impl Store {
             f.sync_all()?;
         }
         fs::rename(&tmp, &path)?;
+        sync_dir(path.parent().unwrap_or(Path::new(".")))?;
         h.file = BufWriter::new(OpenOptions::new().append(true).open(&path)?);
         h.oldest = new_oldest;
         Ok(())
@@ -1745,7 +1833,7 @@ impl Store {
             .dir
             .as_ref()
             .ok_or("time travel needs a repository on disk")?;
-        let text = fs::read_to_string(dir.join(HISTORY)).map_err(|_| {
+        let text = read_log(&dir.join(HISTORY)).map_err(|_| {
             "time travel: this repository keeps no history (set historyRetention)".to_string()
         })?;
         let start: i64 = text
@@ -1834,7 +1922,7 @@ impl Store {
             if let Some(h) = &mut self.history {
                 h.file.flush()?;
             }
-            let text = fs::read_to_string(&path)?;
+            let text = read_log(&path)?;
             let mut out = String::new();
             let mut txn = String::new();
             for line in text.lines() {
@@ -1859,6 +1947,7 @@ impl Store {
                 f.sync_all()?;
             }
             fs::rename(&tmp, &path)?;
+            sync_dir(path.parent().unwrap_or(Path::new(".")))?;
             if let Some(h) = &mut self.history {
                 h.file = BufWriter::new(OpenOptions::new().append(true).open(&path)?);
             }
@@ -1900,6 +1989,7 @@ impl Store {
             unsynced: None,
             last_commit: self.last_commit,
             history: None,
+            batch: None,
         }
     }
 
@@ -1981,7 +2071,7 @@ impl Store {
     /// that do, in no particular order.
     pub fn geo_candidates(&self, b: crate::geo::Bbox) -> Vec<Id> {
         let (ranges, coarse) = crate::geo::query_cells(b);
-        let mut out = HashSet::new();
+        let mut out = FastSet::default();
         for (from, to) in ranges {
             let last = to - 1;
             out.extend(
@@ -2031,7 +2121,7 @@ impl Store {
     }
 
     /// The literals a clause can match (a superset: candidates are verified against the text).
-    fn fts_candidates(&self, c: &fts::Clause) -> HashSet<Id> {
+    fn fts_candidates(&self, c: &fts::Clause) -> FastSet<Id> {
         match c.plan() {
             // read only the rarest key's postings; probe the others per candidate
             fts::Plan::All(keys) => {
@@ -2039,7 +2129,7 @@ impl Store {
                     .iter()
                     .min_by_key(|&&k| self.fts_postings(k).take(1024).count())
                     .expect("a clause has at least one key");
-                let mut set: HashSet<Id> = self.fts_postings(rarest).collect();
+                let mut set: FastSet<Id> = self.fts_postings(rarest).collect();
                 for &k in keys.iter().filter(|&&k| k != rarest) {
                     set.retain(|&id| self.fts.contains(&[k, id, 0, 0]));
                 }
@@ -2137,10 +2227,10 @@ impl Store {
     ) -> Vec<(Id, f64)> {
         // each clause's candidates (their number is its document frequency); a group is the
         // union of its clauses, and groups intersect
-        let mut sets: Vec<HashSet<Id>> = Vec::new();
+        let mut sets: Vec<FastSet<Id>> = Vec::new();
         let mut counts = Vec::new();
         for g in &q.groups {
-            let mut union = HashSet::new();
+            let mut union = FastSet::default();
             for c in g {
                 let set = self.fts_candidates(c);
                 counts.push(set.len() as f64);
@@ -2299,7 +2389,7 @@ fn next_key(k: Key) -> Key {
 /// The reasoner sees the store as one graph-agnostic set of triples.
 impl Facts for Store {
     fn matching(&self, s: Option<Id>, p: Option<Id>, o: Option<Id>) -> Vec<Triple> {
-        let mut seen = HashSet::new();
+        let mut seen = FastSet::default();
         self.quads_matching(s, p, o, None)
             .map(|q| [q[0], q[1], q[2]])
             .filter(|t| seen.insert(*t))
@@ -2801,6 +2891,115 @@ mod tests {
         );
         assert!(!has("x"), "the torn transaction left no trace");
         assert_eq!(st.len(), 2);
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn directory_sync_really_syncs() {
+        let dir = std::env::temp_dir().join(format!("graphrd-dirsync-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        sync_dir(&dir).unwrap();
+        assert!(
+            sync_dir(&dir.join("missing")).is_err(),
+            "it opens the directory, not a no-op"
+        );
+        let mut st = Store::open(&dir).unwrap();
+        st.apply(&[], &[q("a", "p", "b", None)]).unwrap();
+        st.checkpoint().unwrap();
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn batch_reaches_the_log_whole_or_not_at_all() {
+        let dir = std::env::temp_dir().join(format!("graphrd-batch-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.apply(&[], &[q("a", "p", "b", None)]).unwrap();
+            assert!(st.begin_batch());
+            assert!(!st.begin_batch(), "a batch does not nest");
+            st.apply(&[q("a", "p", "b", None)], &[]).unwrap();
+            st.apply(&[], &[q("c", "p", "d", None)]).unwrap();
+            st.checkpoint().unwrap(); // must not make part of the batch durable
+            std::mem::forget(st); // a crash before the batch ends
+        }
+        {
+            let mut st = Store::open(&dir).unwrap();
+            assert_eq!(st.len(), 1, "none of the batch survived");
+            assert!(st.begin_batch());
+            st.apply(&[q("a", "p", "b", None)], &[]).unwrap();
+            st.apply(&[], &[q("c", "p", "d", None)]).unwrap();
+            st.end_batch(true).unwrap();
+            std::mem::forget(st);
+        }
+        let st = Store::open(&dir).unwrap();
+        assert_eq!(st.len(), 1);
+        assert!(st.dict.lookup(&Term::iri("c")).is_some_and(|id| {
+            st.quads_matching(Some(id), None, None, None)
+                .next()
+                .is_some()
+        }));
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_torn_inside_a_character_still_opens() {
+        let dir = std::env::temp_dir().join(format!("graphrd-torn-utf8-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let lit = |s: &str, o: &str| Quad {
+            s: Term::iri(s),
+            p: Term::iri("p"),
+            o: Term::string(o),
+            g: None,
+        };
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.set_history(Some(0)).unwrap();
+            st.apply(&[], &[lit("a", "çağ")]).unwrap();
+            st.apply(&[], &[lit("b", "şüphe")]).unwrap();
+            std::mem::forget(st); // a crash: no checkpoint on the way out
+        }
+        // the crash tore a third transaction inside "ç" (0xC3 0xA7) in both logs
+        let torn = b"+ <c> <p> \"\xC3";
+        for name in ["wal.log", HISTORY] {
+            let path = dir.join(name);
+            let bytes = fs::read(&path).unwrap();
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            let mut bytes = bytes[..end].to_vec();
+            bytes.extend_from_slice(torn);
+            bytes.extend_from_slice(&[0; 64]);
+            fs::write(&path, bytes).unwrap();
+        }
+        {
+            let mut st = Store::open(&dir).expect("a torn log must not keep the store closed");
+            assert_eq!(st.len(), 2, "both committed transactions replayed");
+            st.apply(&[], &[lit("d", "after")]).unwrap();
+            std::mem::forget(st);
+        }
+        let history = fs::read(dir.join(HISTORY)).unwrap();
+        assert!(
+            !history.windows(2).any(|w| w == b"\xC3+"),
+            "the torn tail was cut off before appending"
+        );
+        let st = Store::open(&dir).unwrap();
+        assert_eq!(st.len(), 3);
+        // every transaction is in the history, each line whole (read from the file: a time
+        // bound would drop a commit made in the millisecond the history started)
+        let history = read_log(&dir.join(HISTORY)).unwrap();
+        let added: Vec<&str> = history.lines().filter(|l| l.starts_with("+ ")).collect();
+        assert_eq!(added.len(), 3, "history intact: {history}");
+        assert_eq!(
+            history.lines().filter(|l| commit_line(l).is_some()).count(),
+            3
+        );
+        for l in added {
+            turtle::parse_nquads_raw(&l[2..]).unwrap_or_else(|e| panic!("{l}: {e}"));
+        }
         drop(st);
         let _ = fs::remove_dir_all(&dir);
     }

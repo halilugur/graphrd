@@ -22,6 +22,7 @@ pub mod cli;
 pub mod compare;
 pub mod connector;
 pub mod dict;
+pub mod fastmap;
 pub mod fts;
 pub mod geo;
 pub mod graphql;

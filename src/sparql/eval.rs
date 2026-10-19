@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::ast::*;
 use super::func::{self, Num};
+use crate::fastmap::{FastMap, FastSet};
 use crate::rdf::{Quad, Term};
 use crate::store::{DEFAULT_GRAPH, INFERRED, Id, Store};
 
@@ -18,6 +19,9 @@ pub const KNN: &str = "http://graphrd.org/fn#knn";
 const PARALLEL_PROBE: usize = 100_000;
 /// Rows whose terms are read from the dictionary together (see `Dict::read_many`).
 const PREFETCH: usize = 4_096;
+/// Result cells past which a query's result terms are read in bulk rather than through the
+/// dictionary's term cache (a quarter of its 200,000 terms: larger results would only evict it).
+const BULK_RESULT_TERMS: usize = 50_000;
 /// Index lookups after which a `p+` / `p*` walk may read all of `p`'s edges in one scan instead.
 const PATH_SCAN: usize = 20_000;
 /// Edges scanned in the time of one index lookup, for deciding when a walk scans instead.
@@ -100,7 +104,7 @@ impl Edges {
 /// nodes, a bit per dictionary id below `limit` (ids above it stay in the hash set).
 struct Reached {
     list: Vec<Id>,
-    small: HashSet<Id>,
+    small: FastSet<Id>,
     bits: Vec<u64>,
     limit: Id,
 }
@@ -109,7 +113,7 @@ impl Reached {
     fn new(limit: Id) -> Reached {
         Reached {
             list: Vec::new(),
-            small: HashSet::new(),
+            small: FastSet::default(),
             bits: Vec::new(),
             limit,
         }
@@ -187,7 +191,7 @@ pub struct Ctx<'a> {
     local: RefCell<Vec<Term>>,
     local_map: RefCell<HashMap<Term, Id>>,
     /// Terms of the rows a loop is about to read, read from the dictionary together (`prefetch`).
-    bulk: RefCell<HashMap<Id, Term>>,
+    bulk: RefCell<FastMap<Id, Term>>,
     /// FROM graphs; None = union of everything.
     default_graphs: Option<Vec<Id>>,
     /// FROM NAMED graphs; None = all named graphs.
@@ -237,7 +241,7 @@ impl<'a> Ctx<'a> {
             vars,
             local: RefCell::new(Vec::new()),
             local_map: RefCell::new(HashMap::new()),
-            bulk: RefCell::new(HashMap::new()),
+            bulk: RefCell::new(FastMap::default()),
             default_graphs: None,
             named_graphs: None,
             base: base.to_string(),
@@ -299,7 +303,7 @@ impl<'a> Ctx<'a> {
             }
         };
         if pid == aq.ty {
-            let mut pairs: HashSet<(Id, Id)> = HashSet::new();
+            let mut pairs: FastSet<(Id, Id)> = FastSet::default();
             match oid {
                 Some(c) => {
                     for sub in aq.subclasses(c) {
@@ -410,7 +414,7 @@ impl<'a> Ctx<'a> {
             None => self.scan(s, p, o, None).collect(),
             Some(gs) if gs.len() == 1 => self.scan(s, p, o, Some(gs[0])).collect(),
             Some(gs) => {
-                let mut seen = HashSet::new();
+                let mut seen = FastSet::default();
                 gs.iter()
                     .flat_map(|&g| self.scan(s, p, o, Some(g)).collect::<Vec<_>>())
                     .filter(|q| seen.insert([q[0], q[1], q[2]]))
@@ -666,16 +670,17 @@ impl<'a> Ctx<'a> {
                     }
                 } else {
                     let right = self.eval(b, g, seed)?;
+                    let mut index = Compatible::new(&right);
                     for l in left {
                         let mut any = false;
-                        for r in &right {
-                            if let Some(m) = merge(&l, r) {
-                                if cond.as_ref().is_none_or(|c| self.filter(c, &m, g)) {
-                                    out.push(m);
-                                    any = true;
-                                }
+                        index.each(&l, false, |r| {
+                            let m = merge(&l, r).expect("compatible solutions merge");
+                            if cond.as_ref().is_none_or(|c| self.filter(c, &m, g)) {
+                                out.push(m);
+                                any = true;
                             }
-                        }
+                            true
+                        });
                         if !any {
                             out.push(l);
                         }
@@ -691,20 +696,16 @@ impl<'a> Ctx<'a> {
             Pattern::Minus(a, b) => {
                 let left = self.eval(a, g, seed)?;
                 let right = self.eval(b, g, &self.empty_sol())?;
+                // a row goes when a compatible right row shares a variable with it
+                let mut index = Compatible::new(&right);
                 left.into_iter()
                     .filter(|l| {
-                        !right.iter().any(|r| {
-                            let mut shared = false;
-                            for i in 0..l.len() {
-                                if let (Some(x), Some(y)) = (l[i], r[i]) {
-                                    if x != y {
-                                        return false;
-                                    }
-                                    shared = true;
-                                }
-                            }
-                            shared
-                        })
+                        let mut found = false;
+                        index.each(l, true, |_| {
+                            found = true;
+                            false
+                        });
+                        !found
                     })
                     .collect()
             }
@@ -721,7 +722,7 @@ impl<'a> Ctx<'a> {
                     // a filter that reads one variable is decided once per distinct value
                     // (given up when the first rows show the values hardly repeat)
                     Some(v) if sols.len() > 32 => {
-                        let mut memo: HashMap<Option<Id>, bool> = HashMap::new();
+                        let mut memo: FastMap<Option<Id>, bool> = FastMap::default();
                         let mut seen = 0usize;
                         let mut use_memo = true;
                         let ids: Vec<Id> = sols.iter().map(|s| s[v].unwrap_or(0)).collect();
@@ -930,7 +931,7 @@ impl<'a> Ctx<'a> {
                         {
                             continue;
                         }
-                        let mut boxes: HashMap<Id, Option<crate::geo::Bbox>> = HashMap::new();
+                        let mut boxes: FastMap<Id, Option<crate::geo::Bbox>> = FastMap::default();
                         let (mut seeds, mut plain) = (Vec::new(), Vec::new());
                         for l in self.bgp(&first, vec![seed.clone()], g)? {
                             // an unbound `w` makes the filter an error: the row cannot pass
@@ -1044,7 +1045,7 @@ impl<'a> Ctx<'a> {
         if tps.is_empty() || input.is_empty() {
             return Ok(input);
         }
-        let bound: HashSet<Var> = input[0]
+        let bound: FastSet<Var> = input[0]
             .iter()
             .enumerate()
             .filter(|(_, v)| v.is_some())
@@ -1245,7 +1246,7 @@ impl<'a> Ctx<'a> {
     fn order_bgp<'p>(
         &self,
         tps: &'p [TriplePattern],
-        bound: &HashSet<Var>,
+        bound: &FastSet<Var>,
     ) -> Vec<&'p TriplePattern> {
         let mut bound = bound.clone();
         let mut left: Vec<&TriplePattern> = tps.iter().collect();
@@ -1319,7 +1320,7 @@ impl<'a> Ctx<'a> {
         if tps.is_empty() || input.is_empty() {
             return Ok(input);
         }
-        let bound: HashSet<Var> = input[0]
+        let bound: FastSet<Var> = input[0]
             .iter()
             .enumerate()
             .filter(|(_, v)| v.is_some())
@@ -1443,7 +1444,7 @@ impl<'a> Ctx<'a> {
             }
             k
         };
-        let mut table: HashMap<[Id; 3], Vec<usize>> = HashMap::new();
+        let mut table: FastMap<[Id; 3], Vec<usize>> = FastMap::default();
         for (r, q) in rows.iter().enumerate() {
             table.entry(key_of(&|i, _| q[i])).or_default().push(r);
         }
@@ -1856,7 +1857,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn all_nodes(&self, graphs: &Option<Vec<Id>>) -> Vec<Id> {
-        let mut seen = HashSet::new();
+        let mut seen = FastSet::default();
         let gl: Vec<Option<Id>> = match graphs {
             None => vec![None],
             Some(gs) => gs.iter().map(|&g| Some(g)).collect(),
@@ -1916,7 +1917,7 @@ impl<'a> Ctx<'a> {
                 out
             }
             Path::ZeroOrOne(inner) => {
-                let mut set: HashSet<(Id, Id)> = HashSet::new();
+                let mut set: FastSet<(Id, Id)> = FastSet::default();
                 match (s, o) {
                     (Some(a), Some(b)) if a == b => {
                         set.insert((a, b));
@@ -2023,12 +2024,12 @@ impl<'a> Ctx<'a> {
                 out
             }
             Path::Negated(set) => {
-                let fwd: HashSet<Id> = set
+                let fwd: FastSet<Id> = set
                     .iter()
                     .filter(|(_, inv)| !inv)
                     .filter_map(|(i, _)| self.lookup_iri(i))
                     .collect();
-                let inv: HashSet<Id> = set
+                let inv: FastSet<Id> = set
                     .iter()
                     .filter(|(_, inv)| *inv)
                     .filter_map(|(i, _)| self.lookup_iri(i))
@@ -2269,16 +2270,18 @@ impl<'a> Ctx<'a> {
         } = &q.form
         {
             if *distinct || *reduced {
-                let mut seen = HashSet::new();
+                let mut seen = FastSet::default();
                 projected.retain(|s| seen.insert(vars.iter().map(|&v| s[v]).collect::<Vec<_>>()));
             }
         }
         let start = q.offset.min(projected.len());
         let end = match q.limit {
-            Some(l) => (start + l).min(projected.len()),
+            Some(l) => start.saturating_add(l).min(projected.len()),
             None => projected.len(),
         };
-        Ok((vars, projected[start..end].to_vec()))
+        projected.truncate(end);
+        projected.drain(..start);
+        Ok((vars, projected))
     }
 
     /// ORDER BY. The first key is computed once per distinct value (once per distinct id when
@@ -2291,7 +2294,7 @@ impl<'a> Ctx<'a> {
         let first_var = single_var(first);
         let mut vals: Vec<Option<Term>> = Vec::new();
         let mut by_term: HashMap<Option<Term>, u32> = HashMap::new();
-        let mut by_id: HashMap<Option<Id>, u32> = HashMap::new();
+        let mut by_id: FastMap<Option<Id>, u32> = FastMap::default();
         let mut idx: Vec<u32> = Vec::with_capacity(sols.len());
         for s in &sols {
             if let Some(v) = first_var {
@@ -2487,7 +2490,7 @@ impl<'a> Ctx<'a> {
         let missing = positions.iter().any(|x| matches!(x, Pos::Const(None)));
         // group key -> (rows, distinct values per aggregate)
         let mut order: Vec<Vec<Id>> = Vec::new();
-        let mut groups: HashMap<Vec<Id>, (u64, Vec<HashSet<Id>>)> = HashMap::new();
+        let mut groups: FastMap<Vec<Id>, (u64, Vec<FastSet<Id>>)> = FastMap::default();
         if !missing {
             let graphs = self.graphs_for(g);
             let rows: Box<dyn Iterator<Item = [Id; 4]>> = match &graphs {
@@ -2508,8 +2511,11 @@ impl<'a> Ctx<'a> {
                 ),
             };
             let mut probe = self.empty_sol();
-            let mut memo: HashMap<Id, bool> = HashMap::new();
+            let mut memo: FastMap<Id, bool> = FastMap::default();
             let mut use_memo = true;
+            // without grouping every row is in the one group: no key to build and hash per row
+            let mut single: (u64, Vec<FastSet<Id>>) =
+                (0, vec![FastSet::default(); agg_slots.len()]);
             // without the memo (values hardly repeat), the filtered column's terms are read from
             // the dictionary in bulk, a chunk ahead
             let bulk = &std::cell::Cell::new(false);
@@ -2545,14 +2551,18 @@ impl<'a> Ctx<'a> {
                         continue;
                     }
                 }
-                let key: Vec<Id> = group_slots.iter().map(|&(_, i)| row[i]).collect();
-                let entry = match groups.get_mut(&key) {
-                    Some(e) => e,
-                    None => {
-                        order.push(key.clone());
-                        groups
-                            .entry(key)
-                            .or_insert_with(|| (0, vec![HashSet::new(); agg_slots.len()]))
+                let entry = if group_slots.is_empty() {
+                    &mut single
+                } else {
+                    let key: Vec<Id> = group_slots.iter().map(|&(_, i)| row[i]).collect();
+                    match groups.get_mut(&key) {
+                        Some(e) => e,
+                        None => {
+                            order.push(key.clone());
+                            groups
+                                .entry(key)
+                                .or_insert_with(|| (0, vec![FastSet::default(); agg_slots.len()]))
+                        }
                     }
                 };
                 entry.0 += 1;
@@ -2564,10 +2574,14 @@ impl<'a> Ctx<'a> {
                     }
                 }
             }
+            if group_slots.is_empty() && single.0 > 0 {
+                order.push(Vec::new());
+                groups.insert(Vec::new(), single);
+            }
         }
         if q.group_by.is_empty() && order.is_empty() {
             order.push(Vec::new());
-            groups.insert(Vec::new(), (0, vec![HashSet::new(); agg_slots.len()]));
+            groups.insert(Vec::new(), (0, vec![FastSet::default(); agg_slots.len()]));
         }
         let mut out = Vec::with_capacity(order.len());
         for key in order {
@@ -2592,7 +2606,7 @@ impl<'a> Ctx<'a> {
 
     fn group(&self, q: &Query, sols: Vec<Sol>) -> R<Vec<Sol>> {
         let mut keys: Vec<Vec<Option<Id>>> = Vec::new();
-        let mut groups: HashMap<Vec<Option<Id>>, Vec<Sol>> = HashMap::new();
+        let mut groups: FastMap<Vec<Option<Id>>, Vec<Sol>> = FastMap::default();
         for s in sols {
             let key: Vec<Option<Id>> = q
                 .group_by
@@ -2640,7 +2654,7 @@ impl<'a> Ctx<'a> {
         match &agg.expr {
             None => {
                 let n = if agg.distinct {
-                    members.iter().collect::<HashSet<_>>().len()
+                    members.iter().collect::<FastSet<_>>().len()
                 } else {
                     members.len()
                 };
@@ -2652,7 +2666,7 @@ impl<'a> Ctx<'a> {
                     members
                         .iter()
                         .filter_map(|m| m[*v])
-                        .collect::<HashSet<_>>()
+                        .collect::<FastSet<_>>()
                         .len()
                 } else {
                     members.iter().filter(|m| m[*v].is_some()).count()
@@ -2661,7 +2675,7 @@ impl<'a> Ctx<'a> {
             }
             Some(Expr::Var(v)) if !agg.distinct && (agg.func == "SUM" || agg.func == "AVG") => {
                 // decode each distinct value once
-                let mut memo: HashMap<Id, Option<Num>> = HashMap::new();
+                let mut memo: FastMap<Id, Option<Num>> = FastMap::default();
                 let mut acc = Num::Int(0);
                 let mut n = 0i64;
                 for m in members {
@@ -2754,10 +2768,21 @@ impl<'a> Ctx<'a> {
         match &q.form {
             Form::Select { .. } => {
                 let (vars, sols) = self.select(q)?;
-                let rows = sols
-                    .iter()
-                    .map(|s| vars.iter().map(|&v| s[v].map(|id| self.term(id))).collect())
-                    .collect();
+                let mut rows = Vec::with_capacity(sols.len());
+                // a result too large to stay in the term cache has its terms read together,
+                // a chunk at a time; a smaller one goes through the cache, which it warms for
+                // the next query (bulk reads bypass the cache)
+                let bulk = sols.len().saturating_mul(vars.len()) > BULK_RESULT_TERMS;
+                for chunk in sols.chunks(PREFETCH) {
+                    if bulk {
+                        self.prefetch(chunk.iter().flat_map(|s| vars.iter().filter_map(|&v| s[v])));
+                    }
+                    rows.extend(chunk.iter().map(|s| {
+                        vars.iter()
+                            .map(|&v| s[v].map(|id| self.term(id)))
+                            .collect::<Vec<_>>()
+                    }));
+                }
                 Ok(QueryResult::Solutions {
                     vars: vars.iter().map(|&v| self.vars.names[v].clone()).collect(),
                     rows,
@@ -2994,38 +3019,81 @@ fn join(left: Vec<Sol>, right: Vec<Sol>) -> Vec<Sol> {
     if left.is_empty() || right.is_empty() {
         return Vec::new();
     }
-    // Hash join on a variable bound in every solution of both sides.
-    let n = left[0].len();
-    let key = (0..n)
-        .find(|&v| left.iter().all(|s| s[v].is_some()) && right.iter().all(|s| s[v].is_some()));
     let mut out = Vec::new();
-    match key {
-        Some(k) => {
-            let mut table: HashMap<Id, Vec<&Sol>> = HashMap::new();
-            for r in &right {
-                table.entry(r[k].unwrap()).or_default().push(r);
-            }
-            for l in &left {
-                if let Some(rs) = table.get(&l[k].unwrap()) {
-                    for r in rs {
-                        if let Some(m) = merge(l, r) {
-                            out.push(m);
-                        }
+    let mut index = Compatible::new(&right);
+    for l in &left {
+        index.each(l, false, |r| {
+            out.push(merge(l, r).expect("compatible solutions merge"));
+            true
+        });
+    }
+    out
+}
+
+/// Solutions indexed for finding those compatible with another solution (equal wherever
+/// both are bound) without comparing against each: they are grouped by the variables they
+/// bind, and each group is hashed on the variables it shares with the probing solution (one
+/// table per group and set of shared variables, built on first use).
+struct Compatible<'a> {
+    /// (bound variables, solutions binding exactly those)
+    groups: Vec<(Vec<Var>, Vec<&'a Sol>)>,
+    tables: FastMap<(usize, Vec<Var>), FastMap<Vec<Id>, Vec<usize>>>,
+}
+
+impl<'a> Compatible<'a> {
+    fn new(sols: &'a [Sol]) -> Self {
+        let mut by_vars: FastMap<Vec<Var>, usize> = FastMap::default();
+        let mut groups: Vec<(Vec<Var>, Vec<&'a Sol>)> = Vec::new();
+        for s in sols {
+            let vars: Vec<Var> = (0..s.len()).filter(|&v| s[v].is_some()).collect();
+            let i = *by_vars.entry(vars.clone()).or_insert_with(|| {
+                groups.push((vars, Vec::new()));
+                groups.len() - 1
+            });
+            groups[i].1.push(s);
+        }
+        Compatible {
+            groups,
+            tables: FastMap::default(),
+        }
+    }
+
+    /// Call `f` with each solution compatible with `l`, until it returns false. With
+    /// `sharing`, only those binding at least one variable `l` binds too (as MINUS needs).
+    fn each(&mut self, l: &Sol, sharing: bool, mut f: impl FnMut(&Sol) -> bool) {
+        for (gi, (vars, rows)) in self.groups.iter().enumerate() {
+            let shared: Vec<Var> = vars.iter().copied().filter(|&v| l[v].is_some()).collect();
+            if shared.is_empty() {
+                if sharing {
+                    continue;
+                }
+                for r in rows {
+                    if !f(r) {
+                        return;
                     }
                 }
+                continue;
             }
-        }
-        None => {
-            for l in &left {
-                for r in &right {
-                    if let Some(m) = merge(l, r) {
-                        out.push(m);
+            let key: Vec<Id> = shared.iter().map(|&v| l[v].unwrap()).collect();
+            let table = self
+                .tables
+                .entry((gi, shared))
+                .or_insert_with_key(|(_, shared)| {
+                    let mut t: FastMap<Vec<Id>, Vec<usize>> = FastMap::default();
+                    for (i, r) in rows.iter().enumerate() {
+                        t.entry(shared.iter().map(|&v| r[v].unwrap()).collect())
+                            .or_default()
+                            .push(i);
                     }
+                    t
+                });
+            for &i in table.get(&key).into_iter().flatten() {
+                if !f(rows[i]) {
+                    return;
                 }
             }
         }
     }
-    out
 }
 
 /// In-scope, user-visible variables of a pattern, in first-seen order.
@@ -3246,15 +3314,15 @@ impl Ctx<'_> {
             );
             depth += 1;
         }
-        self.explain_pattern(&q.pattern, depth, &HashSet::new(), &mut out);
+        self.explain_pattern(&q.pattern, depth, &FastSet::default(), &mut out);
         if let Some(values) = &q.values {
             line(&mut out, 1, "Join trailing VALUES".into());
-            self.explain_pattern(values, 2, &HashSet::new(), &mut out);
+            self.explain_pattern(values, 2, &FastSet::default(), &mut out);
         }
         out
     }
 
-    fn explain_pattern(&self, p: &Pattern, d: usize, bound: &HashSet<Var>, out: &mut String) {
+    fn explain_pattern(&self, p: &Pattern, d: usize, bound: &FastSet<Var>, out: &mut String) {
         let pad = "  ".repeat(d);
         let mut bound = bound.clone();
         match p {

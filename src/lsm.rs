@@ -7,7 +7,7 @@
 //! in a footer, and blocks are read on demand through a shared LRU cache, so
 //! memory use is bounded by the memtable and the cache, not the data size.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::ops::Bound;
@@ -86,8 +86,9 @@ fn decode(b: &[u8]) -> (Key, bool) {
 
 type Block = Arc<Vec<(Key, bool)>>;
 
-/// LRU cache of decoded run blocks, shared by all indexes of a store.
-/// Sharded so concurrent readers rarely contend on one lock.
+/// Cache of decoded run blocks, shared by all indexes of a store: a block read again since it
+/// was last considered gets a second chance before eviction (CLOCK, close to LRU, while a hit
+/// only sets a flag under the shared lock). Sharded so concurrent readers rarely contend.
 pub struct BlockCache {
     shards: Vec<RwLock<CacheInner>>,
 }
@@ -95,7 +96,8 @@ pub struct BlockCache {
 const CACHE_SHARDS: usize = 16;
 
 struct CacheInner {
-    map: HashMap<(u64, u32), Block>,
+    /// Each block with whether it was read since eviction last passed it.
+    map: crate::fastmap::FastMap<(u64, u32), (Block, std::sync::atomic::AtomicBool)>,
     order: VecDeque<(u64, u32)>,
     capacity: usize,
 }
@@ -108,7 +110,7 @@ impl BlockCache {
             shards: (0..CACHE_SHARDS)
                 .map(|_| {
                     RwLock::new(CacheInner {
-                        map: HashMap::new(),
+                        map: Default::default(),
                         order: VecDeque::new(),
                         capacity: per,
                     })
@@ -126,27 +128,37 @@ impl BlockCache {
     fn get_or_load(&self, run: &RunFile, block: u32) -> io::Result<Block> {
         let key = (run.uid, block);
         let shard = self.shard(key);
-        if let Some(b) = shard
+        if let Some((b, used)) = shard
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .map
             .get(&key)
         {
+            used.store(true, std::sync::atomic::Ordering::Relaxed);
             crate::metrics::CACHE_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             return Ok(b.clone());
         }
         crate::metrics::CACHE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let loaded = Arc::new(run.load_block(block)?);
         let mut c = shard.write().unwrap_or_else(|e| e.into_inner());
-        if c.map.insert(key, loaded.clone()).is_none() {
+        if c.map
+            .insert(key, (loaded.clone(), Default::default()))
+            .is_none()
+        {
             c.order.push_back(key);
         }
         while c.map.len() > c.capacity {
-            match c.order.pop_front() {
-                Some(old) => {
-                    c.map.remove(&old);
-                }
-                None => break,
+            let Some(old) = c.order.pop_front() else {
+                break;
+            };
+            let used = c
+                .map
+                .get(&old)
+                .is_some_and(|(_, u)| u.swap(false, std::sync::atomic::Ordering::Relaxed));
+            if used {
+                c.order.push_back(old); // read since: a second chance
+            } else {
+                c.map.remove(&old);
             }
         }
         Ok(loaded)
@@ -378,7 +390,6 @@ fn level_range(v: &[(Key, bool)], lo: Key, hi: Key) -> &[(Key, bool)] {
 }
 
 impl Index {
-    #[cfg_attr(not(test), allow(dead_code))]
     /// An index that never reaches the disk (an in-memory repository).
     pub fn memory(name: &str, cache: Arc<BlockCache>) -> Index {
         Index {
@@ -764,6 +775,40 @@ mod tests {
         idx.sweep().unwrap();
         let idx2 = Index::open(&dir, "t", &names, cache).unwrap();
         assert_eq!(idx2.range([0; 4], [u32::MAX; 4]).count(), 501);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cache_keeps_blocks_in_use() {
+        let dir = std::env::temp_dir().join(format!("graphrd-lsm-cache-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let cache = BlockCache::new(64); // 4 blocks per shard
+        let mut idx = Index::open(&dir, "c", &[], cache.clone()).unwrap();
+        for i in 0..(400 * BLOCK_ENTRIES as u32) {
+            idx.put([i, 0, 0, 0]);
+        }
+        idx.flush().unwrap();
+        let run = idx.runs[0].clone();
+        let cached = |b: u32| {
+            cache
+                .shard((run.uid, b))
+                .read()
+                .unwrap()
+                .map
+                .contains_key(&(run.uid, b))
+        };
+        cache.get_or_load(&run, 0).unwrap();
+        for b in 1..run.blocks() {
+            cache.get_or_load(&run, b).unwrap(); // a scan passing through
+            assert!(
+                cached(0),
+                "a block read all along stays cached (evicted at {b})"
+            );
+            cache.get_or_load(&run, 0).unwrap(); // the hot block, read all along
+        }
+        assert!(!cached(1), "blocks read once make room");
+        drop(idx);
         let _ = fs::remove_dir_all(&dir);
     }
 

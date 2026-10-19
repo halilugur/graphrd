@@ -266,7 +266,10 @@ impl Raft {
         let tmp = self.dir.join("raft.meta.tmp");
         if let Ok(mut f) = File::create(&tmp) {
             if f.write_all(meta.to_string().as_bytes()).is_ok() && f.sync_all().is_ok() {
-                let _ = fs::rename(&tmp, self.dir.join("raft.meta"));
+                // the vote must survive a power loss, or this node could vote twice in a term
+                if fs::rename(&tmp, self.dir.join("raft.meta")).is_ok() {
+                    let _ = crate::store::sync_dir(&self.dir);
+                }
             }
         }
     }
@@ -289,7 +292,9 @@ impl Raft {
                 let _ = writeln!(nf, "{}", stored_json(st.base + 1 + k as u64, e));
             }
             let _ = nf.sync_all();
-            let _ = fs::rename(&tmp, self.dir.join("raft.log"));
+            if fs::rename(&tmp, self.dir.join("raft.log")).is_ok() {
+                let _ = crate::store::sync_dir(&self.dir);
+            }
         }
         if let Ok(af) = OpenOptions::new()
             .append(true)

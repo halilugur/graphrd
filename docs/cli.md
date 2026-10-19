@@ -56,6 +56,8 @@ graphrd serve [options]
 | `--service-timeout S` | 300 | time limit of one SERVICE call |
 | `--service-retries N` | 0 | retry SERVICE calls that cannot connect or get a 5xx answer |
 | `--slow-query MS` | off | log queries and updates slower than this (see [admin.md](admin.md#monitoring)) |
+| `--max-body MB` | 2048 | largest request body accepted; larger ones get 413 |
+| `--max-connections N` | no limit | most connections served at once; further ones get 503 |
 | `--llm-url URL`, `--llm-key KEY`, `--llm-model NAME` | off | answer questions in plain language with SPARQL written by a language model: its endpoint, key and model (also `GRAPHRD_LLM_URL`, `GRAPHRD_LLM_API_KEY`, `GRAPHRD_LLM_MODEL`); with only `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, that provider's API and default model (see [nl-query.md](nl-query.md)) |
 | `--llm-api anthropic\|openai` | from the URL or key | the wire format |
 | `--llm-effort E`, `--llm-timeout S` | model default, 120 | effort (`low` … `max`) and the time limit of one call |

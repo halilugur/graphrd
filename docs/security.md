@@ -97,7 +97,7 @@ private network or behind TLS.
 
 | Input | Guard |
 |---|---|
-| HTTP | header size capped at 64 KB, body size and connection count bounded (`set_limits`), slow clients time out after 120 s |
+| HTTP | header size capped at 64 KB, body size and connection count bounded (`--max-body`, `--max-connections`), slow clients time out after 120 s |
 | Queries | parser nesting and chain-length limits; regular expressions run in linear time (no catastrophic backtracking); `timeout` per request |
 | Turtle, JSON | nesting limits, so deep documents cannot exhaust the stack |
 | RDF/XML | entity expansion capped (no "billion laughs"), nesting limited, no external entities fetched |

@@ -349,8 +349,8 @@ the ones before it are undone. Embedded use can also commit without waiting for 
 
 - Users and roles with per-repository read and write grants; passwords salted and iterated.
 - A user is locked for 15 minutes after 10 wrong passwords; login tokens expire after 12 hours.
-- The HTTP server takes `set_limits` (largest request body, most connections at once) for
-  embedding in a service that faces the internet.
+- `serve --max-body <mb> --max-connections <n>` (or `set_limits` when embedding) bound the
+  largest request body and the connections served at once, for a server facing the internet.
 - XML input: entity expansion is capped (no "billion laughs"), nesting depth too.
 - The UI never triggers the browser's own login prompt; it shows its sign-in form.
 

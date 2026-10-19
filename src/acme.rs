@@ -21,7 +21,9 @@ use std::io;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+/// Let's Encrypt's production directory.
 pub const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
+/// Let's Encrypt's staging directory (for tests: untrusted certificates, generous limits).
 pub const LETS_ENCRYPT_STAGING: &str = "https://acme-staging-v02.api.letsencrypt.org/directory";
 
 fn err(m: impl Into<String>) -> io::Error {
@@ -55,6 +57,7 @@ fn base64(data: &[u8], url: bool) -> String {
     out
 }
 
+/// Base64url without padding, as JOSE uses it.
 pub fn base64url(data: &[u8]) -> String {
     base64(data, true)
 }
@@ -235,12 +238,14 @@ pub fn not_after(chain_pem: &str) -> Option<i64> {
 pub struct Challenges(RwLock<HashMap<String, String>>);
 
 impl Challenges {
+    /// Answer the challenge `token` with its key authorization.
     pub fn set(&self, token: &str, key_authorization: &str) {
         self.0
             .write()
             .unwrap()
             .insert(token.to_string(), key_authorization.to_string());
     }
+    /// Stop answering the challenge `token`.
     pub fn remove(&self, token: &str) {
         self.0.write().unwrap().remove(token);
     }
@@ -274,6 +279,7 @@ fn certified(chain_pem: &str, key_pem: &str) -> io::Result<Arc<CertifiedKey>> {
 }
 
 impl Certificates {
+    /// No certificates yet.
     pub fn new() -> Certificates {
         Certificates::default()
     }
@@ -292,6 +298,7 @@ impl Certificates {
         Ok(())
     }
 
+    /// Whether `name` has a certificate of its own (not just the fallback).
     pub fn has(&self, name: &str) -> bool {
         self.by_name
             .read()
@@ -332,6 +339,8 @@ pub fn serve_tls_with(addr: &str, handler: Handler, certs: Arc<Certificates>) ->
 
 // ------------------------------------------------------------------ the ACME client
 
+/// An ACME (RFC 8555) account with a certificate authority, ordering certificates through
+/// HTTP-01 challenges.
 pub struct Acme {
     directory: Json,
     key: EcdsaKeyPair,

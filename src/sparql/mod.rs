@@ -910,6 +910,111 @@ mod tests {
     }
 
     #[test]
+    fn minus_and_optional_are_hash_joins() {
+        let mut st = Store::memory();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..40_000 {
+            data.push_str(&format!(" <http://e/{i}> <http://p/a> {i} ."));
+            if i % 2 == 0 {
+                data.push_str(&format!(" <http://e/{i}> <http://p/b> \"x\" ."));
+            }
+            if i % 5 == 0 {
+                data.push_str(&format!(" <http://e/{i}> <http://p/c> \"y\" ."));
+            }
+        }
+        data.push_str(" }");
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        let count = |q: &str| run(&st, q)[0][0].as_ref().unwrap().value().to_string();
+        let t0 = std::time::Instant::now();
+        // right sides whose rows bind different variables (one table per shape)
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 OPTIONAL { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?y } } }"
+            ),
+            "44000" // a row per b (20000) and per c (8000), and the 16000 with neither
+        );
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 MINUS { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?y } } }"
+            ),
+            "16000"
+        );
+        // MINUS removes nothing when no variable is shared
+        assert_eq!(
+            count("SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o MINUS { ?t <http://p/b> ?x } }"),
+            "40000"
+        );
+        // a group join with a filter on both sides
+        assert_eq!(
+            count(
+                "SELECT (COUNT(*) AS ?n) { ?s <http://p/a> ?o \
+                 OPTIONAL { { ?s <http://p/b> ?x } UNION { ?s <http://p/c> ?x } } FILTER(!BOUND(?x)) }"
+            ),
+            "16000"
+        );
+        // these were nested loops: 40000 x 28000 comparisons took tens of seconds
+        assert!(t0.elapsed().as_secs() < 5, "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn small_results_warm_the_term_cache() {
+        // bulk reads bypass the cache; a result that fits in it must still go through it, or
+        // a query repeated reads its terms from disk every time
+        let dir = std::env::temp_dir().join(format!("graphrd-warm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = Store::open(&dir).unwrap();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..2000 {
+            data.push_str(&format!(" <http://e/{i}> <http://e/n> \"name {i}\" ."));
+        }
+        data.push_str(" }");
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        st.checkpoint().unwrap();
+        // the ids, taken now: looking a term up afterwards would cache it by itself
+        let ids: Vec<_> = (0..2000)
+            .step_by(97)
+            .map(|i| st.dict.lookup(&Term::string(format!("name {i}"))).unwrap())
+            .collect();
+        drop(st);
+        let st = Store::open(&dir).unwrap(); // a cold cache: every term on disk
+        assert!(
+            ids.iter().all(|&id| !st.dict.cached(id)),
+            "cold to begin with"
+        );
+        let rows = run(&st, "SELECT ?s ?n { ?s <http://e/n> ?n }");
+        assert_eq!(rows.len(), 2000);
+        assert!(
+            ids.iter().all(|&id| st.dict.cached(id)),
+            "the result warmed the cache"
+        );
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn huge_limit_does_not_overflow() {
+        let mut st = Store::memory();
+        update(
+            &mut st,
+            "INSERT DATA { <http://e/a> <http://e/p> 1, 2, 3 }",
+            "",
+            &HashMap::new(),
+        )
+        .unwrap();
+        let max = u64::MAX;
+        for q in [
+            format!("SELECT * {{ ?s ?p ?o }} OFFSET 1 LIMIT {max}"),
+            format!("SELECT * {{ ?s ?p ?o }} ORDER BY ?o OFFSET 1 LIMIT {max}"),
+            format!("SELECT (SUM(?o) AS ?x) {{ ?s ?p ?o }} LIMIT {max} OFFSET 2"),
+        ] {
+            let expected = if q.contains("SUM") { 0 } else { 2 };
+            assert_eq!(run(&st, &q).len(), expected, "{q}");
+        }
+    }
+
+    #[test]
     fn single_variable_filters_are_decided_once_per_value() {
         let mut st = Store::memory();
         let mut data = String::from("INSERT DATA {");

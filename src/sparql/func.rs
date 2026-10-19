@@ -285,20 +285,6 @@ impl std::fmt::Display for Dec {
     }
 }
 
-/// A plain `f64` as an `xsd:decimal` lexical form: at least one fractional digit,
-/// and no exponent when Rust writes none.
-pub fn format_decimal(x: f64) -> String {
-    if x.fract() == 0.0 && x.abs() < 1e17 {
-        return format!("{:.1}", x);
-    }
-    let s = format!("{x}");
-    if s.contains('e') || s.contains('E') {
-        format!("{x:.12}").trim_end_matches('0').to_string()
-    } else {
-        s
-    }
-}
-
 /// Whether the datatype is one of the derived XML Schema integer types.
 pub fn is_integer_type(dt: &str) -> bool {
     dt.strip_prefix(XSD)
