@@ -2753,10 +2753,18 @@ impl<'a> Ctx<'a> {
         match &q.form {
             Form::Select { .. } => {
                 let (vars, sols) = self.select(q)?;
-                let rows = sols
-                    .iter()
-                    .map(|s| vars.iter().map(|&v| s[v].map(|id| self.term(id))).collect())
-                    .collect();
+                let mut rows = Vec::with_capacity(sols.len());
+                for chunk in sols.chunks(PREFETCH) {
+                    // the chunk's terms read from the dictionary together, not one by one
+                    if sols.len() > 64 {
+                        self.prefetch(chunk.iter().flat_map(|s| vars.iter().filter_map(|&v| s[v])));
+                    }
+                    rows.extend(chunk.iter().map(|s| {
+                        vars.iter()
+                            .map(|&v| s[v].map(|id| self.term(id)))
+                            .collect::<Vec<_>>()
+                    }));
+                }
                 Ok(QueryResult::Solutions {
                     vars: vars.iter().map(|&v| self.vars.names[v].clone()).collect(),
                     rows,
