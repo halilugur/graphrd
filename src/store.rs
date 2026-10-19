@@ -2988,14 +2988,18 @@ mod tests {
         );
         let st = Store::open(&dir).unwrap();
         assert_eq!(st.len(), 3);
-        let (start, _) = st.history_window().unwrap();
-        let undone: usize = st
-            .undo_after(start)
-            .unwrap()
-            .iter()
-            .map(|(_, q)| q.len())
-            .sum();
-        assert_eq!(undone, 3, "history intact");
+        // every transaction is in the history, each line whole (read from the file: a time
+        // bound would drop a commit made in the millisecond the history started)
+        let history = read_log(&dir.join(HISTORY)).unwrap();
+        let added: Vec<&str> = history.lines().filter(|l| l.starts_with("+ ")).collect();
+        assert_eq!(added.len(), 3, "history intact: {history}");
+        assert_eq!(
+            history.lines().filter(|l| commit_line(l).is_some()).count(),
+            3
+        );
+        for l in added {
+            turtle::parse_nquads_raw(&l[2..]).unwrap_or_else(|e| panic!("{l}: {e}"));
+        }
         drop(st);
         let _ = fs::remove_dir_all(&dir);
     }
