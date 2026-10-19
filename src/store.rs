@@ -194,6 +194,21 @@ fn now_millis() -> i64 {
         .map_or(0, |d| d.as_millis() as i64)
 }
 
+/// The text of a log file (write-ahead log or history) up to its zero-filled tail. A crash can
+/// tear the last write anywhere, even inside a multi-byte character, so invalid UTF-8 is
+/// replaced instead of failing: it can only be in the torn transaction, which has no commit
+/// marker and is dropped.
+fn read_log(path: &Path) -> io::Result<String> {
+    let mut bytes = fs::read(path)?;
+    if let Some(end) = bytes.iter().position(|&b| b == 0) {
+        bytes.truncate(end);
+    }
+    Ok(match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(e) => String::from_utf8_lossy(e.as_bytes()).into_owned(),
+    })
+}
+
 /// The commit time in a log line `c <time>` (None for other lines; Some(None) for a bare `c`).
 fn commit_line(line: &str) -> Option<Option<i64>> {
     match line.strip_prefix('c') {
@@ -484,11 +499,7 @@ impl Store {
         // Replay changes made after the last checkpoint, in order.
         let wal_path = dir.join("wal.log");
         if wal_path.exists() {
-            let mut text = fs::read_to_string(&wal_path)?;
-            // the preallocated tail is zeros
-            if let Some(end) = text.find('\0') {
-                text.truncate(end);
-            }
+            let text = read_log(&wal_path)?;
             // Every transaction ends with a "c" line; a transaction whose marker is missing was
             // torn by a crash and is dropped whole. (Logs written before markers existed have
             // none at all; their lines are taken one by one.)
@@ -550,7 +561,7 @@ impl Store {
         if dir.join(HISTORY).exists() {
             st.open_history(0)?;
             // transactions logged but not yet in the history when the process stopped
-            st.history_catch_up(&fs::read_to_string(&wal_path).unwrap_or_default())?;
+            st.history_catch_up(&read_log(&wal_path).unwrap_or_default())?;
         }
         st.checkpoint()?;
         Ok(st)
@@ -1609,7 +1620,7 @@ impl Store {
         let path = dir.join(HISTORY);
         let mut oldest = None;
         if path.exists() {
-            let text = fs::read_to_string(&path)?;
+            let text = read_log(&path)?;
             for line in text.lines() {
                 if let Some(Some(at)) = commit_line(line) {
                     oldest = Some(at);
@@ -1618,6 +1629,21 @@ impl Store {
             }
             if let Some(at) = text.lines().rev().find_map(|l| commit_line(l).flatten()) {
                 self.last_commit = self.last_commit.max(at);
+            }
+            // a crash can leave a torn transaction at the end; cut it off, or the next one
+            // appended would continue its unfinished line
+            let (mut keep, mut pos) = (0, 0);
+            for line in text.split_inclusive('\n') {
+                pos += line.len();
+                let l = line.trim_end_matches(['\n', '\r']);
+                if line.ends_with('\n') && (l.starts_with("s ") || commit_line(l).is_some()) {
+                    keep = pos;
+                }
+            }
+            if keep > 0 && (keep as u64) < fs::metadata(&path)?.len() {
+                let f = OpenOptions::new().write(true).open(&path)?;
+                f.set_len(keep as u64)?;
+                f.sync_all()?;
             }
         } else {
             // complete from now on: written before any transaction can reach it
@@ -1641,12 +1667,10 @@ impl Store {
         let Some(h) = &mut self.history else {
             return Ok(());
         };
-        let text = match wal.find('\0') {
-            Some(end) => &wal[..end],
-            None => wal,
-        };
-        let last = fs::read_to_string(
-            self.dir
+        let text = wal;
+        let last = read_log(
+            &self
+                .dir
                 .as_ref()
                 .expect("history needs a directory")
                 .join(HISTORY),
@@ -1693,7 +1717,7 @@ impl Store {
             .as_ref()
             .expect("history needs a directory")
             .join(HISTORY);
-        let text = fs::read_to_string(&path)?;
+        let text = read_log(&path)?;
         let mut out = format!("s {cutoff}\n");
         let mut txn = String::new();
         let mut new_oldest = None;
@@ -1745,7 +1769,7 @@ impl Store {
             .dir
             .as_ref()
             .ok_or("time travel needs a repository on disk")?;
-        let text = fs::read_to_string(dir.join(HISTORY)).map_err(|_| {
+        let text = read_log(&dir.join(HISTORY)).map_err(|_| {
             "time travel: this repository keeps no history (set historyRetention)".to_string()
         })?;
         let start: i64 = text
@@ -1834,7 +1858,7 @@ impl Store {
             if let Some(h) = &mut self.history {
                 h.file.flush()?;
             }
-            let text = fs::read_to_string(&path)?;
+            let text = read_log(&path)?;
             let mut out = String::new();
             let mut txn = String::new();
             for line in text.lines() {
@@ -2801,6 +2825,59 @@ mod tests {
         );
         assert!(!has("x"), "the torn transaction left no trace");
         assert_eq!(st.len(), 2);
+        drop(st);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn log_torn_inside_a_character_still_opens() {
+        let dir = std::env::temp_dir().join(format!("graphrd-torn-utf8-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let lit = |s: &str, o: &str| Quad {
+            s: Term::iri(s),
+            p: Term::iri("p"),
+            o: Term::string(o),
+            g: None,
+        };
+        {
+            let mut st = Store::open(&dir).unwrap();
+            st.set_history(Some(0)).unwrap();
+            st.apply(&[], &[lit("a", "çağ")]).unwrap();
+            st.apply(&[], &[lit("b", "şüphe")]).unwrap();
+            std::mem::forget(st); // a crash: no checkpoint on the way out
+        }
+        // the crash tore a third transaction inside "ç" (0xC3 0xA7) in both logs
+        let torn = b"+ <c> <p> \"\xC3";
+        for name in ["wal.log", HISTORY] {
+            let path = dir.join(name);
+            let bytes = fs::read(&path).unwrap();
+            let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+            let mut bytes = bytes[..end].to_vec();
+            bytes.extend_from_slice(torn);
+            bytes.extend_from_slice(&[0; 64]);
+            fs::write(&path, bytes).unwrap();
+        }
+        {
+            let mut st = Store::open(&dir).expect("a torn log must not keep the store closed");
+            assert_eq!(st.len(), 2, "both committed transactions replayed");
+            st.apply(&[], &[lit("d", "after")]).unwrap();
+            std::mem::forget(st);
+        }
+        let history = fs::read(dir.join(HISTORY)).unwrap();
+        assert!(
+            !history.windows(2).any(|w| w == b"\xC3+"),
+            "the torn tail was cut off before appending"
+        );
+        let st = Store::open(&dir).unwrap();
+        assert_eq!(st.len(), 3);
+        let (start, _) = st.history_window().unwrap();
+        let undone: usize = st
+            .undo_after(start)
+            .unwrap()
+            .iter()
+            .map(|(_, q)| q.len())
+            .sum();
+        assert_eq!(undone, 3, "history intact");
         drop(st);
         let _ = fs::remove_dir_all(&dir);
     }
