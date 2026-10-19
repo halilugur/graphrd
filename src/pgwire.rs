@@ -5135,13 +5135,7 @@ fn eval_top_query(ctx: &ExecCtx, q: &Query) -> Result<Rel, String> {
 /// Views are kept in the repository itself (so backups, time travel and a
 /// cluster carry them): `<urn:graphrd:sql-view:NAME> <urn:graphrd:sql> "SELECT …"`
 /// in this graph.
-pub const VIEWS_GRAPH: &str = "urn:graphrd:sql-view-graph_placeholder"; // Note: kept below as exact constant name
-#[allow(dead_code)]
-const _UNUSED: &str = VIEWS_GRAPH;
-
-mod view_consts {
-    pub const VIEWS_GRAPH: &str = "urn:graphrd:sql-views";
-}
+pub const VIEWS_GRAPH: &str = "urn:graphrd:sql-views";
 
 const VIEW_SQL: &str = "urn:graphrd:sql";
 const VIEW_PREFIX: &str = "urn:graphrd:sql-view:";
@@ -5150,7 +5144,7 @@ const VIEW_PREFIX: &str = "urn:graphrd:sql-view:";
 fn views(store: &Store) -> Vec<(String, String)> {
     let (Some(p), Some(g)) = (
         store.dict.lookup(&Term::iri(VIEW_SQL)),
-        store.dict.lookup(&Term::iri(view_consts::VIEWS_GRAPH)),
+        store.dict.lookup(&Term::iri(VIEWS_GRAPH)),
     ) else {
         return Vec::new();
     };
@@ -5185,7 +5179,7 @@ fn define_view(store: &mut Store, toks: &[Tok], sql: &str) -> Result<String, Str
         s: Term::iri(format!("{VIEW_PREFIX}{name}")),
         p: Term::iri(VIEW_SQL),
         o: Term::string(text),
-        g: Some(Term::iri(view_consts::VIEWS_GRAPH)),
+        g: Some(Term::iri(VIEWS_GRAPH)),
     };
     let existing = |store: &Store, name: &str| {
         views(store)
@@ -6171,6 +6165,15 @@ mod tests {
                 .any(|s| s.starts_with("staff|employer|text"))
         );
         assert_eq!(rows(&b, "SELECT * FROM information_schema.views").len(), 4);
+        {
+            // the views live in the graph the public constant names
+            let st = b.0.lock().unwrap();
+            let g = st
+                .dict
+                .lookup(&crate::rdf::Term::iri(VIEWS_GRAPH))
+                .expect("VIEWS_GRAPH names the graph the views are in");
+            assert!(st.count_graph(Some(g)) >= 4);
+        }
         assert_eq!(
             run(&b, "u", "db", "DROP VIEW elders").unwrap().1,
             "DROP VIEW"
