@@ -378,7 +378,6 @@ fn level_range(v: &[(Key, bool)], lo: Key, hi: Key) -> &[(Key, bool)] {
 }
 
 impl Index {
-    #[cfg_attr(not(test), allow(dead_code))]
     /// An index that never reaches the disk (an in-memory repository).
     pub fn memory(name: &str, cache: Arc<BlockCache>) -> Index {
         Index {

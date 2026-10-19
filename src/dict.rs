@@ -236,7 +236,6 @@ impl std::hash::Hasher for Fnv {
 static FIXED: std::hash::BuildHasherDefault<Fnv> = std::hash::BuildHasherDefault::new();
 
 impl Dict {
-    #[cfg_attr(not(test), allow(dead_code))]
     /// A dictionary that never writes to disk.
     pub fn memory() -> Dict {
         Dict {
