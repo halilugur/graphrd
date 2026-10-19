@@ -959,6 +959,41 @@ mod tests {
     }
 
     #[test]
+    fn small_results_warm_the_term_cache() {
+        // bulk reads bypass the cache; a result that fits in it must still go through it, or
+        // a query repeated reads its terms from disk every time
+        let dir = std::env::temp_dir().join(format!("graphrd-warm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut st = Store::open(&dir).unwrap();
+        let mut data = String::from("INSERT DATA {");
+        for i in 0..2000 {
+            data.push_str(&format!(" <http://e/{i}> <http://e/n> \"name {i}\" ."));
+        }
+        data.push_str(" }");
+        update(&mut st, &data, "", &HashMap::new()).unwrap();
+        st.checkpoint().unwrap();
+        // the ids, taken now: looking a term up afterwards would cache it by itself
+        let ids: Vec<_> = (0..2000)
+            .step_by(97)
+            .map(|i| st.dict.lookup(&Term::string(format!("name {i}"))).unwrap())
+            .collect();
+        drop(st);
+        let st = Store::open(&dir).unwrap(); // a cold cache: every term on disk
+        assert!(
+            ids.iter().all(|&id| !st.dict.cached(id)),
+            "cold to begin with"
+        );
+        let rows = run(&st, "SELECT ?s ?n { ?s <http://e/n> ?n }");
+        assert_eq!(rows.len(), 2000);
+        assert!(
+            ids.iter().all(|&id| st.dict.cached(id)),
+            "the result warmed the cache"
+        );
+        drop(st);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn huge_limit_does_not_overflow() {
         let mut st = Store::memory();
         update(

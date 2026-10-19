@@ -19,6 +19,9 @@ pub const KNN: &str = "http://graphrd.org/fn#knn";
 const PARALLEL_PROBE: usize = 100_000;
 /// Rows whose terms are read from the dictionary together (see `Dict::read_many`).
 const PREFETCH: usize = 4_096;
+/// Result cells past which a query's result terms are read in bulk rather than through the
+/// dictionary's term cache (a quarter of its 200,000 terms: larger results would only evict it).
+const BULK_RESULT_TERMS: usize = 50_000;
 /// Index lookups after which a `p+` / `p*` walk may read all of `p`'s edges in one scan instead.
 const PATH_SCAN: usize = 20_000;
 /// Edges scanned in the time of one index lookup, for deciding when a walk scans instead.
@@ -2766,9 +2769,12 @@ impl<'a> Ctx<'a> {
             Form::Select { .. } => {
                 let (vars, sols) = self.select(q)?;
                 let mut rows = Vec::with_capacity(sols.len());
+                // a result too large to stay in the term cache has its terms read together,
+                // a chunk at a time; a smaller one goes through the cache, which it warms for
+                // the next query (bulk reads bypass the cache)
+                let bulk = sols.len().saturating_mul(vars.len()) > BULK_RESULT_TERMS;
                 for chunk in sols.chunks(PREFETCH) {
-                    // the chunk's terms read from the dictionary together, not one by one
-                    if sols.len() > 64 {
+                    if bulk {
                         self.prefetch(chunk.iter().flat_map(|s| vars.iter().filter_map(|&v| s[v])));
                     }
                     rows.extend(chunk.iter().map(|s| {

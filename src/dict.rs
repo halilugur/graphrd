@@ -538,6 +538,12 @@ impl Dict {
         }
     }
 
+    /// Whether the term cache holds `id` (for tests of what warms it).
+    #[cfg(test)]
+    pub(crate) fn cached(&self, id: Id) -> bool {
+        self.by_id.contains(&id)
+    }
+
     /// The term an id stands for (the cache serves the hot ones).
     pub fn term(&self, id: Id) -> Term {
         if id != 0 {
