@@ -411,9 +411,15 @@ fn base64_std(data: &[u8]) -> String {
     const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
     for c in data.chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
         for i in 0..4 {
-            out.push(if i <= c.len() { B64[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+            out.push(if i <= c.len() {
+                B64[(n >> (18 - 6 * i) & 63) as usize] as char
+            } else {
+                '='
+            });
         }
     }
     out
@@ -480,7 +486,10 @@ static CLIENT_IDENTITY: std::sync::OnceLock<(
 
 /// Sets the client certificate (chain) and key for outbound HTTPS (PEM files), once per process.
 #[cfg(feature = "tls")]
-pub fn set_client_identity(cert_pem: &std::path::Path, key_pem: &std::path::Path) -> io::Result<()> {
+pub fn set_client_identity(
+    cert_pem: &std::path::Path,
+    key_pem: &std::path::Path,
+) -> io::Result<()> {
     use rustls::pki_types::pem::PemObject;
     use rustls::pki_types::{CertificateDer, PrivateKeyDer};
     let bad = |e: String| io::Error::new(io::ErrorKind::InvalidInput, e);
@@ -525,7 +534,10 @@ pub fn serve_tls_config(
                     return;
                 }
             }
-            let client_cert = conn.peer_certificates().and_then(|c| c.first()).map(|c| base64_std(c.as_ref()));
+            let client_cert = conn
+                .peer_certificates()
+                .and_then(|c| c.first())
+                .map(|c| base64_std(c.as_ref()));
             let _ = connection_with(rustls::StreamOwned::new(conn, stream), handler, client_cert);
         });
     }
@@ -561,7 +573,11 @@ fn connection<S: Read + Write>(stream: S, handler: Handler) -> io::Result<()> {
 /// Serves the requests of one connection; `client_cert` is the certificate (DER, base64) the
 /// client presented and the TLS layer verified, handed to the handler in
 /// [`CLIENT_CERT_HEADER`]. A header of that name sent by the client is always removed.
-fn connection_with<S: Read + Write>(stream: S, handler: Handler, client_cert: Option<String>) -> io::Result<()> {
+fn connection_with<S: Read + Write>(
+    stream: S,
+    handler: Handler,
+    client_cert: Option<String>,
+) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     loop {
         let mut budget = MAX_HEADER_BYTES;
@@ -1178,7 +1194,11 @@ impl<T: Read + Write + Send> Stream for T {}
 /// `set_client_identity` when the server asks for one. For protocols other than HTTP.
 #[cfg(feature = "tls")]
 pub fn tls_connect(addr: &str, timeout: Duration) -> io::Result<Box<dyn Stream>> {
-    let host = addr.rsplit_once(':').map_or(addr, |(h, _)| h).trim_matches(['[', ']']).to_string();
+    let host = addr
+        .rsplit_once(':')
+        .map_or(addr, |(h, _)| h)
+        .trim_matches(['[', ']'])
+        .to_string();
     let mut roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
