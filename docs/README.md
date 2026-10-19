@@ -19,7 +19,8 @@
 | [Administration](admin.md) | users and permissions, backup and restore, monitoring and metrics, upkeep |
 | [Cluster](cluster.md) | Raft cluster setup, reads and writes, failover, limits |
 | [Storage](storage.md) | data directory, dictionary, LSM indexes, write-ahead log and checkpoints, snapshots, memory |
-| [Performance](performance.md) | measured comparison, tuning, benchmarking tools |
+| [Performance](performance.md) | GraphRD's own numbers, tuning, benchmarking tools |
+| [Comparison](compare.md) | GraphRD 1.0.2 against Oxigraph 0.5.11 and GraphDB Free 10.8.5 |
 | [Security](security.md) | authentication, lockout, TLS, guards against hostile input, supply chain |
 
 The [README](../README.md) gives the overview. The benchmark scripts that produced these

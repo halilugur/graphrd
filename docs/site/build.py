@@ -32,6 +32,7 @@ PAGES = [
     ("cluster", "Cluster", "cluster", "Operations"),
     ("storage", "Storage", "disk", "Operations"),
     ("performance", "Performance", "pulse", "Operations"),
+    ("compare", "Comparison", "pulse", "Operations"),
     ("security", "Security", "lock", "Operations"),
 ]
 GROUPS = ["Basics", "Interfaces", "Knowledge", "Operations"]
